@@ -42,15 +42,22 @@
     <None Remove="appsettings*.json" />
   </ItemGroup>
 
-  <ItemGroup>
-    <EmbeddedResource Include="wwwroot/**" />
+  <ItemGroup Condition="'$(SkipFrontendBuild)' == 'true'">
     <Content Remove="wwwroot/**" />
     <None Remove="wwwroot/**" />
+    <EmbeddedResource Include="wwwroot/**" />
   </ItemGroup>
 
-  <Target Name="BuildFrontend" BeforeTargets="Publish" Condition="'$(SkipFrontendBuild)' != 'true'">
+  <Target Name="BuildFrontend" BeforeTargets="ResolveReferences" Condition="'$(SkipFrontendBuild)' != 'true'">
     <Exec WorkingDirectory="$(FrontendDir)" Command="npm install" />
     <Exec WorkingDirectory="$(FrontendDir)" Command="npm run build" />
+
+    <ItemGroup>
+      <Content Remove="wwwroot/**" />
+      <None Remove="wwwroot/**" />
+      <!-- 此时 wwwroot 里已经有文件了，现在 Include 才能扫到文件 -->
+      <EmbeddedResource Include="wwwroot/**" />
+    </ItemGroup>
   </Target>
 
 </Project>

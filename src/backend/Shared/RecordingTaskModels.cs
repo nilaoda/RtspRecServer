@@ -70,3 +70,10 @@ public sealed record MediaInfoResponse
 {
     public string Content { get; init; } = string.Empty;
 }
+
+public sealed record ApiResponse
+{
+    public string Message { get; init; } = string.Empty;
+    
+    public static ApiResponse Create(string message) => new() { Message = message };
+}

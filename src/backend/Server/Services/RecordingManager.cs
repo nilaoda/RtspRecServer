@@ -179,10 +179,6 @@ public sealed class RecordingManager
         }
 
         var duration = task.EndTime - task.StartTime;
-        if (duration > TimeSpan.Zero)
-        {
-            session.Cancellation.CancelAfter(duration);
-        }
 
         session.Completion = Task.Run(async () =>
         {
@@ -199,7 +195,7 @@ public sealed class RecordingManager
                 
                 var runtimeTask = started with { Url = finalUrl };
 
-                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, bytes =>
+                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, bytes =>
                 {
                     session.BytesWritten = bytes;
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromSeconds(1) && bytes != lastBytes)
@@ -321,9 +317,8 @@ public sealed class RecordingManager
         if (url.Contains("/PLTV/", StringComparison.OrdinalIgnoreCase))
         {
             var startLocal = task.StartTime.ToLocalTime().ToString("yyyyMMddHHmmss");
-            var endLocal = task.EndTime.ToLocalTime().ToString("yyyyMMddHHmmss");
             var separator = url.Contains('?') ? '&' : '?';
-            return $"{url}{separator}playseek={startLocal}-{endLocal}";
+            return $"{url}{separator}playseek={startLocal}";
         }
 
         if (url.Contains("starttime=", StringComparison.OrdinalIgnoreCase))
@@ -332,9 +327,8 @@ public sealed class RecordingManager
         }
 
         var startUtc = task.StartTime.ToUniversalTime().ToString("yyyyMMddTHHmmssZ");
-        var endUtc = task.EndTime.ToUniversalTime().ToString("yyyyMMddTHHmmssZ");
         var querySeparator = url.Contains('?') ? '&' : '?';
-        return $"{url}{querySeparator}starttime={startUtc}&endtime={endUtc}";
+        return $"{url}{querySeparator}starttime={startUtc}";
     }
 
     private sealed class RecordingSession

@@ -248,7 +248,7 @@ const TasksPage = () => {
           if (!Number.isFinite(plannedDuration)) {
             return '--'
           }
-          return `${formatDuration(recordedDuration)}/${formatDuration(plannedDuration)}`
+          return `${formatDuration(recordedDuration)} / ${formatDuration(plannedDuration)}`
         },
       },
       {

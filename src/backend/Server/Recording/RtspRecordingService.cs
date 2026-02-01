@@ -18,12 +18,17 @@ public sealed record RecordingResult
 
 public sealed class RtspRecordingService : IRecordingService
 {
-    public async Task<RecordingResult> RecordAsync(RecordingTask task, string outputPath, Action<long> onBytesWritten, CancellationToken cancellationToken)
+    public async Task<RecordingResult> RecordAsync(
+        RecordingTask task,
+        string outputPath,
+        TimeSpan? targetDuration,
+        Action<long> onBytesWritten,
+        CancellationToken cancellationToken)
     {
         var recorder = new RtspStreamRecorder(task.Url, outputPath);
         try
         {
-            var bytes = await recorder.RunAsync(onBytesWritten, cancellationToken);
+            var bytes = await recorder.RunAsync(targetDuration, onBytesWritten, cancellationToken);
             return new RecordingResult
             {
                 Success = !cancellationToken.IsCancellationRequested,
@@ -62,7 +67,7 @@ internal sealed class RtspStreamRecorder
         _outputPath = outputPath;
     }
 
-    public async Task<long> RunAsync(Action<long> onBytesWritten, CancellationToken cancellationToken)
+    public async Task<long> RunAsync(TimeSpan? targetDuration, Action<long> onBytesWritten, CancellationToken cancellationToken)
     {
         Connect();
         var stream = _client!.GetStream();
@@ -73,6 +78,12 @@ internal sealed class RtspStreamRecorder
         var startTime = DateTime.UtcNow;
         var packetCount = 0;
         var errorCount = 0;
+        var targetTicks = targetDuration.HasValue && targetDuration.Value > TimeSpan.Zero
+            ? (long)Math.Round(targetDuration.Value.TotalSeconds * 27_000_000D)
+            : 0L;
+        long? firstPcrTicks = null;
+        long? lastPcrTicks = null;
+        var stoppedByPcr = false;
 
         var describe = RtspMessage.BuildDescribe(_url, _seq++);
         await SendAsync(stream, describe, cancellationToken);
@@ -85,7 +96,7 @@ internal sealed class RtspStreamRecorder
             _client.Close();
             _client = null;
             _seq = 2;
-            return await new RtspStreamRecorder(newUrl, _outputPath).RunAsync(onBytesWritten, cancellationToken);
+            return await new RtspStreamRecorder(newUrl, _outputPath).RunAsync(targetDuration, onBytesWritten, cancellationToken);
         }
 
         if (!resp.Contains("200 OK"))
@@ -158,6 +169,15 @@ internal sealed class RtspStreamRecorder
                     BytesWritten += length;
                     onBytesWritten(BytesWritten);
                     packetCount++;
+                    if (targetTicks > 0)
+                    {
+                        if (TryUpdatePcrTicks(payload.AsSpan(0, length), ref firstPcrTicks, ref lastPcrTicks, out var elapsedTicks) &&
+                            elapsedTicks >= targetTicks)
+                        {
+                            stoppedByPcr = true;
+                            break;
+                        }
+                    }
                 }
             }
             finally
@@ -169,11 +189,101 @@ internal sealed class RtspStreamRecorder
         await buffered.FlushAsync(cancellationToken);
 
         var duration = DateTime.UtcNow - startTime;
+        if (stoppedByPcr)
+        {
+            var elapsedSeconds = lastPcrTicks.HasValue && firstPcrTicks.HasValue
+                ? CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value)
+                : 0;
+            Log.Information("RTSP录制达到PCR时长限制，已录制 {Seconds} 秒，任务目标 {TargetSeconds} 秒", elapsedSeconds, targetDuration?.TotalSeconds ?? 0);
+        }
         Log.Information("RTSP录制结束：总字节数 {BytesWritten}，总数据包数 {PacketCount}，总耗时 {Duration} 秒，平均速率 {Rate} KB/s", 
             BytesWritten, packetCount, duration.TotalSeconds, 
             duration.TotalSeconds > 0 ? BytesWritten / 1024.0 / duration.TotalSeconds : 0);
 
         return BytesWritten;
+    }
+
+    private static bool TryUpdatePcrTicks(ReadOnlySpan<byte> payload, ref long? first, ref long? last, out long elapsedTicks)
+    {
+        elapsedTicks = 0;
+        if (payload.Length < 188)
+        {
+            return false;
+        }
+
+        var offset = 0;
+        while (offset + 188 <= payload.Length)
+        {
+            if (payload[offset] != 0x47)
+            {
+                offset++;
+                continue;
+            }
+
+            if (TryGetPcrTicks(payload.Slice(offset, 188), out var pcrTicks))
+            {
+                first ??= pcrTicks;
+                last = pcrTicks;
+                if (first.HasValue && last.HasValue)
+                {
+                    elapsedTicks = CalculateElapsedTicks(first.Value, last.Value);
+                    return true;
+                }
+            }
+
+            offset += 188;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetPcrTicks(ReadOnlySpan<byte> packet, out long ticks)
+    {
+        ticks = 0;
+        if (packet.Length < 188 || packet[0] != 0x47)
+        {
+            return false;
+        }
+
+        var adaptationFieldControl = (packet[3] >> 4) & 0x3;
+        if (adaptationFieldControl != 2 && adaptationFieldControl != 3)
+        {
+            return false;
+        }
+
+        var adaptationLength = packet[4];
+        if (adaptationLength < 7 || 5 + adaptationLength > 188)
+        {
+            return false;
+        }
+
+        var flags = packet[5];
+        if ((flags & 0x10) == 0)
+        {
+            return false;
+        }
+
+        var baseIndex = 6;
+        var pcrBase = ((long)packet[baseIndex] << 25)
+                      | ((long)packet[baseIndex + 1] << 17)
+                      | ((long)packet[baseIndex + 2] << 9)
+                      | ((long)packet[baseIndex + 3] << 1)
+                      | ((long)(packet[baseIndex + 4] >> 7));
+        var pcrExt = ((packet[baseIndex + 4] & 0x1) << 8) | packet[baseIndex + 5];
+
+        ticks = pcrBase * 300L + pcrExt;
+        return true;
+    }
+
+    private static long CalculateElapsedTicks(long firstTicks, long lastTicks)
+    {
+        var wrap = (1L << 33) * 300L;
+        return lastTicks >= firstTicks ? lastTicks - firstTicks : lastTicks + wrap - firstTicks;
+    }
+
+    private static double CalculateElapsedSeconds(long firstTicks, long lastTicks)
+    {
+        return CalculateElapsedTicks(firstTicks, lastTicks) / 27_000_000D;
     }
 
     public void Close()

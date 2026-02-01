@@ -15,6 +15,7 @@ namespace RtspRecServer.Shared;
 [JsonSerializable(typeof(DiskStatus))]
 [JsonSerializable(typeof(RecordingFileInfo))]
 [JsonSerializable(typeof(MediaInfoResponse))]
+[JsonSerializable(typeof(ApiResponse))]
 [JsonSerializable(typeof(SystemStatus))]
 [JsonSerializable(typeof(List<ChannelConfig>))]
 [JsonSerializable(typeof(List<RecordingTask>))]

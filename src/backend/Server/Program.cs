@@ -156,14 +156,14 @@ try
     app.MapPut("/api/channels/{id:int}", (ConfigurationService service, int id, ChannelConfig channel) =>
     {
         var updated = service.UpdateChannel(id, channel);
-        return updated is null ? Results.NotFound(new { message = "频道不存在" }) : Results.Ok(updated);
+        return updated is null ? Results.NotFound(ApiResponse.Create("频道不存在")) : Results.Ok(updated);
     });
 
     app.MapDelete("/api/channels/{id:int}", (ConfigurationService service, int id) =>
     {
         return service.DeleteChannel(id)
-            ? Results.Ok(new { message = "频道已删除" })
-            : Results.NotFound(new { message = "频道不存在" });
+            ? Results.Ok(ApiResponse.Create("频道已删除"))
+            : Results.NotFound(ApiResponse.Create("频道不存在"));
     });
 
     app.MapGet("/api/tasks", (RecordingManager manager) =>
@@ -175,7 +175,7 @@ try
     app.MapGet("/api/tasks/{id:long}", (RecordingManager manager, long id) =>
     {
         var task = manager.GetTask(id);
-        return task is null ? Results.NotFound(new { message = "任务不存在" }) : Results.Ok(ToDto(task));
+        return task is null ? Results.NotFound(ApiResponse.Create("任务不存在")) : Results.Ok(ToDto(task));
     });
 
     app.MapPost("/api/tasks", async (RecordingManager manager, RecordingTaskCreateRequest request, CancellationToken cancellationToken) =>
@@ -187,7 +187,7 @@ try
         }
         catch (InvalidOperationException ex)
         {
-            return Results.BadRequest(new { message = ex.Message });
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
         }
         catch (Exception ex)
         {
@@ -200,10 +200,10 @@ try
         var task = manager.GetTask(id);
         if (task is null)
         {
-            return Results.NotFound(new { message = "任务不存在" });
+            return Results.NotFound(ApiResponse.Create("任务不存在"));
         }
         var stopped = await manager.StopTaskAsync(id, cancellationToken);
-        return stopped ? Results.Ok(new { message = "停止请求已发送" }) : Results.BadRequest(new { message = "任务未在录制中" });
+        return stopped ? Results.Ok(ApiResponse.Create("停止请求已发送")) : Results.BadRequest(ApiResponse.Create("任务未在录制中"));
     });
 
     app.MapDelete("/api/tasks/{id:long}", (RecordingManager manager, long id) =>
@@ -211,15 +211,15 @@ try
         var task = manager.GetTask(id);
         if (task is null)
         {
-            return Results.NotFound(new { message = "任务不存在" });
+            return Results.NotFound(ApiResponse.Create("任务不存在"));
         }
         if (manager.IsActive(id))
         {
-            return Results.BadRequest(new { message = "任务正在录制，无法删除" });
+            return Results.BadRequest(ApiResponse.Create("任务正在录制，无法删除"));
         }
         return manager.DeleteTask(id)
-            ? Results.Ok(new { message = "任务已删除" })
-            : Results.BadRequest(new { message = "删除失败" });
+            ? Results.Ok(ApiResponse.Create("任务已删除"))
+            : Results.BadRequest(ApiResponse.Create("删除失败"));
     });
 
     app.MapGet("/api/tasks/{id:long}/download", (RecordingManager manager, long id) =>
@@ -227,7 +227,7 @@ try
         var task = manager.GetTask(id);
         if (task?.FilePath is null || !File.Exists(task.FilePath))
         {
-            return Results.NotFound(new { message = "录制文件不存在" });
+            return Results.NotFound(ApiResponse.Create("录制文件不存在"));
         }
 
         var fileName = Path.GetFileName(task.FilePath);
@@ -239,7 +239,7 @@ try
         var task = manager.GetTask(id);
         if (task?.FilePath is null || !File.Exists(task.FilePath))
         {
-            return Results.NotFound(new { message = "录制文件不存在" });
+            return Results.NotFound(ApiResponse.Create("录制文件不存在"));
         }
 
         var info = await GetMediaInfoAsync(task.FilePath);
@@ -292,12 +292,12 @@ try
         var recordPath = ResolveRecordPath(config.RecordPath);
         if (!IsPathUnderRoot(recordPath, filePath))
         {
-            return Results.BadRequest(new { message = "非法路径" });
+            return Results.BadRequest(ApiResponse.Create("非法路径"));
         }
 
         if (!File.Exists(filePath))
         {
-            return Results.NotFound(new { message = "录制文件不存在" });
+            return Results.NotFound(ApiResponse.Create("录制文件不存在"));
         }
 
         var info = await GetMediaInfoAsync(filePath);
