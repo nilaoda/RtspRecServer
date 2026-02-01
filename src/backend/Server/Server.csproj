@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shared\Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishAot>true</PublishAot>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeAllContentForSelfExtract>false</IncludeAllContentForSelfExtract>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
+    <PublishDir>$(MSBuildProjectDirectory)/../../../publish/</PublishDir>
+    <FrontendDir>$(MSBuildProjectDirectory)/../../frontend</FrontendDir>
+    <SkipFrontendBuild>false</SkipFrontendBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <SkipFrontendBuild>true</SkipFrontendBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Remove="appsettings*.json" />
+    <None Remove="appsettings*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="wwwroot/**" />
+    <Content Remove="wwwroot/**" />
+    <None Remove="wwwroot/**" />
+  </ItemGroup>
+
+  <Target Name="BuildFrontend" BeforeTargets="Publish" Condition="'$(SkipFrontendBuild)' != 'true'">
+    <Exec WorkingDirectory="$(FrontendDir)" Command="npm install" />
+    <Exec WorkingDirectory="$(FrontendDir)" Command="npm run build" />
+  </Target>
+
+</Project>
