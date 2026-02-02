@@ -61,16 +61,32 @@ public sealed class RecordingTaskStore
             return;
         }
 
-        var json = File.ReadAllText(_tasksPath);
-        var tasks = JsonSerializer.Deserialize(json, RtspJsonContext.Default.ListRecordingTask) ?? new List<RecordingTask>();
-        foreach (var task in tasks)
+        lock (_fileLock)
         {
-            _tasks[task.Id] = task;
-        }
+            try
+            {
+                var json = File.ReadAllText(_tasksPath);
+                var tasks = JsonSerializer.Deserialize(json, RtspJsonContext.Default.ListRecordingTask) ?? new List<RecordingTask>();
+                foreach (var task in tasks)
+                {
+                    _tasks[task.Id] = task;
+                }
 
-        if (tasks.Count > 0)
-        {
-            _idSeed = tasks.Max(t => t.Id);
+                if (tasks.Count > 0)
+                {
+                    _idSeed = tasks.Max(t => t.Id);
+                }
+            }
+            catch (IOException ex)
+            {
+                // 文件访问冲突或权限问题，记录错误但不中断应用程序
+                Console.WriteLine($"警告：无法加载任务文件 {_tasksPath}，错误：{ex.Message}");
+            }
+            catch (JsonException ex)
+            {
+                // JSON 格式错误，记录错误但不中断应用程序
+                Console.WriteLine($"警告：任务文件 {_tasksPath} 格式错误，错误：{ex.Message}");
+            }
         }
     }
 
@@ -78,11 +94,24 @@ public sealed class RecordingTaskStore
     {
         lock (_fileLock)
         {
-            var snapshot = _tasks.Values.OrderBy(t => t.Id).ToList();
-            var json = JsonSerializer.Serialize(snapshot, RtspJsonContext.Default.ListRecordingTask);
-            var tempPath = _tasksPath + ".tmp";
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, _tasksPath, true);
+            try
+            {
+                var snapshot = _tasks.Values.OrderBy(t => t.Id).ToList();
+                var json = JsonSerializer.Serialize(snapshot, RtspJsonContext.Default.ListRecordingTask);
+                var tempPath = _tasksPath + ".tmp";
+                File.WriteAllText(tempPath, json);
+                File.Move(tempPath, _tasksPath, true);
+            }
+            catch (IOException ex)
+            {
+                // 文件访问冲突、权限问题或磁盘空间不足，记录错误但不中断应用程序
+                Console.WriteLine($"警告：无法保存任务文件 {_tasksPath}，错误：{ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // 权限不足，记录错误但不中断应用程序
+                Console.WriteLine($"警告：没有权限访问任务文件 {_tasksPath}，错误：{ex.Message}");
+            }
         }
     }
 }
