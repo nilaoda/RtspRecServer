@@ -34,6 +34,7 @@ export type AppContextValue = {
   updateConfig: (payload: { maxRecordingTasks: number }) => Promise<void>
   getTaskMediaInfo: (id: number) => Promise<string>
   getRecordingMediaInfo: (filePath: string) => Promise<string>
+  totalBitrateKbps: number // 实时总码率
 }
 
 export const AppContext = createContext<AppContextValue | null>(null)

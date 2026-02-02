@@ -97,7 +97,7 @@ const ResizableTitle = ({ onResize, width, ...restProps }: ResizableTitleProps) 
 }
 
 const TasksPage = () => {
-  const { tasks, channels, createTask, stopTask, deleteTask, getTaskMediaInfo, now, appConfig } = useAppContext()
+  const { tasks, channels, createTask, stopTask, deleteTask, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
   const [form] = Form.useForm<TaskFormValues>()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
@@ -311,8 +311,12 @@ const TasksPage = () => {
           const progress =
             normalizedStatus === 'Pending'
               ? 0
-              : normalizedStatus === 'Completed' || normalizedStatus === 'Stopped'
+              : normalizedStatus === 'Completed'
               ? 100
+              : normalizedStatus === 'Stopped'
+              ? Number.isFinite(startedAt) && Number.isFinite(finishedAt) && Number.isFinite(plannedDuration) && plannedDuration > 0
+                ? Math.min(100, Math.max(0, ((finishedAt - startedAt) / plannedDuration) * 100))
+                : 0
               : Number.isFinite(progressStart) && Number.isFinite(progressEnd) && progressEnd > progressStart
                 ? Math.min(100, Math.max(0, ((Math.min(nowMs, progressEnd) - progressStart) / (progressEnd - progressStart)) * 100))
                 : 0
@@ -326,8 +330,9 @@ const TasksPage = () => {
                 percent={Number(progress.toFixed(1))}
                 showInfo={false}
                 status={
-                  normalizedStatus === 'Failed' ? 'exception' : normalizedStatus === 'Completed' ? 'success' : 'active'
+                  normalizedStatus === 'Failed' ? 'exception' : normalizedStatus === 'Completed' ? 'success' : normalizedStatus === 'Stopped' ? 'normal' : 'active'
                 }
+                strokeColor={normalizedStatus === 'Stopped' ? '#faad14' : undefined}
                 style={{ flex: 1, minWidth: 120 }}
               />
             </div>
@@ -342,7 +347,7 @@ const TasksPage = () => {
         render: (value: number | undefined, task) => {
           // 优先使用后端提供的实时码率
           if (value !== undefined && value > 0) {
-            return `${value.toFixed(1)} KB/s`
+            return `${value.toFixed(1)} Kb/s`
           }
           
           // 如果没有实时码率，使用之前的平均码率计算作为备选
@@ -358,7 +363,7 @@ const TasksPage = () => {
           const durationSeconds = Math.max(1, (endTime - startedAt) / 1000)
           const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
           
-          return `${bitrateKbps.toFixed(1)} KB/s`
+          return `${bitrateKbps.toFixed(1)} Kb/s`
         },
       },
       {
@@ -471,10 +476,18 @@ const TasksPage = () => {
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Card size="small">
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <Button type="primary" onClick={openModal}>
             新建录制任务
           </Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Typography.Text type="secondary">实时码率：</Typography.Text>
+            <div style={{ width: 100, textAlign: 'right' }}>
+              <Typography.Text strong style={{ color: totalBitrateKbps > 0 ? '#52c41a' : '#d9d9d9' }}>
+                {totalBitrateKbps > 0 ? `${totalBitrateKbps.toFixed(1)} Kb/s` : '无录制任务'}
+              </Typography.Text>
+            </div>
+          </div>
         </div>
       </Card>
       <Card title="录制任务">

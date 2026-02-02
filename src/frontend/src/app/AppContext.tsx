@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { message } from 'antd'
-import type { AppConfig, ChannelConfig, RecordingFileInfo, RecordingTaskDto, SystemStatus } from '../types'
+import type { AppConfig, ChannelConfig, RecordingFileInfo, RecordingTaskDto, SystemStatus, RecordingStatus } from '../types'
 import {
   addChannel,
   createTask,
@@ -21,6 +21,20 @@ import { connectWebSocket } from '../services/ws'
 import { getMessageApi } from './antdApp'
 import { AppContext, type AppContextValue } from './context'
 
+type RecordingStatusKey = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped'
+
+const statusKeys: RecordingStatusKey[] = ['Pending', 'Recording', 'Completed', 'Failed', 'Stopped']
+
+const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
+  if (typeof value === 'number') {
+    return statusKeys[value] ?? 'Pending'
+  }
+  if (statusKeys.includes(value as RecordingStatusKey)) {
+    return value as RecordingStatusKey
+  }
+  return 'Pending'
+}
+
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [tasks, setTasks] = useState<RecordingTaskDto[]>([])
   const [channels, setChannels] = useState<ChannelConfig[]>([])
@@ -28,6 +42,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
   const [now, setNow] = useState(new Date())
+  const [debouncedTotalBitrateKbps, setDebouncedTotalBitrateKbps] = useState(0)
+  const bitrateDebounceTimerRef = useRef<number | undefined>(undefined)
   const [themeMode, setThemeMode] = useState<'dark' | 'light'>(() => {
     const stored = window.localStorage.getItem('theme')
     if (stored === 'light' || stored === 'dark') {
@@ -255,6 +271,45 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     }
   }, [notifySuccess])
 
+  // 计算实时总码率
+  const totalBitrateKbps = useMemo(() => {
+    return tasks
+      .filter(task => normalizeStatus(task.status) === 'Recording')
+      .reduce((total, task) => {
+        // 优先使用后端提供的实时码率
+        if (task.currentBitrateKbps !== undefined && task.currentBitrateKbps > 0) {
+          return total + task.currentBitrateKbps
+        }
+        
+        // 如果没有实时码率，使用之前的平均码率计算作为备选
+        const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
+        if (!Number.isFinite(startedAt) || task.bytesWritten === 0) {
+          return total
+        }
+        
+        const durationSeconds = Math.max(1, (now.getTime() - startedAt) / 1000)
+        const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
+        return total + bitrateKbps
+      }, 0)
+  }, [tasks, now])
+
+  // 防抖处理实时码率，避免频繁变化
+  useEffect(() => {
+    if (bitrateDebounceTimerRef.current) {
+      window.clearTimeout(bitrateDebounceTimerRef.current)
+    }
+    
+    bitrateDebounceTimerRef.current = window.setTimeout(() => {
+      setDebouncedTotalBitrateKbps(totalBitrateKbps)
+    }, 300) // 300ms防抖
+    
+    return () => {
+      if (bitrateDebounceTimerRef.current) {
+        window.clearTimeout(bitrateDebounceTimerRef.current)
+      }
+    }
+  }, [totalBitrateKbps])
+
   const value = useMemo<AppContextValue>(
     () => ({
       tasks,
@@ -278,6 +333,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       updateConfig: updateConfigAction,
       getTaskMediaInfo,
       getRecordingMediaInfo,
+      totalBitrateKbps: debouncedTotalBitrateKbps,
     }),
     [
       tasks,
@@ -298,6 +354,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       updateChannelAction,
       deleteChannelAction,
       updateConfigAction,
+      debouncedTotalBitrateKbps,
     ],
   )
 

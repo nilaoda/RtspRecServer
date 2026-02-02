@@ -298,6 +298,7 @@ public sealed class RecordingManager
             ChannelId = task.ChannelId,
             ChannelName = task.ChannelName,
             TaskName = task.TaskName,
+            DisplayName = task.DisplayName,
             StartTime = task.StartTime,
             EndTime = task.EndTime,
             Status = task.Status,
@@ -390,7 +391,7 @@ public sealed class RecordingManager
                 if (timeDiff >= 1.0 && _lastBytesWritten > 0) // 每秒更新一次
                 {
                     var bytesDiff = currentBytes - _lastBytesWritten;
-                    _currentBitrateKbps = (bytesDiff * 8.0) / (timeDiff * 1024.0); // KB/s
+                    _currentBitrateKbps = (bytesDiff * 8.0) / (timeDiff * 1024.0); // Kb/s
                     _lastBytesWritten = currentBytes;
                     _lastBitrateUpdate = now;
                 }
