@@ -14,6 +14,7 @@ public sealed record RecordingResult
     public string? ErrorMessage { get; init; }
     public long BytesWritten { get; init; }
     public string OutputPath { get; init; } = string.Empty;
+    public double? PcrElapsedSeconds { get; init; }
 }
 
 public sealed class RtspRecordingService : IRecordingService
@@ -22,18 +23,19 @@ public sealed class RtspRecordingService : IRecordingService
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
-        Action<long> onBytesWritten,
+        Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken)
     {
         var recorder = new RtspStreamRecorder(task.Url, outputPath);
         try
         {
-            var bytes = await recorder.RunAsync(targetDuration, onBytesWritten, cancellationToken);
+            var result = await recorder.RunAsync(targetDuration, onProgress, cancellationToken);
             return new RecordingResult
             {
                 Success = !cancellationToken.IsCancellationRequested,
-                BytesWritten = bytes,
-                OutputPath = outputPath
+                BytesWritten = result.BytesWritten,
+                OutputPath = outputPath,
+                PcrElapsedSeconds = result.PcrElapsedSeconds
             };
         }
         catch (Exception ex)
@@ -67,7 +69,7 @@ internal sealed class RtspStreamRecorder
         _outputPath = outputPath;
     }
 
-    public async Task<long> RunAsync(TimeSpan? targetDuration, Action<long> onBytesWritten, CancellationToken cancellationToken)
+    public async Task<RecordingResult> RunAsync(TimeSpan? targetDuration, Action<RecordingProgress> onProgress, CancellationToken cancellationToken)
     {
         Connect();
         var stream = _client!.GetStream();
@@ -96,7 +98,7 @@ internal sealed class RtspStreamRecorder
             _client.Close();
             _client = null;
             _seq = 2;
-            return await new RtspStreamRecorder(newUrl, _outputPath).RunAsync(targetDuration, onBytesWritten, cancellationToken);
+            return await new RtspStreamRecorder(newUrl, _outputPath).RunAsync(targetDuration, onProgress, cancellationToken);
         }
 
         if (!resp.Contains("200 OK"))
@@ -167,17 +169,31 @@ internal sealed class RtspStreamRecorder
                 {
                     await buffered.WriteAsync(payload.AsMemory(0, length), cancellationToken);
                     BytesWritten += length;
-                    onBytesWritten(BytesWritten);
-                    packetCount++;
+                    
+                    // 计算PCR时长
+                    double? pcrElapsedSeconds = null;
                     if (targetTicks > 0)
                     {
                         if (TryUpdatePcrTicks(payload.AsSpan(0, length), ref firstPcrTicks, ref lastPcrTicks, out var elapsedTicks) &&
                             elapsedTicks >= targetTicks)
                         {
                             stoppedByPcr = true;
-                            break;
+                            break; // 达到PCR限制，立即跳出循环
                         }
                     }
+                    
+                    // 计算PCR时长（秒）
+                    if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
+                    {
+                        pcrElapsedSeconds = CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
+                    }
+                    
+                    onProgress(new RecordingProgress 
+                    { 
+                        BytesWritten = BytesWritten, 
+                        PcrElapsedSeconds = pcrElapsedSeconds 
+                    });
+                    packetCount++;
                 }
             }
             finally
@@ -200,7 +216,13 @@ internal sealed class RtspStreamRecorder
             BytesWritten, packetCount, duration.TotalSeconds, 
             duration.TotalSeconds > 0 ? BytesWritten / 1024.0 / duration.TotalSeconds : 0);
 
-        return BytesWritten;
+        return new RecordingResult
+        {
+            Success = true,
+            BytesWritten = BytesWritten,
+            PcrElapsedSeconds = firstPcrTicks.HasValue && lastPcrTicks.HasValue ? CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value) : (double?)null,
+            OutputPath = _outputPath
+        };
     }
 
     private static bool TryUpdatePcrTicks(ReadOnlySpan<byte> payload, ref long? first, ref long? last, out long elapsedTicks)

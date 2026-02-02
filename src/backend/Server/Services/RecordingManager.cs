@@ -196,21 +196,23 @@ public sealed class RecordingManager
                 
                 var runtimeTask = started with { Url = finalUrl };
 
-                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, bytes =>
+                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, (progress) =>
                 {
-                    session.BytesWritten = bytes;
-                    session.UpdateBitrate(bytes); // 更新实时码率
+                    session.BytesWritten = progress.BytesWritten;
+                    session.UpdateBitrate(progress.BytesWritten); // 更新实时码率
+                    session.UpdatePcrElapsedSeconds(progress.PcrElapsedSeconds); // 更新PCR时长
                     
-                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromSeconds(1) && bytes != lastBytes)
+                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromSeconds(1) && progress.BytesWritten != lastBytes)
                     {
                         lastUpdate = DateTimeOffset.UtcNow;
-                        lastBytes = bytes;
+                        lastBytes = progress.BytesWritten;
                         var currentBitrate = session.GetCurrentBitrateKbps();
+                        var pcrElapsed = session.GetPcrElapsedSeconds();
                         var update = _taskStore.Update(started with
                         {
-                            BytesWritten = bytes
+                            BytesWritten = progress.BytesWritten
                         });
-                        _ = _notifier.NotifyTaskUpdateAsync(ToDto(update) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
+                        _ = _notifier.NotifyTaskUpdateAsync(ToDto(update) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = pcrElapsed }, CancellationToken.None);
                     }
                 }, session.Cancellation.Token);
 
@@ -241,7 +243,7 @@ public sealed class RecordingManager
                     FinishedAt = DateTimeOffset.UtcNow
                 });
 
-                await _notifier.NotifyTaskUpdateAsync(ToDto(completed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
+                await _notifier.NotifyTaskUpdateAsync(ToDto(completed) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = result.PcrElapsedSeconds }, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -359,6 +361,16 @@ public sealed class RecordingManager
         private DateTimeOffset _lastBitrateUpdate = DateTimeOffset.MinValue;
         private double _currentBitrateKbps = 0;
         private readonly object _bitrateLock = new();
+        
+        // PCR时长相关字段
+        private double? _pcrElapsedSeconds = null;
+        
+        public double? GetPcrElapsedSeconds() => _pcrElapsedSeconds;
+        
+        public void UpdatePcrElapsedSeconds(double? seconds)
+        {
+            _pcrElapsedSeconds = seconds;
+        }
         
         public double GetCurrentBitrateKbps()
         {

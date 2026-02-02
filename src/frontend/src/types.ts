@@ -21,6 +21,7 @@ export type RecordingTaskDto = {
   startedAt?: string
   finishedAt?: string
   currentBitrateKbps?: number
+  pcrElapsedSeconds?: number
 }
 
 export type ChannelConfig = {

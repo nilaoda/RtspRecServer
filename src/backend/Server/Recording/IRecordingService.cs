@@ -8,6 +8,6 @@ public interface IRecordingService
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
-        Action<long> onBytesWritten,
+        Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken);
 }

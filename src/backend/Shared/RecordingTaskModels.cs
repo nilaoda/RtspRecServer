@@ -43,6 +43,7 @@ public sealed record RecordingTaskDto
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? FinishedAt { get; init; }
     public double? CurrentBitrateKbps { get; init; }
+    public double? PcrElapsedSeconds { get; init; }
 }
 
 public sealed record RecordingTaskStatusUpdate
@@ -54,6 +55,7 @@ public sealed record RecordingTaskStatusUpdate
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? FinishedAt { get; init; }
     public double? CurrentBitrateKbps { get; init; }
+    public double? PcrElapsedSeconds { get; init; }
 }
 
 public sealed record DiskStatus
@@ -80,4 +82,11 @@ public sealed record ApiResponse
     public string Message { get; init; } = string.Empty;
     
     public static ApiResponse Create(string message) => new() { Message = message };
+}
+
+public sealed record RecordingProgress
+{
+    public long BytesWritten { get; init; }
+    public double? PcrElapsedSeconds { get; init; }
+    public double? CurrentBitrateKbps { get; init; }
 }

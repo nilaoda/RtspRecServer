@@ -50,7 +50,8 @@ export const formatBytes = (bytes: number) => {
     value /= 1024
     unitIndex += 1
   }
-  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`
+  // 统一使用两位小数，便于观察文件增长
+  return `${value.toFixed(2)} ${units[unitIndex]}`
 }
 
 export const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))

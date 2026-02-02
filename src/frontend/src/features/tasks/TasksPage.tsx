@@ -211,6 +211,20 @@ const TasksPage = () => {
     () => [
       { title: 'ID', dataIndex: 'id', key: 'id', width: columnWidths.id },
       {
+        title: '状态',
+        dataIndex: 'status',
+        key: 'status',
+        width: columnWidths.status,
+        render: (value: RecordingStatus, record) => {
+          const normalizedStatus = normalizeStatus(value)
+          return (
+            <Tag color={statusColor[normalizedStatus]} title={record.errorMessage ?? ''}>
+              {statusLabel[normalizedStatus]}
+            </Tag>
+          )
+        },
+      },
+      {
         title: '任务名称',
         dataIndex: 'displayName',
         key: 'displayName',
@@ -253,13 +267,22 @@ const TasksPage = () => {
           const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
           const finishedAt = task.finishedAt ? new Date(task.finishedAt).getTime() : Number.NaN
           const plannedDuration = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : Number.NaN
-          const recordedDuration = Number.isFinite(startedAt)
-            ? Number.isFinite(finishedAt)
-              ? Math.max(0, finishedAt - startedAt)
-              : normalizedStatus === 'Recording'
-                ? Math.max(0, nowMs - startedAt)
-                : 0
-            : 0
+          
+          // 优先使用后端推送的PCR时长
+          let recordedDuration = 0
+          if (task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0) {
+            recordedDuration = task.pcrElapsedSeconds * 1000 // 转换为毫秒
+          } else {
+            // 如果没有PCR时长，使用之前的时间计算作为备选
+            recordedDuration = Number.isFinite(startedAt)
+              ? Number.isFinite(finishedAt)
+                ? Math.max(0, finishedAt - startedAt)
+                : normalizedStatus === 'Recording'
+                  ? Math.max(0, nowMs - startedAt)
+                  : 0
+              : 0
+          }
+          
           if (!Number.isFinite(plannedDuration)) {
             return '--'
           }
@@ -344,20 +367,6 @@ const TasksPage = () => {
         key: 'bytesWritten',
         width: columnWidths.bytesWritten,
         render: (value: number) => formatBytes(value),
-      },
-      {
-        title: '状态',
-        dataIndex: 'status',
-        key: 'status',
-        width: columnWidths.status,
-        render: (value: RecordingStatus, record) => {
-          const normalizedStatus = normalizeStatus(value)
-          return (
-            <Tag color={statusColor[normalizedStatus]} title={record.errorMessage ?? ''}>
-              {statusLabel[normalizedStatus]}
-            </Tag>
-          )
-        },
       },
       {
         title: '操作',
