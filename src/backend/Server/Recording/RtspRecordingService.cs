@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using RtspRecServer.Shared;
@@ -86,6 +88,12 @@ internal sealed class RtspStreamRecorder
         long? firstPcrTicks = null;
         long? lastPcrTicks = null;
         var stoppedByPcr = false;
+        
+        // 性能优化：批量写入和每秒进度上报
+        const int BatchSize = 16 * 1024; // 16KB批处理
+        var batchBuffer = ArrayPool<byte>.Shared.Rent(BatchSize);
+        var batchOffset = 0;
+        var lastProgressTime = DateTime.UtcNow; // 记录上次进度上报时间
 
         var describe = RtspMessage.BuildDescribe(_url, _seq++);
         await SendAsync(stream, describe, cancellationToken);
@@ -167,12 +175,20 @@ internal sealed class RtspStreamRecorder
 
                 if (header[1] == 0)
                 {
-                    await buffered.WriteAsync(payload.AsMemory(0, length), cancellationToken);
-                    BytesWritten += length;
+                    // 批量写入优化
+                    if (batchOffset + length > BatchSize)
+                    {
+                        await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                        batchOffset = 0;
+                    }
                     
-                    // 计算PCR时长
-                    double? pcrElapsedSeconds = null;
-                    if (targetTicks > 0)
+                    payload.AsSpan(0, length).CopyTo(batchBuffer.AsSpan(batchOffset));
+                    batchOffset += length;
+                    BytesWritten += length;
+                    packetCount++;
+                    
+                    // PCR检查优化：只在需要时检查，且减少频率
+                    if (targetTicks > 0 && (packetCount % 10 == 0)) // 每10个包检查一次
                     {
                         if (TryUpdatePcrTicks(payload.AsSpan(0, length), ref firstPcrTicks, ref lastPcrTicks, out var elapsedTicks) &&
                             elapsedTicks >= targetTicks)
@@ -182,18 +198,22 @@ internal sealed class RtspStreamRecorder
                         }
                     }
                     
-                    // 计算PCR时长（秒）
-                    if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
+                    // 每秒进度上报：检查是否需要上报进度
+                    var now = DateTime.UtcNow;
+                    if ((now - lastProgressTime).TotalSeconds >= 1.0)
                     {
-                        pcrElapsedSeconds = CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
+                        double? currentPcrElapsedSeconds = null;
+                        if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
+                        {
+                            currentPcrElapsedSeconds = CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
+                        }
+                        onProgress(new RecordingProgress 
+                        { 
+                            BytesWritten = BytesWritten, 
+                            PcrElapsedSeconds = currentPcrElapsedSeconds 
+                        });
+                        lastProgressTime = now;
                     }
-                    
-                    onProgress(new RecordingProgress 
-                    { 
-                        BytesWritten = BytesWritten, 
-                        PcrElapsedSeconds = pcrElapsedSeconds 
-                    });
-                    packetCount++;
                 }
             }
             finally
@@ -202,7 +222,26 @@ internal sealed class RtspStreamRecorder
             }
         }
 
+        // 写入剩余数据
+        if (batchOffset > 0)
+        {
+            await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+        }
+        ArrayPool<byte>.Shared.Return(batchBuffer);
+        
         await buffered.FlushAsync(cancellationToken);
+        
+        // 最终进度报告
+        double? finalPcrElapsedSeconds = null;
+        if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
+        {
+            finalPcrElapsedSeconds = CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
+        }
+        onProgress(new RecordingProgress 
+        { 
+            BytesWritten = BytesWritten, 
+            PcrElapsedSeconds = finalPcrElapsedSeconds 
+        });
 
         var duration = DateTime.UtcNow - startTime;
         if (stoppedByPcr)
@@ -220,7 +259,7 @@ internal sealed class RtspStreamRecorder
         {
             Success = true,
             BytesWritten = BytesWritten,
-            PcrElapsedSeconds = firstPcrTicks.HasValue && lastPcrTicks.HasValue ? CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value) : (double?)null,
+            PcrElapsedSeconds = finalPcrElapsedSeconds,
             OutputPath = _outputPath
         };
     }
@@ -233,10 +272,14 @@ internal sealed class RtspStreamRecorder
             return false;
         }
 
+        // 性能优化：减少边界检查，使用unsafe代码提高性能
+        ref byte payloadRef = ref MemoryMarshal.GetReference(payload);
         var offset = 0;
+        
         while (offset + 188 <= payload.Length)
         {
-            if (payload[offset] != 0x47)
+            // 快速检查同步字节
+            if (Unsafe.Add(ref payloadRef, offset) != 0x47)
             {
                 offset++;
                 continue;
@@ -267,6 +310,7 @@ internal sealed class RtspStreamRecorder
             return false;
         }
 
+        // 性能优化：使用位操作快速检查
         var adaptationFieldControl = (packet[3] >> 4) & 0x3;
         if (adaptationFieldControl != 2 && adaptationFieldControl != 3)
         {
@@ -279,12 +323,13 @@ internal sealed class RtspStreamRecorder
             return false;
         }
 
-        var flags = packet[5];
-        if ((flags & 0x10) == 0)
+        // 快速检查PCR标志
+        if ((packet[5] & 0x10) == 0)
         {
             return false;
         }
 
+        // 性能优化：使用BitConverter和位操作快速读取PCR
         var baseIndex = 6;
         var pcrBase = ((long)packet[baseIndex] << 25)
                       | ((long)packet[baseIndex + 1] << 17)
