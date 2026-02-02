@@ -42,6 +42,7 @@ public sealed record RecordingTaskDto
     public string? ErrorMessage { get; init; }
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? FinishedAt { get; init; }
+    public double? CurrentBitrateKbps { get; init; }
 }
 
 public sealed record RecordingTaskStatusUpdate
@@ -52,6 +53,7 @@ public sealed record RecordingTaskStatusUpdate
     public string? ErrorMessage { get; init; }
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? FinishedAt { get; init; }
+    public double? CurrentBitrateKbps { get; init; }
 }
 
 public sealed record DiskStatus

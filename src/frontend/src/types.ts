@@ -20,6 +20,7 @@ export type RecordingTaskDto = {
   errorMessage?: string
   startedAt?: string
   finishedAt?: string
+  currentBitrateKbps?: number
 }
 
 export type ChannelConfig = {

@@ -11,6 +11,7 @@ import {
   Progress,
   Select,
   Space,
+  Spin,
   Table,
   Tag,
   Typography,
@@ -100,6 +101,7 @@ const TasksPage = () => {
   const [form] = Form.useForm<TaskFormValues>()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
+  const [infoLoading, setInfoLoading] = useState(false)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({
     id: 50,
     taskName: 200,
@@ -108,6 +110,7 @@ const TasksPage = () => {
     endTime: 180,
     duration: 210,
     progress: 200,
+    bitrate: 120,
     bytesWritten: 130,
     status: 120,
     actions: 240,
@@ -180,11 +183,14 @@ const TasksPage = () => {
 
   const onViewInfo = useCallback(
     async (id: number, title: string) => {
+      setInfoLoading(true)
       try {
         const info = await getTaskMediaInfo(id)
         setInfoModal({ title, content: info })
       } catch {
         return
+      } finally {
+        setInfoLoading(false)
       }
     },
     [getTaskMediaInfo],
@@ -303,6 +309,33 @@ const TasksPage = () => {
               />
             </div>
           )
+        },
+      },
+      {
+        title: '实时码率',
+        dataIndex: 'currentBitrateKbps',
+        key: 'bitrate',
+        width: columnWidths.bitrate,
+        render: (value: number | undefined, task) => {
+          // 优先使用后端提供的实时码率
+          if (value !== undefined && value > 0) {
+            return `${value.toFixed(1)} KB/s`
+          }
+          
+          // 如果没有实时码率，使用之前的平均码率计算作为备选
+          const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
+          const finishedAt = task.finishedAt ? new Date(task.finishedAt).getTime() : Number.NaN
+          const nowMs = now.getTime()
+          
+          if (!Number.isFinite(startedAt) || task.bytesWritten === 0) {
+            return '--'
+          }
+          
+          const endTime = Number.isFinite(finishedAt) ? finishedAt : nowMs
+          const durationSeconds = Math.max(1, (endTime - startedAt) / 1000)
+          const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
+          
+          return `${bitrateKbps.toFixed(1)} KB/s`
         },
       },
       {
@@ -475,13 +508,22 @@ const TasksPage = () => {
         <Typography.Text type="secondary">时间为本地时区，系统将自动记忆上次输入</Typography.Text>
       </Modal>
       <Modal
-        open={Boolean(infoModal)}
+        open={Boolean(infoModal) || infoLoading}
         title={infoModal?.title ?? ''}
-        onCancel={() => setInfoModal(null)}
+        onCancel={() => {
+          setInfoModal(null)
+          setInfoLoading(false)
+        }}
         footer={null}
         width={720}
       >
-        <pre className="info-code">{infoModal?.content ?? ''}</pre>
+        {infoLoading ? (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <Spin size="large" tip="正在加载媒体信息..." />
+          </div>
+        ) : (
+          <pre className="info-code">{infoModal?.content ?? ''}</pre>
+        )}
       </Modal>
     </Space>
   )

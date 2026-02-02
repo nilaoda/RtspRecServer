@@ -199,15 +199,18 @@ public sealed class RecordingManager
                 var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, bytes =>
                 {
                     session.BytesWritten = bytes;
+                    session.UpdateBitrate(bytes); // 更新实时码率
+                    
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromSeconds(1) && bytes != lastBytes)
                     {
                         lastUpdate = DateTimeOffset.UtcNow;
                         lastBytes = bytes;
+                        var currentBitrate = session.GetCurrentBitrateKbps();
                         var update = _taskStore.Update(started with
                         {
                             BytesWritten = bytes
                         });
-                        _ = _notifier.NotifyTaskUpdateAsync(ToDto(update), CancellationToken.None);
+                        _ = _notifier.NotifyTaskUpdateAsync(ToDto(update) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
                     }
                 }, session.Cancellation.Token);
 
@@ -229,6 +232,7 @@ public sealed class RecordingManager
                 _logger.LogInformation("录制任务完成，任务ID: {TaskId}, 状态: {Status}, 写入字节数: {BytesWritten}", 
                     task.Id, finalStatus, finalBytesWritten);
 
+                var currentBitrate = session.GetCurrentBitrateKbps();
                 var completed = _taskStore.Update(started with
                 {
                     Status = finalStatus,
@@ -237,18 +241,19 @@ public sealed class RecordingManager
                     FinishedAt = DateTimeOffset.UtcNow
                 });
 
-                await _notifier.NotifyTaskUpdateAsync(ToDto(completed), CancellationToken.None);
+                await _notifier.NotifyTaskUpdateAsync(ToDto(completed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "录制任务失败 {TaskId}, 错误信息: {ErrorMessage}", task.Id, ex.Message);
+                var currentBitrate = session.GetCurrentBitrateKbps();
                 var failed = _taskStore.Update(started with
                 {
                     Status = RecordingStatus.Failed,
                     ErrorMessage = ex.Message,
                     FinishedAt = DateTimeOffset.UtcNow
                 });
-                await _notifier.NotifyTaskUpdateAsync(ToDto(failed), CancellationToken.None);
+                await _notifier.NotifyTaskUpdateAsync(ToDto(failed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
             }
             finally
             {
@@ -348,5 +353,41 @@ public sealed class RecordingManager
         public Task Completion { get; set; } = Task.CompletedTask;
         public long BytesWritten { get; set; }
         public bool ManualStopRequested { get; set; }
+        
+        // 实时码率相关字段
+        private long _lastBytesWritten = 0;
+        private DateTimeOffset _lastBitrateUpdate = DateTimeOffset.MinValue;
+        private double _currentBitrateKbps = 0;
+        private readonly object _bitrateLock = new();
+        
+        public double GetCurrentBitrateKbps()
+        {
+            lock (_bitrateLock)
+            {
+                return _currentBitrateKbps;
+            }
+        }
+        
+        public void UpdateBitrate(long currentBytes)
+        {
+            lock (_bitrateLock)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var timeDiff = (now - _lastBitrateUpdate).TotalSeconds;
+                
+                if (timeDiff >= 1.0 && _lastBytesWritten > 0) // 每秒更新一次
+                {
+                    var bytesDiff = currentBytes - _lastBytesWritten;
+                    _currentBitrateKbps = (bytesDiff * 8.0) / (timeDiff * 1024.0); // KB/s
+                    _lastBytesWritten = currentBytes;
+                    _lastBitrateUpdate = now;
+                }
+                else if (_lastBytesWritten == 0)
+                {
+                    _lastBytesWritten = currentBytes;
+                    _lastBitrateUpdate = now;
+                }
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
-import { Button, Card, Modal, Space, Table, Typography } from 'antd'
+import { Button, Card, Modal, Space, Spin, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Resizable } from 'react-resizable'
 import type { ResizeCallbackData } from 'react-resizable'
@@ -33,6 +33,7 @@ const ResizableTitle = ({ onResize, width, ...restProps }: ResizableTitleProps) 
 const RecordingsPage = () => {
   const { recordings, reloadRecordings, getRecordingMediaInfo, tasks } = useAppContext()
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
+  const [infoLoading, setInfoLoading] = useState(false)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({
     fileName: 260,
     fileSizeBytes: 140,
@@ -45,11 +46,14 @@ const RecordingsPage = () => {
 
   const onViewInfo = useCallback(
     async (filePath: string, fileName: string) => {
+      setInfoLoading(true)
       try {
         const info = await getRecordingMediaInfo(filePath)
         setInfoModal({ title: fileName, content: info })
       } catch {
         return
+      } finally {
+        setInfoLoading(false)
       }
     },
     [getRecordingMediaInfo],
@@ -190,13 +194,22 @@ const RecordingsPage = () => {
         </div>
       </Card>
       <Modal
-        open={Boolean(infoModal)}
+        open={Boolean(infoModal) || infoLoading}
         title={infoModal?.title ?? ''}
-        onCancel={() => setInfoModal(null)}
+        onCancel={() => {
+          setInfoModal(null)
+          setInfoLoading(false)
+        }}
         footer={null}
         width={720}
       >
-        <pre className="info-code">{infoModal?.content ?? ''}</pre>
+        {infoLoading ? (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <Spin size="large" tip="正在加载媒体信息..." />
+          </div>
+        ) : (
+          <pre className="info-code">{infoModal?.content ?? ''}</pre>
+        )}
       </Modal>
     </Space>
   )
