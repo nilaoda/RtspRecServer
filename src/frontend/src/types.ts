@@ -11,6 +11,7 @@ export type RecordingTaskDto = {
   channelId: number
   channelName: string
   taskName: string
+  displayName: string
   startTime: string
   endTime: string
   status: RecordingStatus

@@ -81,6 +81,7 @@ public sealed class RecordingManager
             ChannelName = channel.Name,
             Url = channel.Url,
             TaskName = taskName,
+            DisplayName = baseName,
             StartTime = request.StartTime,
             EndTime = request.EndTime,
             Status = RecordingStatus.Pending,

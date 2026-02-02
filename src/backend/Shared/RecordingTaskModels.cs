@@ -7,6 +7,7 @@ public sealed record RecordingTask
     public string ChannelName { get; init; } = string.Empty;
     public string Url { get; init; } = string.Empty;
     public string TaskName { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
     public DateTimeOffset StartTime { get; init; }
     public DateTimeOffset EndTime { get; init; }
     public RecordingStatus Status { get; init; } = RecordingStatus.Pending;
@@ -32,6 +33,7 @@ public sealed record RecordingTaskDto
     public int ChannelId { get; init; }
     public string ChannelName { get; init; } = string.Empty;
     public string TaskName { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
     public DateTimeOffset StartTime { get; init; }
     public DateTimeOffset EndTime { get; init; }
     public RecordingStatus Status { get; init; }

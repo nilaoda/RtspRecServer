@@ -102,6 +102,7 @@ const TasksPage = () => {
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({
     id: 50,
+    taskName: 200,
     channelName: 180,
     startTime: 180,
     endTime: 180,
@@ -203,6 +204,14 @@ const TasksPage = () => {
   const columns = useMemo<ColumnsType<RecordingTaskDto>>(
     () => [
       { title: 'ID', dataIndex: 'id', key: 'id', width: columnWidths.id },
+      {
+        title: '任务名称',
+        dataIndex: 'displayName',
+        key: 'displayName',
+        width: columnWidths.taskName,
+        ellipsis: true,
+        render: (value: string) => value || '--',
+      },
       {
         title: '频道名称',
         dataIndex: 'channelName',
