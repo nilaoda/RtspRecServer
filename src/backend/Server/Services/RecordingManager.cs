@@ -317,8 +317,9 @@ public sealed class RecordingManager
         if (url.Contains("/PLTV/", StringComparison.OrdinalIgnoreCase))
         {
             var startLocal = task.StartTime.ToLocalTime().ToString("yyyyMMddHHmmss");
+            var endLocal = task.EndTime.ToLocalTime().AddMinutes(1).ToString("yyyyMMddHHmmss");
             var separator = url.Contains('?') ? '&' : '?';
-            return $"{url}{separator}playseek={startLocal}";
+            return $"{url}{separator}playseek={startLocal}-{endLocal}";
         }
 
         if (url.Contains("starttime=", StringComparison.OrdinalIgnoreCase))
@@ -327,8 +328,9 @@ public sealed class RecordingManager
         }
 
         var startUtc = task.StartTime.ToUniversalTime().ToString("yyyyMMddTHHmmssZ");
+        var endUtc = task.EndTime.ToUniversalTime().AddMinutes(1).ToString("yyyyMMddTHHmmssZ");
         var querySeparator = url.Contains('?') ? '&' : '?';
-        return $"{url}{querySeparator}starttime={startUtc}";
+        return $"{url}{querySeparator}starttime={startUtc}&endtime={endUtc}";
     }
 
     private sealed class RecordingSession
