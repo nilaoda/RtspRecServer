@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using RtspRecServer.Server.Recording;
 using RtspRecServer.Server.Services;
+using RtspRecServer.Server.Services.Epg;
 using RtspRecServer.Shared;
 using Serilog;
 using Serilog.Events;
@@ -39,6 +41,7 @@ try
     builder.Services.ConfigureHttpJsonOptions(options =>
     {
         options.SerializerOptions.TypeInfoResolverChain.Insert(0, RtspJsonContext.Default);
+        options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
     });
 
     builder.Services.Configure<HostOptions>(options =>
@@ -59,10 +62,16 @@ try
     builder.Services.AddSingleton<RecordingManager>();
     builder.Services.AddHostedService<RecordingBackgroundService>();
 
+    // 添加EPG服务
+    builder.Services.AddEpgServices(builder.Configuration);
+    
     builder.Host.UseSerilog();
 
+    Log.Information("正在构建应用程序...");
     var app = builder.Build();
-
+    Log.Information("应用程序构建完成");
+  
+    Log.Information("配置中间件...");
     app.UseResponseCompression();
     app.UseWebSockets();
 
@@ -108,6 +117,7 @@ try
         await next();
     });
 
+    Log.Information("配置静态文件...");
     var embeddedProvider = new EmbeddedFileProvider(typeof(Program).Assembly, "Server.wwwroot");
     app.Environment.WebRootFileProvider = embeddedProvider;
     app.UseDefaultFiles(new DefaultFilesOptions
@@ -119,6 +129,7 @@ try
         FileProvider = embeddedProvider
     });
 
+    Log.Information("映射端点...");
     app.Map("/ws", async context =>
     {
         if (!context.WebSockets.IsWebSocketRequest)
@@ -304,16 +315,26 @@ try
         return Results.Ok(new MediaInfoResponse { Content = info });
     });
 
+    Log.Information("映射EPG端点...");
+    // 映射EPG API端点
+    app.MapEpgEndpoints();
+    Log.Information("EPG端点映射完成");
+
+    Log.Information("注册生命周期回调...");
     app.Lifetime.ApplicationStopping.Register(() =>
     {
+        Log.Information("正在停止所有录制会话...");
         var manager = app.Services.GetRequiredService<RecordingManager>();
         manager.RequestStopAllActiveSessions();
     });
+    Log.Information("生命周期回调注册完成");
 
+    Log.Information("完成配置，准备启动...");
     app.MapFallbackToFile("index.html");
+    Log.Information("Fallback路由配置完成");
 
     Log.Information("监听地址: {Urls}", string.Join(", ", serverUrls));
-
+    Log.Information("正在启动 Web 主机...");
     app.Run();
 
 }

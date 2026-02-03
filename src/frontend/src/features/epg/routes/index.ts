@@ -1,0 +1,1 @@
+export { epgRoutes } from './EpgRoutes'

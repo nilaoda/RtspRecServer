@@ -13,6 +13,7 @@ const LayoutShell = () => {
     if (location.pathname.startsWith('/channels')) return 'channels'
     if (location.pathname.startsWith('/recordings')) return 'recordings'
     if (location.pathname.startsWith('/settings')) return 'settings'
+    if (location.pathname.startsWith('/epg')) return 'epg'
     return 'tasks'
   }, [location.pathname])
   const menuItems = useMemo(
@@ -20,6 +21,7 @@ const LayoutShell = () => {
       { key: 'tasks', label: '任务管理', path: '/' },
       { key: 'channels', label: '频道配置', path: '/channels' },
       { key: 'recordings', label: '录制管理', path: '/recordings' },
+      { key: 'epg', label: '节目单', path: '/epg' },
       { key: 'settings', label: '应用配置', path: '/settings' },
     ],
     [],

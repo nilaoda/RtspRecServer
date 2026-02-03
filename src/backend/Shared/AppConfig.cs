@@ -9,6 +9,14 @@ public sealed record AppConfig
     public string Username { get; init; } = "admin";
     public string Password { get; init; } = "admin";
     public int MaxRecordingTasks { get; init; } = 1;
+    public EpgConfig Epg { get; init; } = new();
+}
+
+public sealed record EpgConfig
+{
+    public string Url { get; init; } = "http://epg.51zmt.top:8000/e.xml.gz";
+    public string UpdateTime { get; init; } = "08:00";
+    public int CacheDurationHours { get; init; } = 24;
 }
 
 public sealed record AppConfigUpdateRequest

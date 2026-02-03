@@ -19,7 +19,7 @@ const SettingsPage = () => {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card bodyStyle={{ padding: 24 }}>
+      <Card styles={{ body: { padding: 24 } }}>
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <div>
             <Typography.Title level={4} style={{ marginBottom: 4 }}>

@@ -5,6 +5,11 @@ import type {
   RecordingTaskDto,
   SystemStatus,
 } from '../types'
+import type {
+  EpgChannel,
+  BackendEpgProgram,
+  BackendCurrentProgramInfo
+} from '../features/epg/types/epg'
 import { getMessageApi } from '../app/antdApp'
 
 type FetchOptions = RequestInit & { silent?: boolean }
@@ -143,3 +148,18 @@ export const updateConfig = (payload: { maxRecordingTasks: number }) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
+
+// EPG API
+export const getEpgChannels = () => fetchJson<EpgChannel[]>('/api/epg/channels', { silent: true })
+
+export const getEpgChannelPrograms = (channelId: string) => 
+  fetchJson<BackendEpgProgram[]>(`/api/epg/channels/${channelId}/programs`, { silent: true })
+
+export const getEpgCurrentPrograms = () => fetchJson<BackendCurrentProgramInfo[]>(`/api/epg/current?t=${Date.now()}`, { silent: true })
+
+export const getEpgCategories = () => fetchJson<string[]>('/api/epg/categories', { silent: true })
+
+export const getEpgCategoryChannels = (category: string) => 
+  fetchJson<EpgChannel[]>(`/api/epg/categories/${category}/channels`, { silent: true })
+
+export const refreshEpgData = () => fetchJson<{ message: string }>('/api/epg/refresh', { method: 'POST' })

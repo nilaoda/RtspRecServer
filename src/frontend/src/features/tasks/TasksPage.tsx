@@ -302,12 +302,22 @@ const TasksPage = () => {
           const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
           const finishedAt = task.finishedAt ? new Date(task.finishedAt).getTime() : Number.NaN
           const plannedDuration = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : Number.NaN
-          const progressStart = Number.isFinite(startedAt) ? startedAt : start
-          const progressEnd = Number.isFinite(finishedAt)
-            ? finishedAt
-            : Number.isFinite(plannedDuration)
-              ? progressStart + plannedDuration
-              : end
+          
+          // 优先使用后端推送的PCR时长
+          let recordedDuration = 0
+          if (task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0) {
+            recordedDuration = task.pcrElapsedSeconds * 1000 // 转换为毫秒
+          } else {
+            // 如果没有PCR时长，使用之前的时间计算作为备选
+            recordedDuration = Number.isFinite(startedAt)
+              ? Number.isFinite(finishedAt)
+                ? Math.max(0, finishedAt - startedAt)
+                : normalizedStatus === 'Recording'
+                  ? Math.max(0, nowMs - startedAt)
+                  : 0
+              : 0
+          }
+
           const progress =
             normalizedStatus === 'Pending'
               ? 0
@@ -315,10 +325,10 @@ const TasksPage = () => {
               ? 100
               : normalizedStatus === 'Stopped'
               ? Number.isFinite(startedAt) && Number.isFinite(finishedAt) && Number.isFinite(plannedDuration) && plannedDuration > 0
-                ? Math.min(100, Math.max(0, ((finishedAt - startedAt) / plannedDuration) * 100))
+                ? Math.min(100, Math.max(0, (recordedDuration / plannedDuration) * 100))
                 : 0
-              : Number.isFinite(progressStart) && Number.isFinite(progressEnd) && progressEnd > progressStart
-                ? Math.min(100, Math.max(0, ((Math.min(nowMs, progressEnd) - progressStart) / (progressEnd - progressStart)) * 100))
+              : Number.isFinite(plannedDuration) && plannedDuration > 0
+                ? Math.min(100, Math.max(0, (recordedDuration / plannedDuration) * 100))
                 : 0
           return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>

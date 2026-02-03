@@ -234,12 +234,18 @@ public sealed class RecordingManager
                 _logger.LogInformation("录制任务完成，任务ID: {TaskId}, 状态: {Status}, 写入字节数: {BytesWritten}", 
                     task.Id, finalStatus, finalBytesWritten);
 
+                if (finalStatus == RecordingStatus.Failed)
+                {
+                    _logger.LogError("录制任务 {TaskId} 失败。频道: {ChannelName}, URL: {Url}, 输出路径: {OutputPath}, 具体原因: {ErrorMessage}", 
+                        task.Id, task.ChannelName, runtimeTask.Url, outputPath, result.ErrorMessage ?? "未知错误");
+                }
+
                 var currentBitrate = session.GetCurrentBitrateKbps();
                 var completed = _taskStore.Update(started with
                 {
                     Status = finalStatus,
                     BytesWritten = finalBytesWritten,
-                    ErrorMessage = result.ErrorMessage,
+                    ErrorMessage = result.ErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
                     FinishedAt = DateTimeOffset.UtcNow
                 });
 
@@ -247,12 +253,13 @@ public sealed class RecordingManager
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "录制任务失败 {TaskId}, 错误信息: {ErrorMessage}", task.Id, ex.Message);
+                _logger.LogError(ex, "录制任务发生严重异常 {TaskId}。频道: {ChannelName}, URL: {Url}, 错误堆栈: {StackTrace}", 
+                    task.Id, task.ChannelName, task.Url, ex.StackTrace);
                 var currentBitrate = session.GetCurrentBitrateKbps();
                 var failed = _taskStore.Update(started with
                 {
                     Status = RecordingStatus.Failed,
-                    ErrorMessage = ex.Message,
+                    ErrorMessage = $"{ex.Message} (Stack: {ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim()})",
                     FinishedAt = DateTimeOffset.UtcNow
                 });
                 await _notifier.NotifyTaskUpdateAsync(ToDto(failed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);

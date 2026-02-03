@@ -102,7 +102,7 @@ internal sealed class RtspStreamRecorder
         if (Regex.IsMatch(resp, "Location: (.*)"))
         {
             var newUrl = Regex.Match(resp, "Location: (.*)").Groups[1].Value.Trim();
-            Log.Information("RTSP重定向到新URL：{NewUrl}", newUrl);
+            Log.Information("RTSP重定向到新URL：{NewUrl} (原URL: {OldUrl})", newUrl, _url);
             _client.Close();
             _client = null;
             _seq = 2;
@@ -111,8 +111,9 @@ internal sealed class RtspStreamRecorder
 
         if (!resp.Contains("200 OK"))
         {
-            Log.Error("RTSP DESCRIBE失败：{Response}", resp);
-            throw new InvalidOperationException($"RTSP DESCRIBE失败：{resp}");
+            var statusLine = resp.Split("\r\n").FirstOrDefault() ?? "Unknown";
+            Log.Error("RTSP DESCRIBE失败。状态行: {StatusLine}, URL: {Url}, 完整响应: {Response}", statusLine, _url, resp);
+            throw new InvalidOperationException($"RTSP DESCRIBE失败 ({statusLine})，请检查URL或服务器状态");
         }
 
         var setup = RtspMessage.BuildSetup(_url, _seq++);
@@ -121,8 +122,9 @@ internal sealed class RtspStreamRecorder
 
         if (!setupResp.Contains("200 OK"))
         {
-            Log.Error("RTSP SETUP失败：{Response}", setupResp);
-            throw new InvalidOperationException($"RTSP SETUP失败：{setupResp}");
+            var statusLine = setupResp.Split("\r\n").FirstOrDefault() ?? "Unknown";
+            Log.Error("RTSP SETUP失败。状态行: {StatusLine}, URL: {Url}, 响应内容: {Response}", statusLine, _url, setupResp);
+            throw new InvalidOperationException($"RTSP SETUP失败 ({statusLine})，可能不支持 MP2T/TCP 传输模式");
         }
 
         var play = RtspMessage.BuildPlay(_url, _seq++);
@@ -131,8 +133,9 @@ internal sealed class RtspStreamRecorder
 
         if (!playResp.Contains("200 OK"))
         {
-            Log.Error("RTSP PLAY失败：{Response}", playResp);
-            throw new InvalidOperationException($"RTSP PLAY失败：{playResp}");
+            var statusLine = playResp.Split("\r\n").FirstOrDefault() ?? "Unknown";
+            Log.Error("RTSP PLAY失败。状态行: {StatusLine}, URL: {Url}, 响应内容: {Response}", statusLine, _url, playResp);
+            throw new InvalidOperationException($"RTSP PLAY失败 ({statusLine})，服务器拒绝播放请求");
         }
         _ = ReceiveHead(stream);
 
@@ -375,15 +378,22 @@ internal sealed class RtspStreamRecorder
 
     private void Connect()
     {
-        if (_client != null && _client.Connected)
+        try
         {
-            _client.Close();
+            var uri = new Uri(_url);
+            _client = new TcpClient();
+            // 设置连接超时
+            var connectTask = _client.ConnectAsync(uri.Host, uri.Port > 0 ? uri.Port : 554);
+            if (!connectTask.Wait(10000)) // 10秒超时
+            {
+                throw new TimeoutException($"连接到 RTSP 服务器 {uri.Host} 超时 (10s)");
+            }
         }
-
-        var uri = new Uri(_url);
-        var hostname = uri.Host;
-        var port = uri.Port == -1 ? 554 : uri.Port;
-        _client = new TcpClient(hostname, port);
+        catch (Exception ex)
+        {
+            Log.Error(ex, "连接 RTSP 服务器失败: {Url}", _url);
+            throw new InvalidOperationException($"无法连接到 RTSP 服务器: {ex.Message}", ex);
+        }
     }
 
     private static async Task SendAsync(Stream stream, string message, CancellationToken cancellationToken)
