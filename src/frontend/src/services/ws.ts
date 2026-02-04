@@ -1,6 +1,5 @@
-import { message } from 'antd'
+import { toast } from 'sonner'
 import type { RecordingTaskDto, SystemStatus, WebSocketMessage } from '../types'
-import { getMessageApi } from '../app/antdApp'
 
 type WebSocketHandlers = {
   onTaskUpdate: (task: RecordingTaskDto) => void
@@ -41,12 +40,7 @@ export const connectWebSocket = ({ onTaskUpdate, onSystemStatus }: WebSocketHand
       if (!cancelled) {
         reconnectAttempts += 1
         if (reconnectAttempts >= 10 && !notified) {
-          const api = getMessageApi()
-          if (api) {
-            api.error('连接服务端失败，请检查服务是否可用')
-          } else {
-            message.error('连接服务端失败，请检查服务是否可用')
-          }
+          toast.error('连接服务端失败，请检查服务是否可用')
           notified = true
         }
         window.setTimeout(connect, 2000)

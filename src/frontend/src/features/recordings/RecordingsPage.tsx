@@ -1,63 +1,58 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type React from 'react'
-import { Button, Card, Modal, Space, Spin, Table, Typography } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
-import { Resizable } from 'react-resizable'
-import type { ResizeCallbackData } from 'react-resizable'
+import { useCallback, useMemo, useState } from 'react'
+import { Info, Loader2, RefreshCw } from 'lucide-react'
+
 import { useAppContext } from '../../app/context'
-import type { RecordingFileInfo } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 
-type ResizableTitleProps = React.HTMLAttributes<HTMLTableCellElement> & {
-  onResize?: (event: React.SyntheticEvent, data: ResizeCallbackData) => void
-  width?: number
-}
-
-const ResizableTitle = ({ onResize, width, ...restProps }: ResizableTitleProps) => {
-  if (!width) {
-    return <th {...restProps} />
-  }
-  return (
-    <Resizable
-      width={width}
-      height={0}
-      handle={<span className="resizable-handle" onClick={(event) => event.stopPropagation()} />}
-      onResize={onResize}
-      draggableOpts={{ enableUserSelectHack: false }}
-    >
-      <th {...restProps} />
-    </Resizable>
-  )
-}
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 const RecordingsPage = () => {
   const { recordings, reloadRecordings, getRecordingMediaInfo, tasks } = useAppContext()
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({
-    fileName: 260,
-    fileSizeBytes: 140,
-    recordedAt: 200,
-    filePath: 360,
-    actions: 160,
-  })
-  const tableWrapRef = useRef<HTMLDivElement | null>(null)
-  const [tableWidth, setTableWidth] = useState(0)
 
   const onViewInfo = useCallback(
     async (filePath: string, fileName: string) => {
       setInfoLoading(true)
+      setInfoModal({ title: fileName, content: '' })
       try {
         const info = await getRecordingMediaInfo(filePath)
         setInfoModal({ title: fileName, content: info })
       } catch {
-        return
+        setInfoModal(null)
       } finally {
         setInfoLoading(false)
       }
     },
     [getRecordingMediaInfo],
   )
+
   const visibleRecordings = useMemo(() => {
     const normalizeName = (value: string) => value.split(/[/\\]/).pop() ?? value
     const isTsFile = (value: string) => value.toLowerCase().endsWith('.ts')
@@ -83,135 +78,97 @@ const RecordingsPage = () => {
     )
   }, [recordings, tasks])
 
-  const handleResize = useCallback(
-    (key: string) =>
-      (_: React.SyntheticEvent, { size }: ResizeCallbackData) => {
-        setColumnWidths((prev) => ({
-          ...prev,
-          [key]: Math.max(80, Math.round(size.width)),
-        }))
-      },
-    [],
-  )
-
-  const columns = useMemo<ColumnsType<RecordingFileInfo>>(
-    () => [
-      { title: '文件名', dataIndex: 'fileName', key: 'fileName', width: columnWidths.fileName, ellipsis: true },
-      {
-        title: '大小',
-        dataIndex: 'fileSizeBytes',
-        key: 'fileSizeBytes',
-        width: columnWidths.fileSizeBytes,
-        render: (value: number) => formatBytes(value),
-      },
-      {
-        title: '录制时间',
-        dataIndex: 'recordedAt',
-        key: 'recordedAt',
-        width: columnWidths.recordedAt,
-        render: (value: string) => formatDateTime(new Date(value)),
-      },
-      {
-        title: '路径',
-        dataIndex: 'filePath',
-        key: 'filePath',
-        width: columnWidths.filePath,
-        render: (value: string) => (
-          <Typography.Text type="secondary" ellipsis>
-            {value}
-          </Typography.Text>
-        ),
-      },
-      {
-        title: '操作',
-        dataIndex: 'filePath',
-        key: 'actions',
-        width: columnWidths.actions,
-        render: (_, record) => (
-          <Button size="small" onClick={() => onViewInfo(record.filePath, record.fileName)}>
-            查看信息
-          </Button>
-        ),
-      },
-    ],
-    [columnWidths, onViewInfo],
-  )
-
-  const resizableColumns = useMemo(
-    () =>
-      columns.map((col) => ({
-        ...col,
-        onHeaderCell: col.width
-          ? () => ({
-              width: col.width,
-              onResize: handleResize(col.key as string),
-            })
-          : undefined,
-      })),
-    [columns, handleResize],
-  )
-  const totalWidth = useMemo(
-    () => Object.values(columnWidths).reduce((sum, width) => sum + width, 0),
-    [columnWidths],
-  )
-  const shouldScroll = tableWidth > 0 && totalWidth > tableWidth
-
-  useEffect(() => {
-    const node = tableWrapRef.current
-    if (!node) {
-      return
-    }
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      if (entry) {
-        setTableWidth(entry.contentRect.width)
-      }
-    })
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Card size="small">
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-          <Button onClick={reloadRecordings}>刷新列表</Button>
-          <Typography.Text type="secondary">已录文件: {visibleRecordings.length}</Typography.Text>
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <Button onClick={reloadRecordings} variant="outline">
+            <RefreshCw className="mr-2 h-4 w-4" />
+            刷新列表
+        </Button>
+        <div className="text-sm text-muted-foreground bg-muted/50 px-3 py-1 rounded-md">
+            已录文件: <span className="font-mono font-medium text-foreground">{visibleRecordings.length}</span>
         </div>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+            <CardTitle className="text-lg font-medium">录制文件</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+            <div className="rounded-md border-t">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead className="min-w-[200px]">文件名</TableHead>
+                            <TableHead className="w-[120px]">大小</TableHead>
+                            <TableHead className="w-[180px]">录制时间</TableHead>
+                            <TableHead className="hidden md:table-cell">路径</TableHead>
+                            <TableHead className="w-[100px] text-right">操作</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {visibleRecordings.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={5} className="h-24 text-center">
+                                    暂无录制文件
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            visibleRecordings.map((record) => (
+                                <TableRow key={record.filePath}>
+                                    <TableCell className="font-medium truncate max-w-[200px]" title={record.fileName}>
+                                        {record.fileName}
+                                    </TableCell>
+                                    <TableCell className="text-sm text-muted-foreground">
+                                        {formatBytes(record.fileSizeBytes)}
+                                    </TableCell>
+                                    <TableCell className="text-sm">
+                                        {formatDateTime(new Date(record.recordedAt))}
+                                    </TableCell>
+                                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground truncate max-w-[300px]" title={record.filePath}>
+                                        {record.filePath}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button variant="ghost" size="sm" onClick={() => onViewInfo(record.filePath, record.fileName)}>
+                                                        <Info className="mr-2 h-4 w-4" />
+                                                        信息
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>查看媒体信息</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
+        </CardContent>
       </Card>
-      <Card title="录制文件">
-        <div ref={tableWrapRef}>
-          <Table
-            rowKey="filePath"
-            columns={resizableColumns}
-            dataSource={visibleRecordings}
-            pagination={false}
-            size="small"
-            scroll={shouldScroll ? { x: totalWidth } : undefined}
-            locale={{ emptyText: '暂无录制文件' }}
-            tableLayout="fixed"
-            components={{ header: { cell: ResizableTitle } }}
-          />
-        </div>
-      </Card>
-      <Modal
-        open={Boolean(infoModal) || infoLoading}
-        title={infoModal?.title ?? ''}
-        onCancel={() => {
-          setInfoModal(null)
-          setInfoLoading(false)
-        }}
-        footer={null}
-        width={720}
-      >
-        {infoLoading ? (
-          <div style={{ textAlign: 'center', padding: '40px 0' }}>
-            <Spin size="large" tip="正在加载媒体信息..." />
-          </div>
-        ) : (
-          <pre className="info-code">{infoModal?.content ?? ''}</pre>
-        )}
-      </Modal>
-    </Space>
+
+      <Dialog open={Boolean(infoModal)} onOpenChange={(open) => !open && setInfoModal(null)}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+            <DialogHeader>
+                <DialogTitle>{infoModal?.title}</DialogTitle>
+            </DialogHeader>
+            <div className="flex-1 overflow-auto bg-muted/50 p-4 rounded-md font-mono text-xs">
+                {infoLoading ? (
+                    <div className="flex items-center justify-center h-40">
+                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                ) : (
+                    <pre className="whitespace-pre-wrap">{infoModal?.content}</pre>
+                )}
+            </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }
 

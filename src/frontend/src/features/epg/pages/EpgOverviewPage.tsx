@@ -1,10 +1,17 @@
-import { Card, List, Space, Typography, Row, Col, Statistic, Tag, Progress, Empty } from 'antd'
-import { PlayCircleOutlined, EyeOutlined, ClockCircleOutlined, RightOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { PlayCircle, Eye, Clock, ChevronRight, Activity } from 'lucide-react'
+
 import { useEpgData } from '../hooks/useEpgData'
 import Loading from '../../shared/Loading'
 
-const { Title } = Typography
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
 
 export default function EpgOverviewPage() {
   const navigate = useNavigate()
@@ -14,50 +21,47 @@ export default function EpgOverviewPage() {
     return <Loading tip="正在加载节目单数据..." />
   }
 
-  // 辅助函数：获取频道当前正在播放的节目
   const getChannelCurrentProgram = (channelId: string) => {
     return currentPrograms.find(p => p.channelId === channelId)
   }
 
   return (
-    <div style={{ padding: '0 8px' }}>
-      <div style={{ marginBottom: 24 }}>
-        <Title level={3}>
-          <PlayCircleOutlined style={{ marginRight: 8 }} />
-          EPG 实时节目单
-        </Title>
+    <div className="space-y-6">
+      <div className="flex items-center gap-2">
+          <PlayCircle className="h-6 w-6 text-primary" />
+          <h3 className="text-2xl font-semibold tracking-tight">EPG 实时节目单</h3>
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col span={12}>
-          <Card size="small">
-            <Statistic
-              title="在线频道"
-              value={channels.length}
-              prefix={<EyeOutlined />}
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col span={12}>
-          <Card size="small">
-            <Statistic
-              title="正在播出"
-              value={currentPrograms.length}
-              prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              在线频道
+            </CardTitle>
+            <Eye className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{channels.length}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              正在播出
+            </CardTitle>
+            <Clock className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{currentPrograms.length}</div>
+          </CardContent>
+        </Card>
+      </div>
 
-      <div style={{ marginTop: 24 }}>
-        <Title level={4}>所有频道正在播放</Title>
+      <div className="space-y-4">
+        <h4 className="text-xl font-semibold tracking-tight">所有频道正在播放</h4>
         {channels.length > 0 ? (
-          <List
-            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 3, xl: 4, xxl: 4 }}
-            dataSource={channels}
-            renderItem={(channel) => {
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {channels.map((channel) => {
               const currentInfo = getChannelCurrentProgram(channel.id)
               const program = currentInfo?.program
               
@@ -69,91 +73,65 @@ export default function EpgOverviewPage() {
               }
 
               return (
-                <List.Item>
                   <Card
-                    hoverable
+                    key={channel.id}
+                    className={`h-full hover:shadow-lg transition-shadow cursor-pointer border-l-4 ${program ? 'border-l-primary bg-primary/5' : 'border-l-transparent'}`}
                     onClick={() => navigate(`/epg/channels/${channel.id}`)}
-                    styles={{ body: { padding: '12px' } }}
-                    style={{
-                      borderLeft: program ? '4px solid #1890ff' : '4px solid rgba(0,0,0,0.1)',
-                      height: '100%',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      background: program ? 'rgba(24, 144, 255, 0.02)' : 'transparent'
-                    }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 8 }}>
-                      {channel.iconUrl ? (
-                        <img
-                          alt={channel.name}
-                          src={channel.iconUrl}
-                          style={{ width: 40, height: 40, objectFit: 'contain', marginRight: 12, borderRadius: 4 }}
-                        />
-                      ) : (
-                        <div style={{ 
-                          width: 40, height: 40, 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          justifyContent: 'center',
-                          background: '#f0f2f5',
-                          marginRight: 12,
-                          borderRadius: 4,
-                          fontSize: 18,
-                          color: '#1890ff',
-                          fontWeight: 'bold'
-                        }}>
-                          {channel.name.charAt(0)}
+                    <CardContent className="p-4 flex flex-col h-full gap-3">
+                        <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                {channel.iconUrl ? (
+                                    <img
+                                        alt={channel.name}
+                                        src={channel.iconUrl}
+                                        className="w-10 h-10 object-contain rounded-md bg-white"
+                                    />
+                                ) : (
+                                    <div className="w-10 h-10 flex items-center justify-center bg-muted rounded-md text-primary font-bold text-lg">
+                                        {channel.name.charAt(0)}
+                                    </div>
+                                )}
+                                <div className="flex-1 overflow-hidden">
+                                    <div className="font-bold truncate text-base">{channel.name}</div>
+                                    <div className="flex gap-1 mt-1">
+                                        {channel.categories.slice(0, 1).map(cat => (
+                                            <Badge key={cat} variant="secondary" className="text-[10px] px-1 py-0">{cat}</Badge>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                            <ChevronRight className="h-5 w-5 text-muted-foreground" />
                         </div>
-                      )}
-                      <div style={{ flex: 1, overflow: 'hidden' }}>
-                        <div style={{ fontWeight: 'bold', fontSize: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {channel.name}
-                        </div>
-                        <Space size={4}>
-                          {channel.categories.slice(0, 1).map(cat => (
-                            <Tag key={cat} color="blue">{cat}</Tag>
-                          ))}
-                        </Space>
-                      </div>
-                      <RightOutlined style={{ color: '#bfbfbf', marginTop: 4 }} />
-                    </div>
 
-                    <div style={{ flex: 1 }}>
-                      {program ? (
-                        <div style={{ 
-                          background: 'rgba(82, 196, 26, 0.05)', 
-                          padding: '8px', 
-                          borderRadius: 4, 
-                          border: '1px solid rgba(82, 196, 26, 0.2)' 
-                        }}>
-                          <div style={{ color: '#52c41a', fontWeight: '500', marginBottom: 4 }}>
-                            正在播放：{program.title}
-                          </div>
-                          <div style={{ fontSize: '12px', opacity: 0.7, display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <span>{program.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                            <span>{program.endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-                          <Progress
-                            percent={progress}
-                            size="small"
-                            status="active"
-                            strokeColor="#1890ff"
-                            showInfo={false}
-                          />
+                        <div className="flex-1 flex flex-col justify-end">
+                            {program ? (
+                                <div className="bg-background/50 p-2 rounded border space-y-2">
+                                    <div className="text-primary font-medium text-sm truncate">
+                                        正在播放：{program.title}
+                                    </div>
+                                    <div className="flex justify-between text-xs text-muted-foreground font-mono">
+                                        <span>{program.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                        <span>{program.endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    </div>
+                                    <Progress value={progress} className="h-1.5" />
+                                </div>
+                            ) : (
+                                <div className="text-muted-foreground italic text-sm p-2">
+                                    暂无节目信息
+                                </div>
+                            )}
                         </div>
-                      ) : (
-                        <div style={{ color: '#bfbfbf', fontStyle: 'italic', padding: '8px' }}>
-                          暂无节目信息
-                        </div>
-                      )}
-                    </div>
+                    </CardContent>
                   </Card>
-                </List.Item>
               )
-            }}
-          />
+            })}
+          </div>
         ) : (
-          <Empty description="暂无频道数据" />
+          <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+            <Activity className="h-10 w-10 mb-2 opacity-20" />
+            <p>暂无频道数据</p>
+          </div>
         )}
       </div>
     </div>

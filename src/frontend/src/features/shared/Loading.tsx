@@ -1,6 +1,6 @@
 import React from 'react';
-import { Spin } from 'antd';
-import { LoadingOutlined } from '@ant-design/icons';
+import { Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface LoadingProps {
   tip?: string;
@@ -8,37 +8,19 @@ interface LoadingProps {
 }
 
 const Loading: React.FC<LoadingProps> = ({ tip = '加载中...', fullPage = false }) => {
-  const antIcon = <LoadingOutlined style={{ fontSize: 24 }} spin />;
-
   const content = (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '40px 0',
-      width: '100%',
-      height: fullPage ? '100vh' : '100%',
-      minHeight: fullPage ? 'auto' : '200px'
-    }}>
-      <Spin indicator={antIcon} tip={tip} />
+    <div className={cn(
+      "flex flex-col items-center justify-center p-10 w-full gap-3",
+      fullPage ? "h-screen" : "h-full min-h-[200px]"
+    )}>
+      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <span className="text-muted-foreground text-sm font-medium">{tip}</span>
     </div>
   );
 
   if (fullPage) {
     return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: 'rgba(255, 255, 255, 0.8)',
-        zIndex: 9999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}>
+      <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-[9999] flex items-center justify-center">
         {content}
       </div>
     );

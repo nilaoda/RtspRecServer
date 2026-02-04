@@ -1,17 +1,17 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Tag, Space, Typography, Timeline, Empty, Progress, Layout, Menu, Radio, theme } from 'antd'
-import { PlayCircleOutlined, ClockCircleOutlined, CalendarOutlined } from '@ant-design/icons'
+import { PlayCircle, Clock, Calendar as CalendarIcon } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEpgData } from '../hooks/useEpgData'
 import type { EpgProgram } from '../types/epg'
 import Loading from '../../shared/Loading'
 
-const { Title, Text } = Typography
-const { Sider, Content } = Layout
-const { useToken } = theme
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { cn } from "@/lib/utils"
 
 export default function EpgChannelPage() {
-  const { token } = useToken()
   const { channelId: urlChannelId } = useParams<{ channelId: string }>()
   const navigate = useNavigate()
   const { channels, getChannelPrograms, loading: globalLoading, now } = useEpgData()
@@ -25,7 +25,6 @@ export default function EpgChannelPage() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   })
 
-  // 辅助函数：格式化日期为本地 YYYY-MM-DD
   const formatDate = (date: Date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -35,7 +34,6 @@ export default function EpgChannelPage() {
 
   const currentProgramRef = useRef<HTMLDivElement>(null)
 
-  // 监听时间变化，实时更新当前节目 ID
   useEffect(() => {
     if (programs.length > 0) {
       const current = programs.find(p => p.startTime.getTime() <= now && p.endTime.getTime() > now)
@@ -45,7 +43,6 @@ export default function EpgChannelPage() {
     }
   }, [now, programs, currentProgramId])
 
-  // 只有当当前节目发生变化时才执行滚动
   useEffect(() => {
     if (currentProgramId && !loadingPrograms) {
       const timer = setTimeout(() => {
@@ -55,7 +52,6 @@ export default function EpgChannelPage() {
     }
   }, [currentProgramId, loadingPrograms])
 
-  // 同步 URL 参数到状态
   useEffect(() => {
     if (urlChannelId) {
       setSelectedChannelId(urlChannelId)
@@ -64,7 +60,6 @@ export default function EpgChannelPage() {
     }
   }, [urlChannelId, channels, selectedChannelId])
 
-  // 当选择的频道改变时获取节目单
   useEffect(() => {
     if (selectedChannelId) {
       const fetchPrograms = async () => {
@@ -78,12 +73,10 @@ export default function EpgChannelPage() {
       }
       fetchPrograms()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChannelId])
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId)
 
-  // 获取过去几天的日期列表
   const dateOptions = Array.from({ length: 4 }).map((_, i) => {
     const d = new Date()
     d.setDate(d.getDate() - i)
@@ -93,7 +86,6 @@ export default function EpgChannelPage() {
     }
   }).reverse()
 
-  // 过滤节目单
   const filteredPrograms = programs.filter(p => {
     const programDate = formatDate(p.startTime)
     return programDate === selectedDate
@@ -104,194 +96,156 @@ export default function EpgChannelPage() {
   }
 
   return (
-    <Layout className="epg-channel-layout" style={{ background: 'transparent', height: '100%', overflow: 'hidden' }}>
-      <Sider 
-        width={250} 
-        theme="light" 
-        style={{ 
-          borderRight: `1px solid ${token.colorBorderSecondary}`, 
-          height: '100%',
-          borderRadius: '8px 0 0 8px',
-          background: token.colorBgContainer,
-        }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ 
-            padding: '16px', 
-            borderBottom: `1px solid ${token.colorBorderSecondary}`, 
-            fontWeight: 'bold', 
-            background: token.colorBgContainer, 
-            zIndex: 1,
-            flexShrink: 0
-          }}>
-            <PlayCircleOutlined style={{ marginRight: 8 }} />
-            频道列表
-          </div>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            <Menu
-              mode="inline"
-              selectedKeys={selectedChannelId ? [selectedChannelId] : []}
-              onSelect={({ key }) => {
-                setSelectedChannelId(key)
-                navigate(`/epg/channels/${key}`)
-              }}
-              items={channels.map(c => ({
-                key: c.id,
-                label: (
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
-                    {c.iconUrl && <img src={c.iconUrl} alt="" style={{ width: 20, height: 20, marginRight: 8, objectFit: 'contain' }} />}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-                  </div>
-                )
-              }))}
-              style={{ borderRight: 'none' }}
-            />
-          </div>
+    <div className="flex h-full bg-background overflow-hidden border rounded-lg">
+      <aside className="w-64 border-r bg-muted/10 flex flex-col hidden md:flex">
+        <div className="p-4 border-b font-semibold flex items-center gap-2 bg-background/50">
+          <PlayCircle className="h-5 w-5" />
+          频道列表
         </div>
-      </Sider>
+        <ScrollArea className="flex-1">
+          <div className="p-2 space-y-1">
+            {channels.map(c => (
+                <button
+                    key={c.id}
+                    onClick={() => {
+                        setSelectedChannelId(c.id)
+                        navigate(`/epg/channels/${c.id}`)
+                    }}
+                    className={cn(
+                        "w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2 transition-colors",
+                        selectedChannelId === c.id ? "bg-secondary text-secondary-foreground font-medium" : "hover:bg-muted"
+                    )}
+                >
+                    {c.iconUrl ? (
+                        <img src={c.iconUrl} alt="" className="w-5 h-5 object-contain" />
+                    ) : (
+                        <div className="w-5 h-5 bg-muted rounded flex items-center justify-center text-[10px] font-bold">
+                            {c.name.charAt(0)}
+                        </div>
+                    )}
+                    <span className="truncate">{c.name}</span>
+                </button>
+            ))}
+          </div>
+        </ScrollArea>
+      </aside>
       
-      <Content style={{ padding: '0 24px', height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <main className="flex-1 flex flex-col min-w-0 h-full">
         {selectedChannel ? (
           <>
-            <div style={{ flexShrink: 0, paddingTop: 0, paddingBottom: 16 }}>
-              <Card style={{ borderRadius: '0 8px 8px 0' }} styles={{ body: { padding: '16px 24px' } }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <Space direction="vertical" size={0}>
-                    <Title level={3} style={{ margin: '0 0 8px 0' }}>
-                      {selectedChannel.name}
-                    </Title>
-                    <Space wrap>
+            <div className="p-6 border-b bg-background/50">
+                <div className="flex justify-between items-start">
+                  <div className="space-y-2">
+                    <h2 className="text-2xl font-bold">{selectedChannel.name}</h2>
+                    <div className="flex flex-wrap gap-2 items-center">
                       {selectedChannel.categories.map((category) => (
-                        <Tag key={category} color="blue">
+                        <Badge key={category} variant="secondary">
                           {category}
-                        </Tag>
+                        </Badge>
                       ))}
-                      <Text type="secondary" style={{ fontSize: '12px' }}>
+                      <span className="text-xs text-muted-foreground ml-2">
                         {selectedChannel.language} {selectedChannel.country && `· ${selectedChannel.country}`}
-                      </Text>
-                    </Space>
-                  </Space>
-                  <div style={{ textAlign: 'right' }}>
-                    <Text type="secondary">
-                      <CalendarOutlined style={{ marginRight: 4 }} />
-                      {new Date().toLocaleDateString()}
-                    </Text>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-sm text-muted-foreground flex items-center gap-1">
+                    <CalendarIcon className="h-4 w-4" />
+                    {new Date().toLocaleDateString()}
                   </div>
                 </div>
-              </Card>
             </div>
 
-            <Card 
-              loading={loadingPrograms} 
-              style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, marginBottom: 16 }}
-              styles={{ 
-                header: { position: 'sticky', top: 0, zIndex: 2, background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorderSecondary}` },
-                body: { padding: '24px', flex: 1, overflowY: 'auto' } 
-              }}
-              title={
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                  <Space>
-                    <ClockCircleOutlined />
-                    <span>节目单</span>
-                  </Space>
-                  <Space>
-                    <Radio.Group 
-                      size="small" 
-                      value={selectedDate} 
-                      onChange={e => setSelectedDate(e.target.value)}
-                      buttonStyle="solid"
-                    >
-                      {dateOptions.map(option => (
-                        <Radio.Button key={option.value} value={option.value}>
-                          {option.label}
-                        </Radio.Button>
-                      ))}
-                    </Radio.Group>
-                  </Space>
+            <div className="flex-1 flex flex-col min-h-0 bg-muted/5">
+                <div className="p-4 border-b bg-background flex justify-between items-center sticky top-0 z-10">
+                    <div className="flex items-center gap-2 font-medium">
+                        <Clock className="h-4 w-4 text-muted-foreground" />
+                        <span>节目单</span>
+                    </div>
+                    <ToggleGroup type="single" value={selectedDate} onValueChange={(val) => val && setSelectedDate(val)}>
+                        {dateOptions.map(option => (
+                            <ToggleGroupItem key={option.value} value={option.value} size="sm" className="text-xs px-2 h-7">
+                                {option.label}
+                            </ToggleGroupItem>
+                        ))}
+                    </ToggleGroup>
                 </div>
-              }
-            >
-              {filteredPrograms.length > 0 ? (
-                <Timeline
-                  mode="left"
-                  items={filteredPrograms.map((program) => {
-                    const isCurrent = program.startTime.getTime() <= now && program.endTime.getTime() > now
-                    const isPast = program.endTime.getTime() <= now
-                    
-                    let progress = 0
-                    if (isCurrent) {
-                      const total = program.endTime.getTime() - program.startTime.getTime()
-                      const elapsed = now - program.startTime.getTime()
-                      progress = Math.min(Math.max(Math.round((elapsed / total) * 100), 0), 100)
-                    }
 
-                    return {
-                      label: (
-                        <Text style={{ 
-                          fontSize: '14px', 
-                          fontWeight: isCurrent ? 'bold' : 'normal',
-                          color: isCurrent ? '#1890ff' : (isPast ? '#bfbfbf' : 'inherit')
-                        }}>
-                          {program.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </Text>
-                      ),
-                      color: isCurrent ? '#1890ff' : (isPast ? '#d9d9d9' : '#1890ff'),
-                      children: (
-                        <div 
-                          ref={isCurrent ? currentProgramRef : null}
-                          style={{
-                            padding: '12px 16px',
-                            borderRadius: '8px',
-                            background: isCurrent ? 'rgba(24, 144, 255, 0.05)' : 'transparent',
-                            border: isCurrent ? '1px solid rgba(24, 144, 255, 0.2)' : '1px solid transparent',
-                            transition: 'all 0.3s',
-                            marginBottom: '8px'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ 
-                              fontSize: '16px', 
-                              fontWeight: isCurrent ? 'bold' : 'normal',
-                              color: isPast ? '#bfbfbf' : 'inherit'
-                            }}>
-                              {program.title}
-                            </Text>
-                            {isCurrent && <Tag color="blue">正在播出</Tag>}
-                          </div>
-                          
-                          {isCurrent && (
-                            <div style={{ marginTop: 8 }}>
-                              <Progress 
-                                percent={progress} 
-                                size="small" 
-                                status="active" 
-                                strokeColor="#1890ff"
-                              />
-                              <Text type="secondary" style={{ fontSize: '12px' }}>
-                                剩余 {Math.round((program.endTime.getTime() - now) / 60000)} 分钟
-                              </Text>
-                            </div>
-                          )}
-                          
-                          {program.description && !isPast && (
-                            <div style={{ marginTop: 8, color: '#8c8c8c', fontSize: '13px' }}>
-                              {program.description}
-                            </div>
-                          )}
+                <div className="flex-1 overflow-y-auto p-4 relative">
+                    {loadingPrograms ? (
+                        <Loading tip="加载节目单..." />
+                    ) : filteredPrograms.length > 0 ? (
+                        <div className="space-y-4 relative ml-4 border-l pl-4 py-2">
+                            {filteredPrograms.map((program) => {
+                                const isCurrent = program.startTime.getTime() <= now && program.endTime.getTime() > now
+                                const isPast = program.endTime.getTime() <= now
+                                
+                                let progress = 0
+                                if (isCurrent) {
+                                    const total = program.endTime.getTime() - program.startTime.getTime()
+                                    const elapsed = now - program.startTime.getTime()
+                                    progress = Math.min(Math.max(Math.round((elapsed / total) * 100), 0), 100)
+                                }
+
+                                return (
+                                    <div 
+                                        key={program.id} 
+                                        ref={isCurrent ? currentProgramRef : null}
+                                        className="relative"
+                                    >
+                                        <div className={cn(
+                                            "absolute -left-[21px] top-3 w-2.5 h-2.5 rounded-full border-2 bg-background",
+                                            isCurrent ? "border-primary bg-primary animate-pulse" : isPast ? "border-muted-foreground/30 bg-muted" : "border-primary"
+                                        )} />
+                                        <div className="flex gap-4">
+                                            <div className={cn("w-14 text-xs font-mono pt-2 text-right", isCurrent ? "text-primary font-bold" : isPast ? "text-muted-foreground" : "")}>
+                                                {program.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                            <div className={cn(
+                                                "flex-1 p-3 rounded-lg border transition-colors",
+                                                isCurrent ? "bg-primary/5 border-primary/20 shadow-sm" : "bg-card border-transparent hover:border-border hover:bg-accent/5",
+                                                isPast && "opacity-60"
+                                            )}>
+                                                <div className="flex justify-between items-start gap-2">
+                                                    <div className={cn("font-medium text-sm", isCurrent && "text-primary")}>
+                                                        {program.title}
+                                                    </div>
+                                                    {isCurrent && <Badge className="text-[10px] px-1 py-0 h-5">正在播出</Badge>}
+                                                </div>
+                                                
+                                                {isCurrent && (
+                                                    <div className="mt-3 space-y-1">
+                                                        <Progress value={progress} className="h-1.5" />
+                                                        <div className="text-[10px] text-muted-foreground text-right">
+                                                            剩余 {Math.round((program.endTime.getTime() - now) / 60000)} 分钟
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                
+                                                {program.description && !isPast && (
+                                                    <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                                                        {program.description}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
+                            })}
                         </div>
-                      )
-                    }
-                  })}
-                />
-              ) : (
-                !loadingPrograms && <Empty description="该频道暂无节目单信息" />
-              )}
-            </Card>
+                    ) : (
+                        <div className="h-full flex items-center justify-center text-muted-foreground">
+                            该频道暂无节目单信息
+                        </div>
+                    )}
+                </div>
+            </div>
           </>
         ) : (
-          <Empty style={{ marginTop: 100 }} description="未找到频道信息" />
+          <div className="h-full flex items-center justify-center text-muted-foreground">
+            未找到频道信息
+          </div>
         )}
-      </Content>
-    </Layout>
+      </main>
+    </div>
   )
 }

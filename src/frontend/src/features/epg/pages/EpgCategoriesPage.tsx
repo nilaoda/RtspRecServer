@@ -1,9 +1,13 @@
-import { Card, List, Space, Typography } from 'antd'
-import { FolderOutlined } from '@ant-design/icons'
+import { Folder } from 'lucide-react'
 import { useEpgData } from '../hooks/useEpgData'
 import Loading from '../../shared/Loading'
 
-const { Title } = Typography
+import {
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card"
 
 export default function EpgCategoriesPage() {
   const { categories, loading } = useEpgData()
@@ -13,37 +17,27 @@ export default function EpgCategoriesPage() {
   }
 
   return (
-    <div style={{ padding: '0 8px' }}>
-      <Title level={2}>
-        <FolderOutlined style={{ marginRight: 8 }} />
+    <div className="space-y-6">
+      <h2 className="text-2xl font-semibold flex items-center gap-2">
+        <Folder className="h-6 w-6" />
         节目分类
-      </Title>
+      </h2>
       
-      <List
-        grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4, xl: 4, xxl: 4 }}
-        dataSource={categories}
-        renderItem={(category) => (
-          <List.Item>
-            <Card hoverable>
-              <Card.Meta
-                title={
-                  <Space>
-                    <FolderOutlined />
-                    <span style={{ fontSize: '16px', fontWeight: 'bold' }}>
-                      {category}
-                    </span>
-                  </Space>
-                }
-                description={
-                  <div style={{ fontSize: '14px', color: '#666' }}>
-                    点击查看该分类下的所有频道
-                  </div>
-                }
-              />
-            </Card>
-          </List.Item>
-        )}
-      />
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {categories.map((category) => (
+          <Card key={category} className="hover:shadow-lg transition-shadow cursor-pointer">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Folder className="h-4 w-4" />
+                <span>{category}</span>
+              </CardTitle>
+              <CardDescription>
+                点击查看该分类下的所有频道
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ))}
+      </div>
     </div>
   )
 }

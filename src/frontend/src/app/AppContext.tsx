@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { message } from 'antd'
+import { toast } from 'sonner'
 import type { AppConfig, ChannelConfig, RecordingFileInfo, RecordingTaskDto, SystemStatus, RecordingStatus } from '../types'
 import {
   addChannel,
@@ -18,8 +18,8 @@ import {
   updateConfig,
 } from '../services/api'
 import { connectWebSocket } from '../services/ws'
-import { getMessageApi } from './antdApp'
 import { AppContext, type AppContextValue } from './context'
+import { useTheme } from '@/components/theme-provider'
 
 type RecordingStatusKey = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped'
 
@@ -44,57 +44,24 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [now, setNow] = useState(new Date())
   const [debouncedTotalBitrateKbps, setDebouncedTotalBitrateKbps] = useState(0)
   const bitrateDebounceTimerRef = useRef<number | undefined>(undefined)
-  const [themeMode, setThemeMode] = useState<'dark' | 'light'>(() => {
-    const stored = window.localStorage.getItem('theme')
-    if (stored === 'light' || stored === 'dark') {
-      return stored
-    }
-    return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-  })
+  
+  const { theme, setTheme } = useTheme()
+  const themeMode = (theme === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme) as 'light' | 'dark'
+
+  const setThemeMode = (mode: 'light' | 'dark') => {
+      setTheme(mode)
+  }
+
   const serverOffsetMsRef = useRef(0)
   const notifySuccess = useCallback((text: string) => {
-    const api = getMessageApi()
-    if (api) {
-      api.success(text)
-      return
-    }
-    message.success(text)
+    toast.success(text)
   }, [])
 
   const notifyError = useCallback((text: string) => {
-    const api = getMessageApi()
-    if (api) {
-      api.error(text)
-      return
-    }
-    message.error(text)
+    toast.error(text)
   }, [])
 
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)')
-    const applyTheme = (matches: boolean) => {
-      setThemeMode(matches ? 'dark' : 'light')
-    }
-    applyTheme(media.matches)
-    const handler = (event: MediaQueryListEvent) => applyTheme(event.matches)
-    if (media.addEventListener) {
-      media.addEventListener('change', handler)
-    } else {
-      media.addListener(handler)
-    }
-    return () => {
-      if (media.removeEventListener) {
-        media.removeEventListener('change', handler)
-      } else {
-        media.removeListener(handler)
-      }
-    }
-  }, [notifyError])
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = themeMode
-    window.localStorage.setItem('theme', themeMode)
-  }, [themeMode])
+  // Theme effect handled by ThemeProvider
 
   const reloadTasks = useCallback(async () => {
     try {

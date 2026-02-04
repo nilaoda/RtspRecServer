@@ -1,3 +1,11 @@
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog"
+
 const Modal = ({
   open,
   title,
@@ -13,23 +21,22 @@ const Modal = ({
   wide?: boolean
   footer?: React.ReactNode
 }) => {
-  if (!open) {
-    return null
-  }
   return (
-    <>
-      <div className="modal-backdrop" onClick={onClose} />
-      <div className={`modal-panel${wide ? ' modal-wide' : ''}`}>
-        <div className="modal-header">
-          <div className="modal-title">{title}</div>
-          <button type="button" className="btn btn-outline-secondary btn-sm" onClick={onClose}>
-            关闭
-          </button>
+    <Dialog open={open} onOpenChange={(val) => !val && onClose()}>
+      <DialogContent className={wide ? "max-w-4xl" : "max-w-lg"}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="py-4">
+            {children}
         </div>
-        <div className="modal-body">{children}</div>
-        {footer ? <div className="modal-footer">{footer}</div> : null}
-      </div>
-    </>
+        {footer && (
+            <DialogFooter>
+                {footer}
+            </DialogFooter>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

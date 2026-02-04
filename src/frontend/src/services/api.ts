@@ -1,4 +1,4 @@
-import { message } from 'antd'
+import { toast } from 'sonner'
 import type {
   ChannelConfig,
   RecordingFileInfo,
@@ -10,7 +10,6 @@ import type {
   BackendEpgProgram,
   BackendCurrentProgramInfo
 } from '../features/epg/types/epg'
-import { getMessageApi } from '../app/antdApp'
 
 type FetchOptions = RequestInit & { silent?: boolean }
 
@@ -25,12 +24,7 @@ const notifyError = (text: string, options?: FetchOptions) => {
     return
   }
   lastToastAt = now
-  const api = getMessageApi()
-  if (api) {
-    api.error(text)
-    return
-  }
-  message.error(text)
+  toast.error(text)
 }
 
 const readErrorMessage = async (response: Response) => {
