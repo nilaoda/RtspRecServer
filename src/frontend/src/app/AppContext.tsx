@@ -42,6 +42,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
   const [now, setNow] = useState(new Date())
+  const [wsConnectionStatus, setWsConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'disconnected'>('connecting')
+  const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine)
+  const [lastApiSuccessAt, setLastApiSuccessAt] = useState<number | null>(null)
   const [debouncedTotalBitrateKbps, setDebouncedTotalBitrateKbps] = useState(0)
   const bitrateDebounceTimerRef = useRef<number | undefined>(undefined)
   
@@ -129,6 +132,40 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   }, [])
 
   useEffect(() => {
+    const onOnline = () => setBrowserOnline(true)
+    const onOffline = () => setBrowserOnline(false)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const ping = async () => {
+      try {
+        const status = await getSystemStatus()
+        if (cancelled) return
+        setLastApiSuccessAt(Date.now())
+        serverOffsetMsRef.current = new Date(status.systemTime).getTime() - Date.now()
+        setSystemStatus(status)
+      } catch {
+        return
+      }
+    }
+
+    ping()
+    const timer = window.setInterval(ping, 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
     const disconnect = connectWebSocket({
       onTaskUpdate: (task) => {
         setTasks((prev) => {
@@ -145,6 +182,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         serverOffsetMsRef.current = new Date(status.systemTime).getTime() - Date.now()
         setSystemStatus(status)
       },
+      onConnectionStatus: setWsConnectionStatus,
     })
     return () => disconnect()
   }, [])
@@ -285,6 +323,15 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       systemStatus,
       appConfig,
       now,
+      connectionStatus: (() => {
+        if (!browserOnline) return 'disconnected'
+        if (wsConnectionStatus === 'connected') return 'connected'
+        const apiRecentlyOk = lastApiSuccessAt !== null && Date.now() - lastApiSuccessAt < 30000
+        if (apiRecentlyOk) {
+          return wsConnectionStatus === 'connecting' ? 'connecting' : 'reconnecting'
+        }
+        return wsConnectionStatus === 'connecting' ? 'connecting' : 'disconnected'
+      })(),
       themeMode,
       setThemeMode,
       reloadTasks,
@@ -309,6 +356,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       systemStatus,
       appConfig,
       now,
+      wsConnectionStatus,
+      browserOnline,
+      lastApiSuccessAt,
       themeMode,
       reloadTasks,
       reloadChannels,

@@ -17,6 +17,7 @@ import AppRoutes from '../routes.tsx'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { ModeToggle } from '@/components/mode-toggle'
+import { ServerConnectionIndicator } from '@/components/server-connection-indicator'
 import {
   Sheet,
   SheetContent,
@@ -130,6 +131,7 @@ const LayoutShell = () => {
              </h1>
            </div>
            <div className="flex items-center gap-4">
+             <ServerConnectionIndicator />
              <ModeToggle />
            </div>
         </header>

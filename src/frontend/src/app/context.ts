@@ -14,6 +14,7 @@ export type AppContextValue = {
   systemStatus: SystemStatus | null
   appConfig: AppConfig | null
   now: Date
+  connectionStatus: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
   themeMode: 'dark' | 'light'
   setThemeMode: (mode: 'dark' | 'light') => void
   reloadTasks: () => Promise<void>
