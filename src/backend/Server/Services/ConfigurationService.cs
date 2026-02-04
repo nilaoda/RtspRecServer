@@ -53,7 +53,14 @@ public sealed class ConfigurationService
                 ? JsonSerializer.Deserialize(File.ReadAllText(_appConfigPath), RtspJsonContext.Default.AppConfig) ?? new AppConfig()
                 : new AppConfig();
 
-            var updated = current with { MaxRecordingTasks = request.MaxRecordingTasks };
+            var transport = string.IsNullOrWhiteSpace(request.RecordingTransport)
+                ? current.RecordingTransport
+                : request.RecordingTransport;
+            var updated = current with
+            {
+                MaxRecordingTasks = request.MaxRecordingTasks,
+                RecordingTransport = transport
+            };
             WriteJson(_appConfigPath, updated);
             return updated;
         }

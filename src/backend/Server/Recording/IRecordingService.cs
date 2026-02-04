@@ -8,6 +8,7 @@ public interface IRecordingService
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
+        string recordingTransport,
         Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken);
 }

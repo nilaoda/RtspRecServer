@@ -2,6 +2,7 @@ export type PageKey = 'tasks' | 'channels' | 'recordings' | 'settings'
 
 export type AppConfig = {
   maxRecordingTasks: number
+  recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'
 }
 
 export type RecordingStatus = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped' | 0 | 1 | 2 | 3 | 4

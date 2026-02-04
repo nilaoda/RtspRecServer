@@ -24,9 +24,17 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 const settingsSchema = z.object({
   maxRecordingTasks: z.coerce.number().min(1, "最大并发必须大于 0").int("必须是整数"),
+  recordingTransport: z.enum(["MP2T/TCP", "MP2T/RTP/TCP"]),
 })
 
 type SettingsFormValues = z.infer<typeof settingsSchema>
@@ -34,20 +42,23 @@ type SettingsFormValues = z.infer<typeof settingsSchema>
 const SettingsPage = () => {
   const { appConfig, updateConfig } = useAppContext()
   const initialValue = appConfig?.maxRecordingTasks ?? 1
+  const initialTransport = appConfig?.recordingTransport ?? "MP2T/TCP"
 
   const form = useForm<SettingsFormValues>({
     resolver: zodResolver(settingsSchema) as any,
     defaultValues: {
       maxRecordingTasks: initialValue,
+      recordingTransport: initialTransport,
     },
     values: { // Update form when initialValue changes
-        maxRecordingTasks: initialValue
+        maxRecordingTasks: initialValue,
+        recordingTransport: initialTransport,
     }
   })
 
   const onSave = async (values: SettingsFormValues) => {
     try {
-        await updateConfig({ maxRecordingTasks: values.maxRecordingTasks })
+        await updateConfig({ maxRecordingTasks: values.maxRecordingTasks, recordingTransport: values.recordingTransport })
         toast.success("配置已保存")
     } catch (e) {
         // Handled in context
@@ -78,6 +89,30 @@ const SettingsPage = () => {
                       </FormControl>
                       <FormDescription>
                         限制同时进行的录制任务数量。
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="recordingTransport"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>封装方式</FormLabel>
+                      <Select onValueChange={field.onChange} value={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择封装方式" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="MP2T/TCP">MP2T/TCP</SelectItem>
+                          <SelectItem value="MP2T/RTP/TCP">MP2T/RTP/TCP</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        默认使用 MP2T/TCP。若需RTP重传等扩展能力选择 MP2T/RTP/TCP。
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

@@ -266,10 +266,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifySuccess, reloadChannels],
   )
 
-  const updateConfigAction = useCallback(async (payload: { maxRecordingTasks: number }) => {
+  const updateConfigAction = useCallback(async (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport'] }) => {
     try {
       const data = await updateConfig(payload)
       setAppConfig(data)
+      notifySuccess('保存成功')
       notifySuccess('保存成功')
     } catch {
       return

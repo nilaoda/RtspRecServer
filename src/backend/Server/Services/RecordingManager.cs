@@ -57,9 +57,7 @@ public sealed class RecordingManager
         var existingTasks = _taskStore.GetAll()
             .Where(t => t.ChannelId == request.ChannelId && 
                        t.StartTime == request.StartTime && 
-                       t.EndTime == request.EndTime && 
-                       t.Status != RecordingStatus.Failed && 
-                       t.Status != RecordingStatus.Completed)
+                       t.EndTime == request.EndTime)
             .ToList();
 
         if (existingTasks.Any())
@@ -196,7 +194,7 @@ public sealed class RecordingManager
                 
                 var runtimeTask = started with { Url = finalUrl };
 
-                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, (progress) =>
+                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, config.RecordingTransport, (progress) =>
                 {
                     session.BytesWritten = progress.BytesWritten;
                     session.UpdateBitrate(progress.BytesWritten); // 更新实时码率

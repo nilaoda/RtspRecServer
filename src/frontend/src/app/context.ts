@@ -32,7 +32,7 @@ export type AppContextValue = {
   addChannel: (payload: { name: string; url: string }) => Promise<void>
   updateChannel: (payload: ChannelConfig) => Promise<void>
   deleteChannel: (id: number) => Promise<void>
-  updateConfig: (payload: { maxRecordingTasks: number }) => Promise<void>
+  updateConfig: (payload: { maxRecordingTasks: number; recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP' }) => Promise<void>
   getTaskMediaInfo: (id: number) => Promise<string>
   getRecordingMediaInfo: (filePath: string) => Promise<string>
   totalBitrateKbps: number // 实时总码率

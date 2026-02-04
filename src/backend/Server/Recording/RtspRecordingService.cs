@@ -25,10 +25,11 @@ public sealed class RtspRecordingService : IRecordingService
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
+        string recordingTransport,
         Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken)
     {
-        var recorder = new RtspStreamRecorder(task.Url, outputPath);
+        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport);
         try
         {
             var result = await recorder.RunAsync(targetDuration, onProgress, cancellationToken);
@@ -61,14 +62,18 @@ internal sealed class RtspStreamRecorder
 {
     private readonly string _url;
     private readonly string _outputPath;
+    private readonly string _recordingTransport;
+    private readonly bool _useRtp;
     private TcpClient? _client;
     private int _seq = 2;
     public long BytesWritten { get; private set; }
 
-    public RtspStreamRecorder(string url, string outputPath)
+    public RtspStreamRecorder(string url, string outputPath, string recordingTransport)
     {
         _url = url;
         _outputPath = outputPath;
+        _recordingTransport = recordingTransport;
+        _useRtp = string.Equals(_recordingTransport, "MP2T/RTP/TCP", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<RecordingResult> RunAsync(TimeSpan? targetDuration, Action<RecordingProgress> onProgress, CancellationToken cancellationToken)
@@ -106,7 +111,7 @@ internal sealed class RtspStreamRecorder
             _client.Close();
             _client = null;
             _seq = 2;
-            return await new RtspStreamRecorder(newUrl, _outputPath).RunAsync(targetDuration, onProgress, cancellationToken);
+            return await new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport).RunAsync(targetDuration, onProgress, cancellationToken);
         }
 
         if (!resp.Contains("200 OK"))
@@ -116,7 +121,7 @@ internal sealed class RtspStreamRecorder
             throw new InvalidOperationException($"RTSP DESCRIBE失败 ({statusLine})，请检查URL或服务器状态");
         }
 
-        var setup = RtspMessage.BuildSetup(_url, _seq++);
+        var setup = RtspMessage.BuildSetup(_url, _seq++, _recordingTransport);
         await SendAsync(stream, setup, cancellationToken);
         var setupResp = ReceiveHead(stream);
 
@@ -124,7 +129,7 @@ internal sealed class RtspStreamRecorder
         {
             var statusLine = setupResp.Split("\r\n").FirstOrDefault() ?? "Unknown";
             Log.Error("RTSP SETUP失败。状态行: {StatusLine}, URL: {Url}, 响应内容: {Response}", statusLine, _url, setupResp);
-            throw new InvalidOperationException($"RTSP SETUP失败 ({statusLine})，可能不支持 MP2T/TCP 传输模式");
+            throw new InvalidOperationException($"RTSP SETUP失败 ({statusLine})，可能不支持 {_recordingTransport} 传输模式");
         }
 
         var play = RtspMessage.BuildPlay(_url, _seq++);
@@ -178,27 +183,40 @@ internal sealed class RtspStreamRecorder
 
                 if (header[1] == 0)
                 {
-                    // 批量写入优化
-                    if (batchOffset + length > BatchSize)
+                    packetCount++;
+                    var payloadMemory = payload.AsMemory(0, length);
+                    if (!TryResolvePayloadSegment(payloadMemory.Span, _useRtp, ref firstPcrTicks, ref lastPcrTicks, targetTicks, packetCount, out var dataOffset, out var dataLength, out var shouldStop))
                     {
-                        await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
-                        batchOffset = 0;
+                        continue;
+                    }
+
+                    if (dataLength > BatchSize)
+                    {
+                        if (batchOffset > 0)
+                        {
+                            await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                            batchOffset = 0;
+                        }
+                        await buffered.WriteAsync(payloadMemory.Slice(dataOffset, dataLength), cancellationToken);
+                        BytesWritten += dataLength;
+                    }
+                    else
+                    {
+                        if (batchOffset + dataLength > BatchSize)
+                        {
+                            await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                            batchOffset = 0;
+                        }
+
+                        payloadMemory.Span.Slice(dataOffset, dataLength).CopyTo(batchBuffer.AsSpan(batchOffset));
+                        batchOffset += dataLength;
+                        BytesWritten += dataLength;
                     }
                     
-                    payload.AsSpan(0, length).CopyTo(batchBuffer.AsSpan(batchOffset));
-                    batchOffset += length;
-                    BytesWritten += length;
-                    packetCount++;
-                    
-                    // PCR检查优化：只在需要时检查，且减少频率
-                    if (targetTicks > 0 && (packetCount % 10 == 0)) // 每10个包检查一次
+                    if (shouldStop)
                     {
-                        if (TryUpdatePcrTicks(payload.AsSpan(0, length), ref firstPcrTicks, ref lastPcrTicks, out var elapsedTicks) &&
-                            elapsedTicks >= targetTicks)
-                        {
-                            stoppedByPcr = true;
-                            break; // 达到PCR限制，立即跳出循环
-                        }
+                        stoppedByPcr = true;
+                        break;
                     }
                     
                     // 每秒进度上报：检查是否需要上报进度
@@ -356,6 +374,82 @@ internal sealed class RtspStreamRecorder
         return CalculateElapsedTicks(firstTicks, lastTicks) / 27_000_000D;
     }
 
+    private static bool TryResolvePayloadSegment(
+        ReadOnlySpan<byte> payload,
+        bool useRtp,
+        ref long? firstPcrTicks,
+        ref long? lastPcrTicks,
+        long targetTicks,
+        int packetCount,
+        out int dataOffset,
+        out int dataLength,
+        out bool shouldStop)
+    {
+        dataOffset = 0;
+        dataLength = payload.Length;
+        shouldStop = false;
+
+        if (useRtp && payload.Length > 0 && payload[0] != 0x47)
+        {
+            if (!TryGetRtpHeaderLength(payload, out var rtpHeaderLength) || rtpHeaderLength >= payload.Length)
+            {
+                return false;
+            }
+            dataOffset = rtpHeaderLength;
+            dataLength = payload.Length - rtpHeaderLength;
+        }
+
+        if (dataLength <= 0)
+        {
+            return false;
+        }
+
+        if (targetTicks > 0 && (packetCount % 10 == 0))
+        {
+            if (TryUpdatePcrTicks(payload.Slice(dataOffset, dataLength), ref firstPcrTicks, ref lastPcrTicks, out var elapsedTicks) &&
+                elapsedTicks >= targetTicks)
+            {
+                shouldStop = true;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryGetRtpHeaderLength(ReadOnlySpan<byte> payload, out int headerLength)
+    {
+        headerLength = 0;
+        if (payload.Length < 12)
+        {
+            return false;
+        }
+
+        var csrcCount = payload[0] & 0x0F;
+        headerLength = 12 + csrcCount * 4;
+        if (payload.Length < headerLength)
+        {
+            return false;
+        }
+
+        if ((payload[0] & 0x10) != 0)
+        {
+            if (payload.Length < headerLength + 4)
+            {
+                return false;
+            }
+
+            var extLength = (payload[headerLength + 2] << 8) | payload[headerLength + 3];
+            headerLength += 4 + extLength * 4;
+            if (payload.Length < headerLength)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+
     public void Close()
     {
         if (_client != null && _client.Connected)
@@ -481,10 +575,13 @@ internal static class RtspMessage
                "Accept: application/sdp\r\n\r\n";
     }
 
-    public static string BuildSetup(string url, int seq)
+    public static string BuildSetup(string url, int seq, string recordingTransport)
     {
+        var transport = string.Equals(recordingTransport, "MP2T/RTP/TCP", StringComparison.OrdinalIgnoreCase)
+            ? "MP2T/RTP/TCP;unicast;interleaved=0-1"
+            : "MP2T/TCP;unicast;interleaved=0-1";
         return $"SETUP {url} RTSP/1.0\r\n" +
-               "Transport: MP2T/TCP;unicast;interleaved=0-1\r\n" +
+               $"Transport: {transport}\r\n" +
                $"CSeq: {seq}\r\n" +
                $"User-Agent: {UserAgent}\r\n\r\n";
     }

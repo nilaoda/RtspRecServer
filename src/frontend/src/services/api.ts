@@ -1,5 +1,6 @@
 import { toast } from 'sonner'
 import type {
+  AppConfig,
   ChannelConfig,
   RecordingFileInfo,
   RecordingTaskDto,
@@ -134,10 +135,10 @@ export const getRecordingMediaInfo = (filePath: string) =>
     (data) => data?.content ?? '',
   )
 
-export const getConfig = () => fetchJson<{ maxRecordingTasks: number }>('/api/config', { silent: true })
+export const getConfig = () => fetchJson<AppConfig>('/api/config', { silent: true })
 
-export const updateConfig = (payload: { maxRecordingTasks: number }) =>
-  fetchJson<{ maxRecordingTasks: number }>('/api/config', {
+export const updateConfig = (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport'] }) =>
+  fetchJson<AppConfig>('/api/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
