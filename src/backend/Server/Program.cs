@@ -364,7 +364,8 @@ static RecordingTaskDto ToDto(RecordingTask task)
         FilePath = task.FilePath,
         ErrorMessage = task.ErrorMessage,
         StartedAt = task.StartedAt,
-        FinishedAt = task.FinishedAt
+        FinishedAt = task.FinishedAt,
+        DisplayName = task.DisplayName
     };
 }
 
