@@ -224,6 +224,23 @@ public sealed class RecordingManager
                         ? RecordingStatus.Completed
                         : RecordingStatus.Failed;
 
+                // 增加 PCR 时长校验逻辑：如果录制状态不是手动停止或已失败，则检查 PCR 时长
+                var finalErrorMessage = result.ErrorMessage;
+                if (finalStatus == RecordingStatus.Completed)
+                {
+                    var plannedDurationSeconds = (task.EndTime - task.StartTime).TotalSeconds;
+                    var actualPcrSeconds = result.PcrElapsedSeconds ?? 0;
+
+                    // 如果实际录制的 PCR 时长比预估时长少超过 60 秒（1 分钟），则标记为失败
+                    if (plannedDurationSeconds > 60 && actualPcrSeconds < (plannedDurationSeconds - 60))
+                    {
+                        finalStatus = RecordingStatus.Failed;
+                        finalErrorMessage = $"录制时长不足：预估 {plannedDurationSeconds:F1}s，实际 PCR {actualPcrSeconds:F1}s (差距 > 60s)";
+                        _logger.LogWarning("任务 {TaskId} 录制时长不足，判定为失败。预估: {Planned}s, 实际: {Actual}s", 
+                            task.Id, plannedDurationSeconds, actualPcrSeconds);
+                    }
+                }
+
                 var fileBytes = 0L;
                 if (File.Exists(outputPath))
                 {
@@ -237,7 +254,7 @@ public sealed class RecordingManager
                 if (finalStatus == RecordingStatus.Failed)
                 {
                     _logger.LogError("录制任务 {TaskId} 失败。频道: {ChannelName}, URL: {Url}, 输出路径: {OutputPath}, 具体原因: {ErrorMessage}", 
-                        task.Id, task.ChannelName, runtimeTask.Url, outputPath, result.ErrorMessage ?? "未知错误");
+                        task.Id, task.ChannelName, finalUrl, outputPath, finalErrorMessage ?? "未知错误");
                 }
 
                 var currentBitrate = session.GetCurrentBitrateKbps();
@@ -245,7 +262,7 @@ public sealed class RecordingManager
                 {
                     Status = finalStatus,
                     BytesWritten = finalBytesWritten,
-                    ErrorMessage = result.ErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
+                    ErrorMessage = finalErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
                     FinishedAt = DateTimeOffset.UtcNow
                 });
 

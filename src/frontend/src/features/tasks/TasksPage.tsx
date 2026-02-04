@@ -14,6 +14,7 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -217,11 +218,21 @@ const TasksPage = () => {
         width: columnWidths.status,
         render: (value: RecordingStatus, record) => {
           const normalizedStatus = normalizeStatus(value)
-          return (
-            <Tag color={statusColor[normalizedStatus]} title={record.errorMessage ?? ''}>
+          const tag = (
+            <Tag color={statusColor[normalizedStatus]}>
               {statusLabel[normalizedStatus]}
             </Tag>
           )
+
+          if (normalizedStatus === 'Failed' && record.errorMessage) {
+            return (
+              <Tooltip title={record.errorMessage}>
+                {tag}
+              </Tooltip>
+            )
+          }
+
+          return tag
         },
       },
       {
@@ -411,7 +422,7 @@ const TasksPage = () => {
                   title="确认取消任务？"
                   okText="取消任务"
                   cancelText="继续等待"
-                  onConfirm={() => onStopTask(task.id)}
+                  onConfirm={() => onDeleteTask(task.id)}
                 >
                   <Button danger size="small" onClick={(event) => event.stopPropagation()}>
                     取消任务
