@@ -1,7 +1,6 @@
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { toast } from 'sonner'
 import { Lightbulb } from 'lucide-react'
 
 import { useAppContext } from '../../app/context'
@@ -59,7 +58,6 @@ const SettingsPage = () => {
   const onSave = async (values: SettingsFormValues) => {
     try {
         await updateConfig({ maxRecordingTasks: values.maxRecordingTasks, recordingTransport: values.recordingTransport })
-        toast.success("配置已保存")
     } catch (e) {
         // Handled in context
     }

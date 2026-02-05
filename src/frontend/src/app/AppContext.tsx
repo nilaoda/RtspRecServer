@@ -271,7 +271,6 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       const data = await updateConfig(payload)
       setAppConfig(data)
       notifySuccess('保存成功')
-      notifySuccess('保存成功')
     } catch {
       return
     }
