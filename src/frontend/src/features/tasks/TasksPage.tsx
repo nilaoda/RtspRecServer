@@ -336,10 +336,12 @@ const TasksPage = () => {
                                         </Badge>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="font-medium truncate max-w-[150px]">{task.displayName || '--'}</div>
+                                        <div className="font-medium truncate max-w-full" title={task.displayName || '--'}>
+                                            {task.displayName || '--'}
+                                        </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="truncate max-w-[150px] text-sm text-muted-foreground">
+                                        <div className="truncate max-w-full text-sm text-muted-foreground" title={`${task.channelId} - ${task.channelName}`}>
                                             {task.channelId} - {task.channelName}
                                         </div>
                                     </TableCell>
