@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown } from 'lucide-react'
+import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -146,6 +146,7 @@ const TasksPage = () => {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [stopConfirmOpen, setStopConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
+  const [retryConfirmOpen, setRetryConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskSchema),
@@ -319,6 +320,7 @@ const TasksPage = () => {
                             }
 
                             const showInfoActions = ['Completed', 'Failed', 'Stopped'].includes(normalizedStatus)
+                            const canRetry = normalizedStatus === 'Failed' || normalizedStatus === 'Stopped'
 
                             return (
                                 <TableRow key={task.id}>
@@ -411,6 +413,21 @@ const TasksPage = () => {
                                             )}
                                             {showInfoActions && (
                                                 <>
+                                                    {canRetry && (
+                                                        <TooltipProvider>
+                                                            <Tooltip>
+                                                                <TooltipTrigger asChild>
+                                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setRetryConfirmOpen({ isOpen: true, taskId: task.id })}>
+                                                                        <RefreshCw className="h-4 w-4" />
+                                                                        <span className="sr-only">Retry</span>
+                                                                    </Button>
+                                                                </TooltipTrigger>
+                                                                <TooltipContent>
+                                                                    <p>重试任务</p>
+                                                                </TooltipContent>
+                                                            </Tooltip>
+                                                        </TooltipProvider>
+                                                    )}
                                                     <TooltipProvider>
                                                         <Tooltip>
                                                             <TooltipTrigger asChild>
@@ -537,6 +554,40 @@ const TasksPage = () => {
                     className="bg-destructive hover:bg-destructive/90"
                 >
                     取消任务
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={retryConfirmOpen.isOpen} onOpenChange={(open) => !open && setRetryConfirmOpen({ isOpen: false, taskId: null })}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>确认重试任务？</AlertDialogTitle>
+                <AlertDialogDescription>
+                    此操作将删除当前任务记录，并以相同参数创建新任务。
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction
+                    onClick={async () => {
+                        if (retryConfirmOpen.taskId) {
+                            const targetTask = tasks.find((task) => task.id === retryConfirmOpen.taskId)
+                            if (targetTask) {
+                                await deleteTask(targetTask.id)
+                                await createTask({
+                                    channelId: targetTask.channelId,
+                                    startTime: new Date(targetTask.startTime).toISOString(),
+                                    endTime: new Date(targetTask.endTime).toISOString(),
+                                    taskName: targetTask.displayName?.trim() || null,
+                                })
+                            }
+                        }
+                        setRetryConfirmOpen({ isOpen: false, taskId: null })
+                    }}
+                    className="bg-destructive hover:bg-destructive/90"
+                >
+                    继续重试
                 </AlertDialogAction>
             </AlertDialogFooter>
         </AlertDialogContent>
