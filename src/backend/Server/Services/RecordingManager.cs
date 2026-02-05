@@ -67,7 +67,7 @@ public sealed class RecordingManager
             throw new InvalidOperationException("已存在相同参数的录制任务");
         }
 
-        var suffix = $"{channel.Name}_{request.StartTime:yyyyMMddHHmmss}_{request.EndTime:yyyyMMddHHmmss}";
+        var suffix = $"{channel.Name}_{request.StartTime.ToLocalTime():yyyyMMddHHmmss}_{request.EndTime.ToLocalTime():yyyyMMddHHmmss}";
         var baseName = string.IsNullOrWhiteSpace(request.TaskName)
             ? "Playback"
             : request.TaskName.Trim();
@@ -334,12 +334,6 @@ public sealed class RecordingManager
     private static string BuildRecordingUrl(RecordingTask task)
     {
         var url = task.Url;
-        var now = DateTimeOffset.UtcNow;
-        if (task.StartTime >= now)
-        {
-            return url;
-        }
-
         if (url.Contains("playseek=", StringComparison.OrdinalIgnoreCase))
         {
             return url;

@@ -60,7 +60,10 @@ public sealed class RecordingBackgroundService : BackgroundService
                         break;
                     }
 
-                    if (now < task.StartTime)
+                    // 近实时任务需要等待回放片段生成：开始时间在创建时刻前后 1 分钟内视为近实时
+                    var needsTimeshiftDelay = task.StartTime >= task.CreatedAt.AddMinutes(-1);
+                    // 对近实时任务，统一等待到开始时间 + 1 分钟再启动
+                    if (needsTimeshiftDelay && now < task.StartTime.AddMinutes(1))
                     {
                         continue;
                     }
