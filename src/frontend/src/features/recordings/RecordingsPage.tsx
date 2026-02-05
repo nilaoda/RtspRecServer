@@ -157,13 +157,13 @@ const RecordingsPage = () => {
             <DialogHeader>
                 <DialogTitle>{infoModal?.title}</DialogTitle>
             </DialogHeader>
-            <div className="flex-1 overflow-auto bg-muted/50 p-4 rounded-md font-mono text-xs">
+            <div className="flex-1 overflow-auto overflow-x-auto bg-muted/50 p-4 rounded-md font-mono text-xs">
                 {infoLoading ? (
                     <div className="flex items-center justify-center h-40">
                         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                     </div>
                 ) : (
-                    <pre className="whitespace-pre-wrap">{infoModal?.content}</pre>
+                    <pre className="whitespace-pre">{infoModal?.content}</pre>
                 )}
             </div>
         </DialogContent>
