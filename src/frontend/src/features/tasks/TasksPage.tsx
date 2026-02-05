@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -134,6 +134,7 @@ const TasksPage = () => {
   const { tasks, channels, createTask, stopTask, deleteTask, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
+  const comboboxPortalRef = useRef<HTMLDivElement>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [openCombobox, setOpenCombobox] = useState(false)
 
@@ -577,7 +578,8 @@ const TasksPage = () => {
                                             </Button>
                                         </FormControl>
                                     </PopoverTrigger>
-                                    <PopoverContent className="w-[460px] p-0">
+                                    <div ref={comboboxPortalRef} />
+                                    <PopoverContent container={comboboxPortalRef.current} className="w-[460px] p-0">
                                         <Command>
                                             <CommandInput placeholder="搜索频道..." />
                                             <CommandList>
@@ -585,7 +587,7 @@ const TasksPage = () => {
                                                 <CommandGroup>
                                                     {channels.map((channel) => (
                                                         <CommandItem
-                                                            value={channel.name}
+                                                            value={`${channel.id} ${channel.name}`}
                                                             key={channel.id}
                                                             onSelect={() => {
                                                                 form.setValue("channelId", String(channel.id))

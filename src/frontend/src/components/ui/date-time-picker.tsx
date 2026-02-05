@@ -164,10 +164,10 @@ export function DateTimePicker({
             </div>
         </div>
         <div className="p-3 border-t flex justify-between items-center bg-muted/20">
-            <Button variant="ghost" size="sm" onClick={handleNow} className="text-xs h-8">
+            <Button type="button" variant="ghost" size="sm" onClick={handleNow} className="text-xs h-8">
                 此刻
             </Button>
-            <Button size="sm" onClick={handleConfirm} className="text-xs h-8">
+            <Button type="button" size="sm" onClick={handleConfirm} className="text-xs h-8">
                 确定
             </Button>
         </div>
