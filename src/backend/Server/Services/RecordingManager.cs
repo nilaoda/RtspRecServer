@@ -86,7 +86,8 @@ public sealed class RecordingManager
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        var created = _taskStore.Add(task);
+        var prepared = task with { Url = BuildRecordingUrl(task) };
+        var created = _taskStore.Add(prepared);
         _logger.LogInformation("录制任务创建成功，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
             created.Id, created.TaskName, created.ChannelName);
         
@@ -159,8 +160,6 @@ public sealed class RecordingManager
         // 简单处理：仅当任务时间是过去时间（暗示回放）时，才尝试附加参数？
         // 或者始终附加？为了安全起见，我们假设 Channel.Url 是纯流地址。
         
-        var finalUrl = BuildRecordingUrl(task);
-
         var started = task with
         {
             Status = RecordingStatus.Recording,
@@ -192,7 +191,7 @@ public sealed class RecordingManager
                 // 通常数据库保留原始配置 URL 更好，运行时 URL 仅用于执行。
                 // 所以我们构造一个 runtimeTask 传给 RecordAsync。
                 
-                var runtimeTask = started with { Url = finalUrl };
+                var runtimeTask = started;
 
                 var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, config.RecordingTransport, (progress) =>
                 {
@@ -252,7 +251,7 @@ public sealed class RecordingManager
                 if (finalStatus == RecordingStatus.Failed)
                 {
                     _logger.LogError("录制任务 {TaskId} 失败。频道: {ChannelName}, URL: {Url}, 输出路径: {OutputPath}, 具体原因: {ErrorMessage}", 
-                        task.Id, task.ChannelName, finalUrl, outputPath, finalErrorMessage ?? "未知错误");
+                        task.Id, task.ChannelName, task.Url, outputPath, finalErrorMessage ?? "未知错误");
                 }
 
                 var currentBitrate = session.GetCurrentBitrateKbps();
@@ -335,12 +334,13 @@ public sealed class RecordingManager
     private static string BuildRecordingUrl(RecordingTask task)
     {
         var url = task.Url;
-        if (url.Contains("playseek=", StringComparison.OrdinalIgnoreCase))
+        var now = DateTimeOffset.UtcNow;
+        if (task.StartTime >= now)
         {
             return url;
         }
 
-        if (task.StartTime > DateTimeOffset.UtcNow)
+        if (url.Contains("playseek=", StringComparison.OrdinalIgnoreCase))
         {
             return url;
         }
@@ -363,6 +363,7 @@ public sealed class RecordingManager
         var querySeparator = url.Contains('?') ? '&' : '?';
         return $"{url}{querySeparator}starttime={startUtc}&endtime={endUtc}";
     }
+
 
     private sealed class RecordingSession
     {
