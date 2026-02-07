@@ -17,6 +17,7 @@ public sealed record RecordingTask
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? FinishedAt { get; init; }
+    public double? PcrElapsedSeconds { get; init; }
 }
 
 public sealed record RecordingTaskCreateRequest

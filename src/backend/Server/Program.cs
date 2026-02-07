@@ -365,7 +365,8 @@ static RecordingTaskDto ToDto(RecordingTask task)
         ErrorMessage = task.ErrorMessage,
         StartedAt = task.StartedAt,
         FinishedAt = task.FinishedAt,
-        DisplayName = task.DisplayName
+        DisplayName = task.DisplayName,
+        PcrElapsedSeconds = task.PcrElapsedSeconds
     };
 }
 

@@ -260,7 +260,8 @@ public sealed class RecordingManager
                     Status = finalStatus,
                     BytesWritten = finalBytesWritten,
                     ErrorMessage = finalErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
-                    FinishedAt = DateTimeOffset.UtcNow
+                    FinishedAt = DateTimeOffset.UtcNow,
+                    PcrElapsedSeconds = result.PcrElapsedSeconds
                 });
 
                 await _notifier.NotifyTaskUpdateAsync(ToDto(completed) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = result.PcrElapsedSeconds }, CancellationToken.None);
@@ -327,7 +328,8 @@ public sealed class RecordingManager
             FilePath = task.FilePath,
             ErrorMessage = task.ErrorMessage,
             StartedAt = task.StartedAt,
-            FinishedAt = task.FinishedAt
+            FinishedAt = task.FinishedAt,
+            PcrElapsedSeconds = task.PcrElapsedSeconds
         };
     }
 
