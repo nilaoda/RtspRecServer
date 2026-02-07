@@ -80,9 +80,8 @@ internal sealed class RtspStreamRecorder
     {
         Connect();
         var stream = _client!.GetStream();
-        // 增加超时时间到30秒，避免网络波动导致录制中断
-        stream.ReadTimeout = 30000;
-        stream.WriteTimeout = 30000;
+        stream.ReadTimeout = 300000;
+        stream.WriteTimeout = 300000;
         
         var startTime = DateTime.UtcNow;
         var packetCount = 0;

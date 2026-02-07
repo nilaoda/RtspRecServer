@@ -289,18 +289,9 @@ const TasksPage = () => {
                             const finishedAt = task.finishedAt ? new Date(task.finishedAt).getTime() : Number.NaN
                             const plannedDuration = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0
                             
-                            let recordedDuration = 0
-                            if (task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0) {
-                                recordedDuration = task.pcrElapsedSeconds * 1000
-                            } else {
-                                recordedDuration = Number.isFinite(startedAt)
-                                ? Number.isFinite(finishedAt)
-                                    ? Math.max(0, finishedAt - startedAt)
-                                    : normalizedStatus === 'Recording'
-                                    ? Math.max(0, nowMs - startedAt)
-                                    : 0
+                            const recordedDuration = task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0
+                                ? task.pcrElapsedSeconds * 1000
                                 : 0
-                            }
 
                             const progress = normalizedStatus === 'Pending' ? 0
                                 : normalizedStatus === 'Completed' ? 100
