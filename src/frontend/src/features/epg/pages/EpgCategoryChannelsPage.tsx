@@ -1,5 +1,5 @@
 import { Folder } from 'lucide-react'
-import { useEpgData } from '../hooks/useEpgData'
+import { useEpgContext } from '../context/useEpgContext'
 import {
   Card,
   CardContent,
@@ -10,7 +10,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function EpgCategoryChannelsPage() {
-  const { channels } = useEpgData()
+  const { channels } = useEpgContext()
   const categoryChannels = channels.slice(0, 4) // Mock data logic preserved
 
   return (

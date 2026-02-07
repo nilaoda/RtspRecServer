@@ -19,7 +19,7 @@ import {
 } from '../services/api'
 import { connectWebSocket } from '../services/ws'
 import { AppContext, type AppContextValue } from './context'
-import { useTheme } from '@/components/theme-provider'
+import { useTheme } from '@/components/theme-context'
 
 type RecordingStatusKey = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped'
 
@@ -51,9 +51,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const { theme, setTheme } = useTheme()
   const themeMode = (theme === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme) as 'light' | 'dark'
 
-  const setThemeMode = (mode: 'light' | 'dark') => {
+  const setThemeMode = useCallback((mode: 'light' | 'dark') => {
       setTheme(mode)
-  }
+  }, [setTheme])
 
   const serverOffsetMsRef = useRef(0)
   const notifySuccess = useCallback((text: string) => {
@@ -141,6 +141,27 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       window.removeEventListener('offline', onOffline)
     }
   }, [])
+
+  useEffect(() => {
+    const sync = () => {
+      refreshSystemStatus()
+      reloadTasks()
+      reloadChannels()
+      reloadRecordings()
+      reloadConfig()
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        sync()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', sync)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', sync)
+    }
+  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadConfig])
 
   useEffect(() => {
     let cancelled = false
@@ -326,7 +347,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       connectionStatus: (() => {
         if (!browserOnline) return 'disconnected'
         if (wsConnectionStatus === 'connected') return 'connected'
-        const apiRecentlyOk = lastApiSuccessAt !== null && Date.now() - lastApiSuccessAt < 30000
+        const apiRecentlyOk = lastApiSuccessAt !== null && now.getTime() - lastApiSuccessAt < 30000
         if (apiRecentlyOk) {
           return wsConnectionStatus === 'connecting' ? 'connecting' : 'reconnecting'
         }
@@ -360,6 +381,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       browserOnline,
       lastApiSuccessAt,
       themeMode,
+      setThemeMode,
       reloadTasks,
       reloadChannels,
       reloadRecordings,

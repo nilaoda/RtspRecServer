@@ -214,7 +214,7 @@ const TasksPage = () => {
             taskName: values.taskName?.trim() || null,
         })
         setCreateOpen(false)
-    } catch (e) {
+    } catch {
         // Error handled in AppContext
     }
   }

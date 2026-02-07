@@ -44,6 +44,7 @@ const SettingsPage = () => {
   const initialTransport = appConfig?.recordingTransport ?? "MP2T/TCP"
 
   const form = useForm<SettingsFormValues>({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     resolver: zodResolver(settingsSchema) as any,
     defaultValues: {
       maxRecordingTasks: initialValue,
@@ -58,7 +59,7 @@ const SettingsPage = () => {
   const onSave = async (values: SettingsFormValues) => {
     try {
         await updateConfig({ maxRecordingTasks: values.maxRecordingTasks, recordingTransport: values.recordingTransport })
-    } catch (e) {
+    } catch {
         // Handled in context
     }
   }

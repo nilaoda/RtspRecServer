@@ -1,22 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import React, { useState, useEffect, useCallback, type ReactNode } from 'react'
 import type { EpgChannel, EpgProgram, CurrentProgramInfo, BackendEpgProgram } from '../types/epg'
 import * as api from '../../../services/api'
 import { useAppContext } from '../../../app/context'
-
-interface EpgContextType {
-  channels: EpgChannel[]
-  currentPrograms: CurrentProgramInfo[]
-  categories: string[]
-  loading: boolean
-  error: string | null
-  refresh: () => Promise<void>
-  loadAllData: () => Promise<void>
-  getChannelPrograms: (channelId: string) => Promise<EpgProgram[]>
-  getCategoryChannels: (category: string) => Promise<EpgChannel[]>
-  now: number // 提供全局统一的系统时间戳，用于 UI 自动刷新
-}
-
-const EpgContext = createContext<EpgContextType | undefined>(undefined)
+import { EpgContext } from './useEpgContext'
 
 export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { now: systemNow } = useAppContext()
@@ -179,12 +165,4 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       {children}
     </EpgContext.Provider>
   )
-}
-
-export const useEpgContext = () => {
-  const context = useContext(EpgContext)
-  if (context === undefined) {
-    throw new Error('useEpgContext must be used within an EpgProvider')
-  }
-  return context
 }

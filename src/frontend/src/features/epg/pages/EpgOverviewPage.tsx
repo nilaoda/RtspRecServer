@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { PlayCircle, Eye, Clock, ChevronRight, Activity } from 'lucide-react'
 
-import { useEpgData } from '../hooks/useEpgData'
+import { useEpgContext } from '../context/useEpgContext'
 import Loading from '../../shared/Loading'
 
 import {
@@ -15,7 +15,7 @@ import { Progress } from "@/components/ui/progress"
 
 export default function EpgOverviewPage() {
   const navigate = useNavigate()
-  const { channels, currentPrograms, loading, now } = useEpgData()
+  const { channels, currentPrograms, loading, now } = useEpgContext()
 
   if (loading && channels.length === 0) {
     return <Loading tip="正在加载节目单数据..." />

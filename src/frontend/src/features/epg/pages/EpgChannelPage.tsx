@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { PlayCircle, Clock, Calendar as CalendarIcon } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useEpgData } from '../hooks/useEpgData'
+import { useEpgContext } from '../context/useEpgContext'
 import type { EpgProgram } from '../types/epg'
 import Loading from '../../shared/Loading'
 
@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils"
 export default function EpgChannelPage() {
   const { channelId: urlChannelId } = useParams<{ channelId: string }>()
   const navigate = useNavigate()
-  const { channels, getChannelPrograms, loading: globalLoading, now } = useEpgData()
+  const { channels, getChannelPrograms, loading: globalLoading, now } = useEpgContext()
   
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(urlChannelId || null)
   const [programs, setPrograms] = useState<EpgProgram[]>([])
@@ -73,7 +73,7 @@ export default function EpgChannelPage() {
       }
       fetchPrograms()
     }
-  }, [selectedChannelId])
+  }, [selectedChannelId, getChannelPrograms])
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId)
 

@@ -72,7 +72,7 @@ const ChannelsPage = () => {
     try {
         await addChannel({ name: values.name.trim(), url: values.url.trim() })
         form.reset()
-    } catch (e) {
+    } catch {
         // Handled in context
     }
   }
@@ -91,7 +91,7 @@ const ChannelsPage = () => {
           delete next[id]
           return next
         })
-      } catch (e) {
+      } catch {
           // Handled in context
       }
     },

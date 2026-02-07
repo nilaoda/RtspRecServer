@@ -1,5 +1,5 @@
 import { CalendarDays, RefreshCw, ArrowLeft } from 'lucide-react'
-import { useEpgData } from '../hooks/useEpgData'
+import { useEpgContext } from '../context/useEpgContext'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Button } from "@/components/ui/button"
 import {
@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/alert-dialog"
 
 export const EpgLayout: React.FC = () => {
-  const { refresh, loading } = useEpgData()
+  const { refresh, loading } = useEpgContext()
   const location = useLocation()
   const navigate = useNavigate()
 

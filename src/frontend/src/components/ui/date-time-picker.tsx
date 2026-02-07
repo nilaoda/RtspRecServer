@@ -28,7 +28,7 @@ export function DateTimePicker({
   const [open, setOpen] = React.useState(false)
   const [isMobile, setIsMobile] = React.useState(false)
   const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(date)
-  const portalContainerRef = React.useRef<HTMLDivElement>(null)
+  const [portalContainer, setPortalContainer] = React.useState<HTMLDivElement | null>(null)
   const hourRef = React.useRef<HTMLUListElement>(null)
   const minuteRef = React.useRef<HTMLUListElement>(null)
   const secondRef = React.useRef<HTMLUListElement>(null)
@@ -211,8 +211,8 @@ export function DateTimePicker({
       <PopoverTrigger asChild>
         {triggerButton}
       </PopoverTrigger>
-      <div ref={portalContainerRef} />
-      <PopoverContent container={portalContainerRef.current} className="w-auto p-0" align="start">
+      <div ref={setPortalContainer} />
+      <PopoverContent container={portalContainer} className="w-auto p-0" align="start">
         {pickerContent}
       </PopoverContent>
     </Popover>

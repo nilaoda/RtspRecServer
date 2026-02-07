@@ -1,4 +1,4 @@
-import { useEpgContext } from '../context/EpgContext'
+import { useEpgContext } from '../context/useEpgContext'
 
 export const useEpgData = () => {
   return useEpgContext()
