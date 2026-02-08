@@ -111,7 +111,7 @@ const SettingsPage = () => {
                         </SelectContent>
                       </Select>
                       <FormDescription>
-                        默认使用 MP2T/TCP。若需RTP重传等扩展能力选择 MP2T/RTP/TCP。
+                        默认使用 MP2T/TCP。
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
