@@ -34,3 +34,7 @@ src/backend/Server/wwwroot/
 src/frontend/.env
 src/frontend/.env.*
 src/frontend/.eslintcache
+
+# macOS
+.DS_Store
+**/.DS_Store
