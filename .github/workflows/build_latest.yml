@@ -1,0 +1,266 @@
+name: Build Latest
+
+on:
+  workflow_dispatch:
+    inputs:
+      doRelease:
+        description: 'Publish new release'
+        type: boolean
+        default: false
+        required: false
+      tag:
+        type: string
+        description: 'Release version tag (e.g. v0.2.1-beta)'
+        required: true
+      ref:
+        type: string
+        description: 'Git ref from which to release'
+        required: true
+        default: 'main'
+
+env:
+  DOTNET_SDK_VERSION: "10.0.101"
+  NODE_VERSION: "22"
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  set-date:
+    runs-on: ubuntu-latest
+    outputs:
+      date: ${{ steps.get_date.outputs.date }}
+      tag: ${{ steps.format_tag.outputs.tag }}
+    steps:
+      - name: Get Date in UTC+8
+        id: get_date
+        run: |
+          DATE=$(date -u -d '8 hours' +'%Y%m%d')
+          echo "date=${DATE}" >> "$GITHUB_OUTPUT"
+
+      - name: Determine Tag
+        id: format_tag
+        run: |
+          if [ "${{ github.event.inputs.doRelease }}" == "true" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="actions-$GITHUB_RUN_ID"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build-win-x64-arm64:
+    runs-on: windows-latest
+    needs: set-date
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Install zip
+        run: choco install zip --no-progress --yes
+
+      - name: Set up dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - run: dotnet publish src/backend/Server/Server.csproj -r win-x64 -c Release -o artifact-x64
+      - run: dotnet publish src/backend/Server/Server.csproj -r win-arm64 -c Release -o artifact-arm64
+
+      - name: Package [win]
+        run: |
+          cd artifact-x64
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip RtspRecServer.exe
+          cd ../artifact-arm64
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip RtspRecServer.exe
+
+      - name: Upload Artifact [win-x64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-x64
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip
+
+      - name: Upload Artifact [win-arm64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-arm64
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip
+
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    needs: set-date
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Build x64 in alpine container
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e NODE_VERSION="${{ env.NODE_VERSION }}" \
+            alpine:3.21 \
+            sh -c "
+              set -e
+              # Install dependencies
+              apk add --no-cache bash wget tar clang build-base cmake icu-dev icu-data-full zlib-static openssl-dev openssl-libs-static nodejs npm
+
+              # Install .NET SDK
+              DOTNET_SDK_VERSION='${{ env.DOTNET_SDK_VERSION }}'
+              DOTNET_SDK_URL=\"https://builds.dotnet.microsoft.com/dotnet/Sdk/\${DOTNET_SDK_VERSION}/dotnet-sdk-\${DOTNET_SDK_VERSION}-linux-musl-x64.tar.gz\"
+              wget -nv \"\$DOTNET_SDK_URL\" -O dotnet-sdk.tar.gz
+              mkdir -p /opt/dotnet
+              tar -xzf dotnet-sdk.tar.gz -C /opt/dotnet
+              export PATH=\"/opt/dotnet:\$PATH\"
+
+              # Publish
+              dotnet publish src/backend/Server/Server.csproj -r linux-musl-x64 -c Release -o /workspace/artifact
+            "
+
+      - name: Package [linux-x64]
+        run: |
+          cd artifact
+          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-x64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+
+      - name: Upload Artifact [linux-x64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-x64_${{ needs.set-date.outputs.date }}.tar.gz
+
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    needs: set-date
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Build arm64 in cross container
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            -e NODE_VERSION="${{ env.NODE_VERSION }}" \
+            mcr.microsoft.com/dotnet-buildtools/prereqs:ubuntu-22.04-cross-arm64-alpine \
+            bash -c "
+              set -e
+              apt-get update && apt-get install -y build-essential clang binutils-aarch64-linux-gnu curl
+
+              # Install Node.js
+              curl -fsSL https://deb.nodesource.com/setup_\${NODE_VERSION}.x | bash -
+              apt-get install -y nodejs
+
+              # Dynamic OpenSSL Version Detection from Alpine
+              ALPINE_REPO='https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64'
+              echo \"Fetching latest OpenSSL version from Alpine...\"
+              SSL_APK_NAME=\$(wget -qO- \$ALPINE_REPO/ | grep -o 'openssl-dev-[0-9.]\+-r[0-9]\+.apk' | head -n 1)
+              SSL_VER=\$(echo \$SSL_APK_NAME | sed 's/openssl-dev-//;s/.apk//')
+              echo \"Detected OpenSSL Version: \$SSL_VER\"
+              
+              mkdir -p /tmp/ssl_setup && cd /tmp/ssl_setup
+              wget -q \$ALPINE_REPO/openssl-libs-static-\$SSL_VER.apk
+              wget -q \$ALPINE_REPO/openssl-dev-\$SSL_VER.apk
+              
+              for f in *.apk; do tar -xf \$f -C /crossrootfs/arm64; done
+              cd /workspace
+              
+              export CROSS_COMPILE_PREFIX=\"aarch64-alpine-linux-musl-\"
+              export CC=\"\${CROSS_COMPILE_PREFIX}clang\"
+              export CXX=\"\${CROSS_COMPILE_PREFIX}clang++\"
+              
+              export OPENSSL_ROOT_DIR=\"/crossrootfs/arm64/usr\"
+              export OPENSSL_USE_STATIC_LIBS=TRUE
+              
+              export CFLAGS=\"--sysroot=/crossrootfs/arm64 --target=aarch64-alpine-linux-musl\"
+
+              # Install .NET SDK
+              DOTNET_SDK_VERSION='${{ env.DOTNET_SDK_VERSION }}'
+              DOTNET_SDK_URL=\"https://builds.dotnet.microsoft.com/dotnet/Sdk/\${DOTNET_SDK_VERSION}/dotnet-sdk-\${DOTNET_SDK_VERSION}-linux-x64.tar.gz\"
+              wget -nv \"\$DOTNET_SDK_URL\" -O dotnet-sdk.tar.gz
+              mkdir -p /opt/dotnet
+              tar -xzf dotnet-sdk.tar.gz -C /opt/dotnet
+              export PATH=\"/opt/dotnet:\$PATH\"
+
+              # Publish
+              dotnet publish src/backend/Server/Server.csproj -r linux-musl-arm64 -c Release \
+                -p:SysRoot=/crossrootfs/arm64 \
+                -p:CppCompilerAndLinker=clang \
+                -p:StripSymbols=true \
+                -o /workspace/artifact
+            "
+
+      - name: Package [linux-arm64]
+        run: |
+          cd artifact
+          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-arm64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+
+      - name: Upload Artifact [linux-arm64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-arm64_${{ needs.set-date.outputs.date }}.tar.gz
+
+  build-mac-x64-arm64:
+    runs-on: macos-latest
+    needs: set-date
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Set up dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - run: dotnet publish src/backend/Server/Server.csproj -r osx-arm64 -c Release -o artifact-arm64 
+      - run: dotnet publish src/backend/Server/Server.csproj -r osx-x64 -c Release -o artifact-x64 
+
+      - name: Package [osx]
+        run: |
+          cd artifact-x64
+          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-x64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+          cd ../artifact-arm64
+          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-arm64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+
+      - name: Upload Artifact [osx-x64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: osx-x64
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-x64_${{ needs.set-date.outputs.date }}.tar.gz
+
+      - name: Upload Artifact [osx-arm64]
+        uses: actions/upload-artifact@v4
+        with:
+          name: osx-arm64
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-arm64_${{ needs.set-date.outputs.date }}.tar.gz
+
+  create_release:
+    name: Create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: ${{ github.event.inputs.doRelease == 'true' }}
+    needs: [set-date, build-win-x64-arm64, build-linux-x64, build-linux-arm64, build-mac-x64-arm64]
+    steps:
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.event.inputs.tag }}
+          name: RtspRecServer_${{ github.event.inputs.tag }}
+          artifacts: "linux-x64/*,linux-arm64/*,osx-x64/*,osx-arm64/*,win-x64/*,win-arm64/*"
+          draft: false
+          allowUpdates: true

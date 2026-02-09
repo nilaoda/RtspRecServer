@@ -32,12 +32,40 @@ public sealed class RecordingManager
 
     public IReadOnlyCollection<RecordingTask> GetAllTasks()
     {
-        return _taskStore.GetAll().OrderBy(t => t.Id).ToList();
+        var tasks = _taskStore.GetAll().OrderBy(t => t.Id).ToList();
+        var mergedTasks = new List<RecordingTask>(tasks.Count);
+        
+        foreach (var task in tasks)
+        {
+            if (_activeSessions.TryGetValue(task.Id, out var session))
+            {
+                mergedTasks.Add(task with 
+                { 
+                    BytesWritten = session.BytesWritten,
+                    PcrElapsedSeconds = session.GetPcrElapsedSeconds()
+                });
+            }
+            else
+            {
+                mergedTasks.Add(task);
+            }
+        }
+        
+        return mergedTasks;
     }
 
     public RecordingTask? GetTask(long id)
     {
-        return _taskStore.GetById(id);
+        var task = _taskStore.GetById(id);
+        if (task != null && _activeSessions.TryGetValue(id, out var session))
+        {
+            return task with 
+            { 
+                BytesWritten = session.BytesWritten,
+                PcrElapsedSeconds = session.GetPcrElapsedSeconds()
+            };
+        }
+        return task;
     }
 
     public async Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, CancellationToken cancellationToken)

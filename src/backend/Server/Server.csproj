@@ -28,6 +28,20 @@
     <SkipFrontendBuild>false</SkipFrontendBuild>
   </PropertyGroup>
 
+<ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-musl-arm64' or '$(RuntimeIdentifier)' == 'linux-musl-x64'">
+    <!-- 导入libc -->
+    <DirectPInvoke Include="libc" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-musl-arm64' or '$(RuntimeIdentifier)' == 'linux-musl-x64'">
+    <!-- 设置为纯静态应用 -->
+    <StaticExecutable>true</StaticExecutable>
+    <!-- 静态链接openssl -->
+    <StaticOpenSslLinking>true</StaticOpenSslLinking>
+    <!-- 去除国际化支持 -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <SkipFrontendBuild>true</SkipFrontendBuild>
   </PropertyGroup>
