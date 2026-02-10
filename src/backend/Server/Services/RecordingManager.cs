@@ -417,7 +417,10 @@ public sealed class RecordingManager
         
         public void UpdatePcrElapsedSeconds(double? seconds)
         {
-            _pcrElapsedSeconds = seconds;
+            if (seconds.HasValue)
+            {
+                _pcrElapsedSeconds = seconds;
+            }
         }
         
         public double GetCurrentBitrateKbps()
