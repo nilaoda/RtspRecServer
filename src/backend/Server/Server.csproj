@@ -27,6 +27,7 @@
     <PublishDir>$(MSBuildProjectDirectory)/../../../publish/</PublishDir>
     <FrontendDir>$(MSBuildProjectDirectory)/../../frontend</FrontendDir>
     <SkipFrontendBuild>false</SkipFrontendBuild>
+    <ObjCopyName Condition="'$(RuntimeIdentifier)' == 'linux-musl-arm64'">aarch64-linux-gnu-objcopy</ObjCopyName>
   </PropertyGroup>
 
 <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-musl-arm64' or '$(RuntimeIdentifier)' == 'linux-musl-x64'">

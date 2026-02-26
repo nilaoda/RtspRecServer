@@ -46,13 +46,50 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-  build-win-x64-arm64:
-    runs-on: windows-latest
+  build-web:
+    runs-on: ubuntu-latest
     needs: set-date
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build frontend
+        run: |
+          cd src/frontend
+          npm install
+          npm run build
+
+      - name: Upload Artifact [web]
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: src/backend/Server/wwwroot
+
+  build-win-x64-arm64:
+    runs-on: windows-latest
+    needs: [set-date, build-web]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Download Artifact [web]
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: ${{ runner.temp }}\web-dist
+
+      - name: Restore wwwroot
+        run: |
+          if (Test-Path "src\backend\Server\wwwroot") { Remove-Item -Recurse -Force src\backend\Server\wwwroot }
+          New-Item -ItemType Directory -Force src\backend\Server\wwwroot | Out-Null
+          Copy-Item -Recurse $env:RUNNER_TEMP\web-dist\* src\backend\Server\wwwroot
 
       - name: Install zip
         run: choco install zip --no-progress --yes
@@ -62,13 +99,8 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - run: dotnet publish src/backend/Server/Server.csproj -r win-x64 -c Release -o artifact-x64
-      - run: dotnet publish src/backend/Server/Server.csproj -r win-arm64 -c Release -o artifact-arm64
+      - run: dotnet publish src/backend/Server/Server.csproj -r win-x64 -c Release -o artifact-x64 -p:SkipFrontendBuild=true
+      - run: dotnet publish src/backend/Server/Server.csproj -r win-arm64 -c Release -o artifact-arm64 -p:SkipFrontendBuild=true
 
       - name: Package [win]
         run: |
@@ -91,28 +123,34 @@ jobs:
 
   build-linux-x64:
     runs-on: ubuntu-latest
-    needs: set-date
+    needs: [set-date, build-web]
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref }}
+
+      - name: Download Artifact [web]
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist
+
+      - name: Restore wwwroot
+        run: |
+          rm -rf src/backend/Server/wwwroot
+          mkdir -p src/backend/Server/wwwroot
+          cp -R /tmp/web-dist/* src/backend/Server/wwwroot
 
       - name: Build x64 in alpine container
         run: |
           docker run --rm \
             -v "$PWD:/workspace" \
             -w /workspace \
-            -e NODE_VERSION="${{ env.NODE_VERSION }}" \
             alpine:3.21 \
             sh -c "
               set -e
               # Install dependencies
-              apk add --no-cache bash wget tar clang build-base cmake icu-dev icu-data-full zlib-static openssl-dev openssl-libs-static nodejs npm
-              NODE_MAJOR=\$(node -p 'process.versions.node.split(\".\")[0]')
-              if [ \"\$NODE_MAJOR\" != \"\$NODE_VERSION\" ]; then
-                echo \"Node version mismatch: \$(node -v)\"
-                exit 1
-              fi
+              apk add --no-cache bash wget tar clang build-base cmake icu-dev icu-data-full zlib-static openssl-dev openssl-libs-static
 
               # Install .NET SDK
               DOTNET_SDK_VERSION='${{ env.DOTNET_SDK_VERSION }}'
@@ -123,7 +161,7 @@ jobs:
               export PATH=\"/opt/dotnet:\$PATH\"
 
               # Publish
-              dotnet publish src/backend/Server/Server.csproj -r linux-musl-x64 -c Release -o /workspace/artifact
+              dotnet publish src/backend/Server/Server.csproj -r linux-musl-x64 -c Release -o /workspace/artifact -p:SkipFrontendBuild=true
             "
 
       - name: Package [linux-x64]
@@ -139,38 +177,38 @@ jobs:
 
   build-linux-arm64:
     runs-on: ubuntu-latest
-    needs: set-date
+    needs: [set-date, build-web]
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref }}
+
+      - name: Download Artifact [web]
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist
+
+      - name: Restore wwwroot
+        run: |
+          rm -rf src/backend/Server/wwwroot
+          mkdir -p src/backend/Server/wwwroot
+          cp -R /tmp/web-dist/* src/backend/Server/wwwroot
 
       - name: Build arm64 in cross container
         run: |
           docker run --rm \
             -v "$PWD:/workspace" \
             -w /workspace \
-            -e NODE_VERSION="${{ env.NODE_VERSION }}" \
             mcr.microsoft.com/dotnet-buildtools/prereqs:ubuntu-22.04-cross-arm64-alpine \
             bash -c "
               set -e
-              for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
-                [ -f "$f" ] && sed -i '/kitware/d' "$f"
-              done
+              find /etc/apt -maxdepth 2 -type f \( -name "*.list" -o -name "*.sources" -o -name "sources.list" \) -print0 | xargs -0 -r sed -i '/kitware/d'
               rm -f /etc/apt/sources.list.d/kitware*.list || true
               apt-get update
               apt-get install -y ca-certificates gpg wget
               apt-get update
               apt-get install -y build-essential clang binutils-aarch64-linux-gnu curl
-
-              # Install Node.js
-              curl -fsSL https://deb.nodesource.com/setup_\${NODE_VERSION}.x | bash -
-              apt-get install -y nodejs
-              NODE_MAJOR=\$(node -p 'process.versions.node.split(\".\")[0]')
-              if [ \"\$NODE_MAJOR\" != \"\$NODE_VERSION\" ]; then
-                echo \"Node version mismatch: \$(node -v)\"
-                exit 1
-              fi
 
               # Dynamic OpenSSL Version Detection from Alpine
               ALPINE_REPO='https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64'
@@ -208,6 +246,7 @@ jobs:
                 -p:SysRoot=/crossrootfs/arm64 \
                 -p:CppCompilerAndLinker=clang \
                 -p:StripSymbols=true \
+                -p:SkipFrontendBuild=true \
                 -o /workspace/artifact
             "
 
@@ -224,24 +263,31 @@ jobs:
 
   build-mac-x64-arm64:
     runs-on: macos-latest
-    needs: set-date
+    needs: [set-date, build-web]
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref }}
+
+      - name: Download Artifact [web]
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: /tmp/web-dist
+
+      - name: Restore wwwroot
+        run: |
+          rm -rf src/backend/Server/wwwroot
+          mkdir -p src/backend/Server/wwwroot
+          cp -R /tmp/web-dist/* src/backend/Server/wwwroot
 
       - name: Set up dotnet
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - run: dotnet publish src/backend/Server/Server.csproj -r osx-arm64 -c Release -o artifact-arm64 
-      - run: dotnet publish src/backend/Server/Server.csproj -r osx-x64 -c Release -o artifact-x64 
+      - run: dotnet publish src/backend/Server/Server.csproj -r osx-arm64 -c Release -o artifact-arm64 -p:SkipFrontendBuild=true
+      - run: dotnet publish src/backend/Server/Server.csproj -r osx-x64 -c Release -o artifact-x64 -p:SkipFrontendBuild=true
 
       - name: Package [osx]
         run: |
@@ -268,7 +314,7 @@ jobs:
     permissions:
       contents: write
     if: ${{ github.event.inputs.doRelease == 'true' }}
-    needs: [set-date, build-win-x64-arm64, build-linux-x64, build-linux-arm64, build-mac-x64-arm64]
+    needs: [set-date, build-web, build-win-x64-arm64, build-linux-x64, build-linux-arm64, build-mac-x64-arm64]
     steps:
       - name: Fetch artifacts
         uses: actions/download-artifact@v4
