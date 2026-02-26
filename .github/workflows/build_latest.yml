@@ -73,9 +73,9 @@ jobs:
       - name: Package [win]
         run: |
           cd artifact-x64
-          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip RtspRecServer.exe
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip Server.exe
           cd ../artifact-arm64
-          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip RtspRecServer.exe
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip Server.exe
 
       - name: Upload Artifact [win-x64]
         uses: actions/upload-artifact@v4
@@ -108,6 +108,11 @@ jobs:
               set -e
               # Install dependencies
               apk add --no-cache bash wget tar clang build-base cmake icu-dev icu-data-full zlib-static openssl-dev openssl-libs-static nodejs npm
+              NODE_MAJOR=\$(node -p 'process.versions.node.split(\".\")[0]')
+              if [ \"\$NODE_MAJOR\" != \"\$NODE_VERSION\" ]; then
+                echo \"Node version mismatch: \$(node -v)\"
+                exit 1
+              fi
 
               # Install .NET SDK
               DOTNET_SDK_VERSION='${{ env.DOTNET_SDK_VERSION }}'
@@ -124,13 +129,13 @@ jobs:
       - name: Package [linux-x64]
         run: |
           cd artifact
-          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-x64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-x64_${{ needs.set-date.outputs.date }}.zip Server
 
       - name: Upload Artifact [linux-x64]
         uses: actions/upload-artifact@v4
         with:
           name: linux-x64
-          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-x64_${{ needs.set-date.outputs.date }}.tar.gz
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-x64_${{ needs.set-date.outputs.date }}.zip
 
   build-linux-arm64:
     runs-on: ubuntu-latest
@@ -149,11 +154,23 @@ jobs:
             mcr.microsoft.com/dotnet-buildtools/prereqs:ubuntu-22.04-cross-arm64-alpine \
             bash -c "
               set -e
-              apt-get update && apt-get install -y build-essential clang binutils-aarch64-linux-gnu curl
+              for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+                [ -f "$f" ] && sed -i '/kitware/d' "$f"
+              done
+              rm -f /etc/apt/sources.list.d/kitware*.list || true
+              apt-get update
+              apt-get install -y ca-certificates gpg wget
+              apt-get update
+              apt-get install -y build-essential clang binutils-aarch64-linux-gnu curl
 
               # Install Node.js
               curl -fsSL https://deb.nodesource.com/setup_\${NODE_VERSION}.x | bash -
               apt-get install -y nodejs
+              NODE_MAJOR=\$(node -p 'process.versions.node.split(\".\")[0]')
+              if [ \"\$NODE_MAJOR\" != \"\$NODE_VERSION\" ]; then
+                echo \"Node version mismatch: \$(node -v)\"
+                exit 1
+              fi
 
               # Dynamic OpenSSL Version Detection from Alpine
               ALPINE_REPO='https://dl-cdn.alpinelinux.org/alpine/v3.21/main/aarch64'
@@ -197,13 +214,13 @@ jobs:
       - name: Package [linux-arm64]
         run: |
           cd artifact
-          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-arm64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-arm64_${{ needs.set-date.outputs.date }}.zip Server
 
       - name: Upload Artifact [linux-arm64]
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
-          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-arm64_${{ needs.set-date.outputs.date }}.tar.gz
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_linux-arm64_${{ needs.set-date.outputs.date }}.zip
 
   build-mac-x64-arm64:
     runs-on: macos-latest
@@ -229,21 +246,21 @@ jobs:
       - name: Package [osx]
         run: |
           cd artifact-x64
-          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-x64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-x64_${{ needs.set-date.outputs.date }}.zip Server
           cd ../artifact-arm64
-          tar -czvf ../RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-arm64_${{ needs.set-date.outputs.date }}.tar.gz RtspRecServer
+          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-arm64_${{ needs.set-date.outputs.date }}.zip Server
 
       - name: Upload Artifact [osx-x64]
         uses: actions/upload-artifact@v4
         with:
           name: osx-x64
-          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-x64_${{ needs.set-date.outputs.date }}.tar.gz
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-x64_${{ needs.set-date.outputs.date }}.zip
 
       - name: Upload Artifact [osx-arm64]
         uses: actions/upload-artifact@v4
         with:
           name: osx-arm64
-          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-arm64_${{ needs.set-date.outputs.date }}.tar.gz
+          path: RtspRecServer_${{ needs.set-date.outputs.tag }}_osx-arm64_${{ needs.set-date.outputs.date }}.zip
 
   create_release:
     name: Create release
