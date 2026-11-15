@@ -15,13 +15,13 @@
 - **RTSP 录制**：支持定时录制和手动录制。
 - **Web 管理界面**：提供直观的网页界面，支持深色/浅色模式，方便管理任务。
 - **协议支持**：专注于 IPTV 回放场景，**仅支持 MP2T/TCP 和 MP2T/RTP/TCP 协议**。
-- **EPG 电子节目单**：支持导入节目单。
+- **EPG 电子节目表**：支持导入节目表。
 - **低资源占用**：采用 NativeAOT 技术编译，启动快，占用低。
 
 ## 🛠️ 技术栈
 
 - **后端**：.NET 10 (Minimal API)、System.Text.Json (Source Generator)
-- **前端**：React 18、TypeScript、Vite、Tailwind CSS、Shadcn/ui
+- **前端**：React 19、TypeScript、Vite、Tailwind CSS、Shadcn/ui
 - **通信**：WebSocket (实时状态推送)
 - **编译**：NativeAOT (提前编译为原生机器码)
 
@@ -56,7 +56,7 @@
 
 1. 下载并解压程序包。
 2. 双击运行主程序（`Server` 或 `Server.exe`）。
-3. 程序启动后，会自动打开浏览器访问管理页面（通常为 `http://localhost:8080`）。
+3. 在浏览器中访问管理页面（默认为 `http://localhost:8080`，端口可在 `recsettings.json` 中修改）。
 
 ## ⚙️ 简单配置
 
@@ -68,7 +68,8 @@
 {
     "port": 8080,              // Web 界面端口
     "recordPath": "./records", // 录像保存路径
-    "maxRecordingTasks": 1     // 最大同时录制任务数
+    "maxRecordingTasks": 1,    // 最大同时录制任务数
+    "recordingTransport": "MP2T/TCP" // 封装方式：MP2T/TCP 或 MP2T/RTP/TCP
 }
 ```
 
