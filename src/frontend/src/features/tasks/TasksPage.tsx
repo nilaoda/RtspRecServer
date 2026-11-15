@@ -300,7 +300,7 @@ const TasksPage = () => {
                         <TableHead className="w-[100px]">状态</TableHead>
                         <TableHead className="min-w-[150px]">任务名称</TableHead>
                         <TableHead className="min-w-[120px]">频道</TableHead>
-                        <TableHead className="w-[160px]">计划时间</TableHead>
+                        <TableHead className="w-[160px]">时间</TableHead>
                         <TableHead className="w-[180px]">时长 / 进度</TableHead>
                         <TableHead className="w-[140px]">码率 / 大小</TableHead>
                         <TableHead className="w-[180px] text-right">操作</TableHead>
@@ -323,7 +323,17 @@ const TasksPage = () => {
                             const nowMs = now.getTime()
                             const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
                             const finishedAt = task.finishedAt ? new Date(task.finishedAt).getTime() : Number.NaN
-                            const plannedDuration = Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0
+                            const displayStart = task.isLive && Number.isFinite(startedAt) ? startedAt : start
+                            const durationStart = task.isLive
+                                ? (Number.isFinite(startedAt)
+                                    ? startedAt
+                                    : normalizedStatus === 'Pending' && nowMs > start
+                                        ? nowMs
+                                        : start)
+                                : start
+                            const plannedDuration = Number.isFinite(durationStart) && Number.isFinite(end)
+                                ? Math.max(0, end - durationStart)
+                                : 0
                             
                             const recordedDuration = task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0
                                 ? task.pcrElapsedSeconds * 1000
@@ -379,8 +389,13 @@ const TasksPage = () => {
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="flex flex-col text-xs text-muted-foreground">
-                                            <span>{formatDateTime(new Date(task.startTime))}</span>
+                                        <div
+                                            className="flex flex-col text-xs text-muted-foreground"
+                                            title={task.isLive && Number.isFinite(startedAt) && displayStart !== start
+                                                ? `实际开始；预约开始：${formatDateTime(new Date(start))}`
+                                                : undefined}
+                                        >
+                                            <span>{formatDateTime(new Date(displayStart))}</span>
                                             <span>{formatDateTime(new Date(task.endTime))}</span>
                                         </div>
                                     </TableCell>
