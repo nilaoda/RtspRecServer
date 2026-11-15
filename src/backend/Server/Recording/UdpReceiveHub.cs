@@ -1,0 +1,406 @@
+using System.Buffers;
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading.Channels;
+using Serilog;
+
+namespace RtspRecServer.Server.Recording;
+
+internal sealed class UdpDatagram : IDisposable
+{
+    public required byte[] Buffer { get; init; }
+    public required int Length { get; init; }
+    public ReadOnlyMemory<byte> Payload => Buffer.AsMemory(0, Length);
+
+    public void Dispose()
+    {
+        ArrayPool<byte>.Shared.Return(Buffer);
+    }
+}
+
+internal readonly record struct UdpReceiverKey(IPAddress LocalAddress, int Port);
+
+internal sealed class UdpSubscription : IAsyncDisposable
+{
+    private readonly Channel<UdpDatagram> _channel;
+    private readonly Action<UdpSubscription> _onDispose;
+    private int _disposed;
+
+    internal UdpSubscription(IPAddress? groupAddress, int capacity, Action<UdpSubscription> onDispose)
+    {
+        GroupAddress = groupAddress;
+        _onDispose = onDispose;
+        _channel = Channel.CreateBounded<UdpDatagram>(new BoundedChannelOptions(capacity)
+        {
+            FullMode = BoundedChannelFullMode.DropWrite,
+            SingleReader = true,
+            SingleWriter = true,
+            AllowSynchronousContinuations = false
+        });
+    }
+
+    public IPAddress? GroupAddress { get; }
+    public ChannelReader<UdpDatagram> Reader => _channel.Reader;
+    internal long DroppedCount;
+
+    internal bool TryWrite(UdpDatagram datagram) => _channel.Writer.TryWrite(datagram);
+
+    internal void Complete(Exception? error = null) => _channel.Writer.TryComplete(error);
+
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _onDispose(this);
+            _channel.Writer.TryComplete();
+            while (_channel.Reader.TryRead(out var datagram))
+            {
+                datagram.Dispose();
+            }
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
+internal sealed class UdpEndpointReceiver : IDisposable
+{
+    private const int ReceiveBufferBytes = 16 * 1024 * 1024;
+    private readonly object _sync = new();
+    private readonly Socket _socket;
+    private readonly IPAddress? _localAddress;
+    private readonly int _port;
+    private readonly CancellationTokenSource _cancellation = new();
+    private readonly List<UdpSubscription> _subscriptions = [];
+    private readonly Dictionary<IPAddress, int> _groupRefs = [];
+    private bool _disposed;
+
+    public UdpEndpointReceiver(IPAddress? localAddress, int port)
+    {
+        _localAddress = localAddress;
+        _port = port;
+        _socket = CreateSocket(localAddress, port);
+        _ = Task.Run(ReceiveLoopAsync);
+    }
+
+    public UdpSubscription Subscribe(IPAddress? groupAddress, int capacity, Action<UdpSubscription> onDispose)
+    {
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(UdpEndpointReceiver));
+            }
+
+            if (groupAddress is not null)
+            {
+                if (!_groupRefs.TryGetValue(groupAddress, out var count))
+                {
+                    JoinGroup(groupAddress);
+                }
+
+                _groupRefs[groupAddress] = count + 1;
+            }
+
+            var subscription = new UdpSubscription(groupAddress, capacity, onDispose);
+            _subscriptions.Add(subscription);
+            return subscription;
+        }
+    }
+
+    internal bool Remove(UdpSubscription subscription)
+    {
+        bool empty;
+        lock (_sync)
+        {
+            if (!_subscriptions.Remove(subscription))
+            {
+                return false;
+            }
+
+            if (subscription.GroupAddress is not null &&
+                _groupRefs.TryGetValue(subscription.GroupAddress, out var count))
+            {
+                if (count <= 1)
+                {
+                    _groupRefs.Remove(subscription.GroupAddress);
+                    DropGroup(subscription.GroupAddress);
+                }
+                else
+                {
+                    _groupRefs[subscription.GroupAddress] = count - 1;
+                }
+            }
+
+            empty = _subscriptions.Count == 0;
+        }
+
+        return empty;
+    }
+
+    internal bool IsEmpty
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _subscriptions.Count == 0;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        UdpSubscription[] subscriptions;
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            subscriptions = _subscriptions.ToArray();
+            _subscriptions.Clear();
+        }
+
+        _cancellation.Cancel();
+        _socket.Close();
+        foreach (var subscription in subscriptions)
+        {
+            subscription.Complete();
+        }
+
+        _cancellation.Dispose();
+    }
+
+    private async Task ReceiveLoopAsync()
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(65536);
+        EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+        try
+        {
+            while (!_cancellation.IsCancellationRequested)
+            {
+                var received = await _socket.ReceiveMessageFromAsync(
+                    buffer.AsMemory(0, buffer.Length),
+                    SocketFlags.None,
+                    remoteEndPoint,
+                    _cancellation.Token).ConfigureAwait(false);
+
+                if (received.ReceivedBytes <= 0)
+                {
+                    continue;
+                }
+
+                var destination = received.PacketInformation.Address;
+                UdpSubscription[] targets;
+                lock (_sync)
+                {
+                    targets = _subscriptions
+                        .Where(subscription => ShouldDeliver(subscription.GroupAddress, destination))
+                        .ToArray();
+                }
+
+                foreach (var target in targets)
+                {
+                    var copy = ArrayPool<byte>.Shared.Rent(received.ReceivedBytes);
+                    buffer.AsSpan(0, received.ReceivedBytes).CopyTo(copy);
+                    var datagram = new UdpDatagram
+                    {
+                        Buffer = copy,
+                        Length = received.ReceivedBytes
+                    };
+
+                    if (!target.TryWrite(datagram))
+                    {
+                        datagram.Dispose();
+                        var dropped = Interlocked.Increment(ref target.DroppedCount);
+                        if (dropped == 1 || dropped % 1000 == 0)
+                        {
+                            Log.Warning(
+                                "UDP 接收队列积压，已丢弃 {Count} 个数据报：端口 {Port}，组播组 {Group}",
+                                dropped,
+                                _port,
+                                target.GroupAddress?.ToString() ?? "单播");
+                        }
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "UDP 接收循环异常，端口: {Port}", _port);
+            UdpSubscription[] subscriptions;
+            lock (_sync)
+            {
+                subscriptions = _subscriptions.ToArray();
+            }
+
+            foreach (var subscription in subscriptions)
+            {
+                subscription.Complete(ex);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static Socket CreateSocket(IPAddress? localAddress, int port)
+    {
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        try
+        {
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            try
+            {
+                socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
+            }
+            catch (SocketException ex)
+            {
+                throw new InvalidOperationException("无法启用 UDP 目标地址信息，不能按组播组分发数据", ex);
+            }
+
+            try
+            {
+                socket.ReceiveBufferSize = ReceiveBufferBytes;
+            }
+            catch (SocketException ex)
+            {
+                Log.Warning(ex, "设置共享 UDP 接收缓冲区失败，将使用系统默认值");
+            }
+
+            socket.Bind(new IPEndPoint(localAddress ?? IPAddress.Any, port));
+            return socket;
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    private void JoinGroup(IPAddress group)
+    {
+        var option = _localAddress is null
+            ? new MulticastOption(group)
+            : new MulticastOption(group, _localAddress);
+        _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, option);
+        Log.Information("UDP 共享接收加入组播组 {Group}:{Port}", group, _port);
+    }
+
+    private void DropGroup(IPAddress group)
+    {
+        try
+        {
+            var option = _localAddress is null
+                ? new MulticastOption(group)
+                : new MulticastOption(group, _localAddress);
+            _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.DropMembership, option);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "退出 UDP 组播组失败: {Group}:{Port}", group, _port);
+        }
+    }
+
+    internal static bool ShouldDeliver(IPAddress? subscriptionGroup, IPAddress destination)
+    {
+        if (subscriptionGroup is not null)
+        {
+            return destination.Equals(IPAddress.Any) || destination.Equals(subscriptionGroup);
+        }
+
+        return !IsMulticast(destination) || destination.Equals(IPAddress.Any);
+    }
+
+    internal static bool IsMulticast(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes.Length == 4 && bytes[0] is >= 224 and <= 239;
+    }
+}
+
+internal sealed class UdpReceiveHub
+{
+    private readonly object _sync = new();
+    private readonly ConcurrentDictionary<UdpReceiverKey, UdpEndpointReceiver> _receivers = new();
+
+    public UdpSubscription Subscribe(
+        IPAddress? groupAddress,
+        IPAddress? localAddress,
+        int port,
+        int capacity = 1024)
+    {
+        var key = new UdpReceiverKey(localAddress ?? IPAddress.Any, port);
+        UdpEndpointReceiver receiver;
+        lock (_sync)
+        {
+            if (!_receivers.TryGetValue(key, out receiver!))
+            {
+                receiver = new UdpEndpointReceiver(localAddress, port);
+                _receivers[key] = receiver;
+            }
+        }
+
+        try
+        {
+            return receiver.Subscribe(
+                groupAddress,
+                capacity,
+                subscription => RemoveSubscription(key, receiver, subscription));
+        }
+        catch
+        {
+            if (receiver.IsEmpty)
+            {
+                RemoveReceiverIfEmpty(key, receiver);
+            }
+
+            throw;
+        }
+    }
+
+    private void RemoveSubscription(
+        UdpReceiverKey key,
+        UdpEndpointReceiver receiver,
+        UdpSubscription subscription)
+    {
+        if (!receiver.Remove(subscription))
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            if (_receivers.TryGetValue(key, out var current) && ReferenceEquals(current, receiver))
+            {
+                _receivers.TryRemove(key, out _);
+            }
+        }
+
+        receiver.Dispose();
+    }
+
+    private void RemoveReceiverIfEmpty(UdpReceiverKey key, UdpEndpointReceiver receiver)
+    {
+        lock (_sync)
+        {
+            if (_receivers.TryGetValue(key, out var current) && ReferenceEquals(current, receiver))
+            {
+                _receivers.TryRemove(key, out _);
+            }
+        }
+
+        receiver.Dispose();
+    }
+}

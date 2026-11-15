@@ -1,6 +1,6 @@
-using System.Buffers;
-using System.Net;
 using System.Net.Sockets;
+using System.Net;
+using System.Threading.Channels;
 using RtspRecServer.Server.Recording.TsAnalysis;
 using RtspRecServer.Shared;
 using Serilog;
@@ -128,7 +128,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
 {
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan InvalidDataTimeout = TimeSpan.FromSeconds(5);
-    private const int ReceiveBufferBytes = 8 * 1024 * 1024;
+    private readonly UdpReceiveHub _receiverHub = new();
 
     public async Task<RecordingResult> RecordAsync(
         RecordingTask task,
@@ -166,7 +166,11 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 EnsureOutputPath(outputPath);
             }
 
-            using var socket = CreateSocket(source);
+            var groupAddress = UdpEndpointReceiver.IsMulticast(source.GroupAddress) ? source.GroupAddress : null;
+            await using var subscription = _receiverHub.Subscribe(
+                groupAddress,
+                source.LocalAddress,
+                source.Port);
             await using var ownedFile = output is null
                 ? new FileStream(
                     outputPath,
@@ -178,17 +182,12 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 : null;
             await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 128 * 1024);
             var sink = output ?? buffered!;
-            var buffer = ArrayPool<byte>.Shared.Rent(65536);
             using var rtpReorder = source.IsRtp ? new RtpReorderBuffer() : null;
 
-            try
-            {
-                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var startedAt = DateTime.UtcNow;
                 var lastProgress = startedAt;
                 var validTsSeen = false;
-                var foreignGroupPackets = 0;
 
                 async Task WritePayloadAsync(ReadOnlyMemory<byte> payload, CancellationToken token)
                 {
@@ -228,14 +227,10 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 {
                     idleCts.CancelAfter(IdleTimeout);
 
-                    SocketReceiveMessageFromResult received;
+                    UdpDatagram datagram;
                     try
                     {
-                        received = await socket.ReceiveMessageFromAsync(
-                            buffer.AsMemory(0, buffer.Length),
-                            SocketFlags.None,
-                            remoteEndPoint,
-                            idleCts.Token);
+                        datagram = await subscription.Reader.ReadAsync(idleCts.Token);
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
@@ -248,68 +243,56 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     {
                         break;
                     }
-
-                    if (received.ReceivedBytes <= 0)
+                    catch (ChannelClosedException ex)
                     {
-                        continue;
+                        Log.Error(ex, "UDP 接收循环已停止: {Url}", task.Url);
+                        await FlushReorderedAsync();
+                        return Finish(false, ex.InnerException?.Message ?? "UDP 接收已停止", bytesWritten);
                     }
 
-                    var destination = received.PacketInformation.Address;
-                    if (!IsExpectedMulticastDestination(source.GroupAddress, destination))
+                    using (datagram)
                     {
-                        foreignGroupPackets++;
-                        if (foreignGroupPackets == 1)
+                        var datagramSpan = datagram.Payload.Span;
+                        if (!TryResolveTsPayload(
+                                datagramSpan,
+                                source.IsRtp,
+                                out var dataOffset,
+                                out var dataLength,
+                                out var rtpSequence))
                         {
-                            Log.Warning(
-                                "UDP 共享端口收到其他组播组数据，已忽略：期望 {ExpectedGroup}，实际 {ActualGroup}。地址: {Url}",
-                                source.GroupAddress,
-                                destination,
-                                task.Url);
-                        }
-
-                        continue;
-                    }
-
-                    var datagram = buffer.AsSpan(0, received.ReceivedBytes);
-                    if (!TryResolveTsPayload(
-                            datagram,
-                            source.IsRtp,
-                            out var dataOffset,
-                            out var dataLength,
-                            out var rtpSequence))
-                    {
-                        if (!validTsSeen && DateTime.UtcNow - startedAt > InvalidDataTimeout)
-                        {
-                            Log.Warning("UDP 直播源未返回有效的 MPEG-TS 数据: {Url}", task.Url);
-                            await FlushReorderedAsync();
-                            return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
-                        }
-
-                        continue;
-                    }
-
-                    validTsSeen = true;
-                    if (rtpSequence.HasValue && rtpReorder is not null)
-                    {
-                        var ready = rtpReorder.Push(
-                            rtpSequence.Value,
-                            buffer.AsSpan(dataOffset, dataLength),
-                            DateTime.UtcNow);
-                        foreach (var packet in ready)
-                        {
-                            try
+                            if (!validTsSeen && DateTime.UtcNow - startedAt > InvalidDataTimeout)
                             {
-                                await WritePayloadAsync(packet.Payload, cancellationToken);
+                                Log.Warning("UDP 直播源未返回有效的 MPEG-TS 数据: {Url}", task.Url);
+                                await FlushReorderedAsync();
+                                return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
                             }
-                            finally
+
+                            continue;
+                        }
+
+                        validTsSeen = true;
+                        if (rtpSequence.HasValue && rtpReorder is not null)
+                        {
+                            var ready = rtpReorder.Push(
+                                rtpSequence.Value,
+                                datagram.Payload.Span.Slice(dataOffset, dataLength),
+                                DateTime.UtcNow);
+                            foreach (var packet in ready)
                             {
-                                packet.Dispose();
+                                try
+                                {
+                                    await WritePayloadAsync(packet.Payload, cancellationToken);
+                                }
+                                finally
+                                {
+                                    packet.Dispose();
+                                }
                             }
                         }
-                    }
-                    else
-                    {
-                        await WritePayloadAsync(buffer.AsMemory(dataOffset, dataLength), cancellationToken);
+                        else
+                        {
+                            await WritePayloadAsync(datagram.Payload.Slice(dataOffset, dataLength), cancellationToken);
+                        }
                     }
                 }
 
@@ -317,11 +300,6 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 await sink.FlushAsync(CancellationToken.None);
                 onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
                 return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -333,87 +311,6 @@ public sealed class UdpLiveRecordingService : IRecordingService
             Log.Error(ex, "UDP 直播录制失败: {Url}", task.Url);
             return Finish(false, ex.Message, bytesWritten);
         }
-    }
-
-    internal static Socket CreateSocket(DirectUdpSource source)
-    {
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-        try
-        {
-            // IPTV 常见多个组播频道共用同一端口，多个录制任务需要同时绑定。
-            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-
-            try
-            {
-                // 共享端口时用目标地址过滤其他组播组，避免多路流混入同一 TS。
-                socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
-            }
-            catch (SocketException ex)
-            {
-                Log.Warning(ex, "启用 UDP 目标地址信息失败，共享端口上的其他组播组可能无法过滤");
-            }
-
-            try
-            {
-                socket.ReceiveBufferSize = ReceiveBufferBytes;
-            }
-            catch (SocketException ex)
-            {
-                Log.Warning(ex, "设置 UDP 接收缓冲区失败，将使用系统默认值");
-            }
-
-            var bindAddress = source.LocalAddress ?? IPAddress.Any;
-            try
-            {
-                socket.Bind(new IPEndPoint(bindAddress, source.Port));
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
-            {
-                throw new InvalidOperationException(
-                    $"UDP 端口 {source.Port} 已被其他程序占用，请关闭占用该端口的播放器或进程后重试",
-                    ex);
-            }
-
-            if (IsMulticast(source.GroupAddress))
-            {
-                var option = source.LocalAddress is null
-                    ? new MulticastOption(source.GroupAddress)
-                    : new MulticastOption(source.GroupAddress, source.LocalAddress);
-                socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, option);
-                Log.Information(
-                    "UDP 直播已加入组播组 {Group}:{Port}，本机地址: {LocalAddress}",
-                    source.GroupAddress,
-                    source.Port,
-                    source.LocalAddress?.ToString() ?? "默认");
-            }
-
-            return socket;
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
-    }
-
-    private static bool IsMulticast(IPAddress address)
-    {
-        var bytes = address.GetAddressBytes();
-        return bytes.Length == 4 && bytes[0] is >= 224 and <= 239;
-    }
-
-    internal static bool IsExpectedMulticastDestination(IPAddress group, IPAddress? destination)
-    {
-        if (!IsMulticast(group))
-        {
-            return true;
-        }
-
-        // 部分平台/配置拿不到目标地址，保留兼容行为；拿到时必须与当前组播组一致。
-        return destination is null ||
-               destination.Equals(IPAddress.Any) ||
-               destination.Equals(IPAddress.IPv6Any) ||
-               destination.Equals(group);
     }
 
     private static bool TryResolveTsPayload(

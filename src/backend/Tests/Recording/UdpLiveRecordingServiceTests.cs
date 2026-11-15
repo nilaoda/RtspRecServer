@@ -42,28 +42,34 @@ public class UdpLiveRecordingServiceTests
     }
 
     [Fact]
-    public void CreateSocket_AllowsMultipleChannelsOnSamePort()
+    public async Task UdpReceiveHub_AllowsMultipleSubscriptionsOnSamePort()
     {
         var port = GetFreeUdpPort();
-        var source = new DirectUdpSource(true, IPAddress.Loopback, port, null);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var hub = new UdpReceiveHub();
 
-        using var first = UdpLiveRecordingService.CreateSocket(source);
-        using var second = UdpLiveRecordingService.CreateSocket(source);
+        await using var first = hub.Subscribe(null, null, port, capacity: 8);
+        await using var second = hub.Subscribe(null, null, port, capacity: 8);
 
-        Assert.Equal(port, ((IPEndPoint)first.LocalEndPoint!).Port);
-        Assert.Equal(port, ((IPEndPoint)second.LocalEndPoint!).Port);
+        using var sender = new UdpClient(AddressFamily.InterNetwork);
+        await sender.SendAsync(new byte[] { 0x47, 1, 2 }, 3, new IPEndPoint(IPAddress.Loopback, port));
+
+        using var firstDatagram = await first.Reader.ReadAsync(cancellation.Token);
+        using var secondDatagram = await second.Reader.ReadAsync(cancellation.Token);
+        Assert.Equal(3, firstDatagram.Length);
+        Assert.Equal(3, secondDatagram.Length);
     }
 
     [Fact]
-    public void IsExpectedMulticastDestination_FiltersOtherGroupsOnSharedPort()
+    public void ShouldDeliver_FiltersByMulticastGroupAndSupportsUnicast()
     {
         var group = IPAddress.Parse("239.1.1.1");
 
-        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(group, group));
-        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(group, IPAddress.Any));
-        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(group, null));
-        Assert.False(UdpLiveRecordingService.IsExpectedMulticastDestination(group, IPAddress.Parse("239.1.1.2")));
-        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(IPAddress.Loopback, IPAddress.Parse("239.1.1.2")));
+        Assert.True(UdpEndpointReceiver.ShouldDeliver(group, group));
+        Assert.True(UdpEndpointReceiver.ShouldDeliver(group, IPAddress.Any));
+        Assert.False(UdpEndpointReceiver.ShouldDeliver(group, IPAddress.Parse("239.1.1.2")));
+        Assert.True(UdpEndpointReceiver.ShouldDeliver(null, IPAddress.Loopback));
+        Assert.False(UdpEndpointReceiver.ShouldDeliver(null, group));
     }
 
     [Theory]
