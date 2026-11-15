@@ -28,7 +28,6 @@ export function DateTimePicker({
   const [open, setOpen] = React.useState(false)
   const [isMobile, setIsMobile] = React.useState(false)
   const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(date)
-  const [portalContainer, setPortalContainer] = React.useState<HTMLDivElement | null>(null)
   const hourRef = React.useRef<HTMLUListElement>(null)
   const minuteRef = React.useRef<HTMLUListElement>(null)
   const secondRef = React.useRef<HTMLUListElement>(null)
@@ -127,8 +126,8 @@ export function DateTimePicker({
             <Clock className="mr-2 h-4 w-4" />
             时间选择
           </div>
-          <div className="flex h-[220px] divide-x relative sm:h-[300px]">
-            <ul ref={hourRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px] sm:py-[136px]">
+          <div className="flex h-[220px] divide-x relative">
+            <ul ref={hourRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px]">
               {Array.from({ length: 24 }, (_, i) => i).map((hour) => (
                 <li
                   key={hour}
@@ -144,7 +143,7 @@ export function DateTimePicker({
                 </li>
               ))}
             </ul>
-            <ul ref={minuteRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px] sm:py-[136px]">
+            <ul ref={minuteRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px]">
               {Array.from({ length: 60 }, (_, i) => i).map((minute) => (
                 <li
                   key={minute}
@@ -160,7 +159,7 @@ export function DateTimePicker({
                 </li>
               ))}
             </ul>
-            <ul ref={secondRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px] sm:py-[136px]">
+            <ul ref={secondRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px]">
               {Array.from({ length: 60 }, (_, i) => i).map((second) => (
                 <li
                   key={second}
@@ -213,8 +212,12 @@ export function DateTimePicker({
       <PopoverTrigger asChild>
         {triggerButton}
       </PopoverTrigger>
-      <div ref={setPortalContainer} />
-      <PopoverContent container={portalContainer} className="w-auto p-0" align="start">
+      <PopoverContent
+        className="w-auto max-h-[calc(100dvh-2rem)] overflow-y-auto p-0"
+        align="start"
+        sideOffset={4}
+        collisionPadding={16}
+      >
         {pickerContent}
       </PopoverContent>
     </Popover>
