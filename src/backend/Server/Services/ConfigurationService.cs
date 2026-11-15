@@ -226,6 +226,48 @@ public sealed class ConfigurationService
         }
     }
 
+    public ChannelBulkResult DeleteChannels(IReadOnlyCollection<int>? ids)
+    {
+        var requestedIds = (ids ?? [])
+            .Where(id => id >= 0)
+            .Distinct()
+            .ToArray();
+        if (requestedIds.Length == 0)
+        {
+            return new ChannelBulkResult();
+        }
+
+        _lock.EnterWriteLock();
+        try
+        {
+            var channels = File.Exists(_channelsPath)
+                ? JsonSerializer.Deserialize(File.ReadAllText(_channelsPath), RtspJsonContext.Default.ListChannelConfig) ?? new List<ChannelConfig>()
+                : new List<ChannelConfig>();
+            var existingIds = channels.Select(channel => channel.Id).ToHashSet();
+            var succeededIds = requestedIds.Where(existingIds.Contains).ToArray();
+            var failedIds = requestedIds.Where(id => !existingIds.Contains(id)).ToArray();
+
+            if (succeededIds.Length > 0)
+            {
+                var succeededSet = succeededIds.ToHashSet();
+                channels.RemoveAll(channel => succeededSet.Contains(channel.Id));
+                WriteJson(_channelsPath, channels);
+            }
+
+            return new ChannelBulkResult
+            {
+                Succeeded = succeededIds.Length,
+                Failed = failedIds.Length,
+                SucceededIds = succeededIds,
+                FailedIds = failedIds
+            };
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
     private static AppConfig DeserializeAppConfig(string json)
     {
         var config = JsonSerializer.Deserialize(json, RtspJsonContext.Default.AppConfig) ?? new AppConfig();

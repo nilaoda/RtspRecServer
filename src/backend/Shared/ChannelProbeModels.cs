@@ -5,6 +5,19 @@ public sealed record ChannelProbeRequest
     public int[] ChannelIds { get; init; } = [];
 }
 
+public sealed record ChannelBulkRequest
+{
+    public int[] ChannelIds { get; init; } = [];
+}
+
+public sealed record ChannelBulkResult
+{
+    public int Succeeded { get; init; }
+    public int Failed { get; init; }
+    public int[] SucceededIds { get; init; } = [];
+    public int[] FailedIds { get; init; } = [];
+}
+
 public sealed record ChannelProbeResult
 {
     public int ChannelId { get; init; }

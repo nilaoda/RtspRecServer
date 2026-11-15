@@ -7,7 +7,7 @@ import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save,
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import { getChannelProbes, probeChannels } from '../../services/api'
+import { deleteChannels, getChannelProbes, probeChannels } from '../../services/api'
 import type { ChannelProbeResult } from '../../types'
 import { formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
@@ -95,11 +95,13 @@ const probeErrorHint = (url: string) => {
 }
 
 const ChannelsPage = () => {
-  const { channels, addChannel, updateChannel, deleteChannel } = useAppContext()
+  const { channels, addChannel, updateChannel, deleteChannel, reloadChannels } = useAppContext()
   const [drafts, setDrafts] = useState<Record<number, { name: string; url: string }>>({})
   const [probes, setProbes] = useState<Record<number, ChannelProbeResult>>({})
   const [probingIds, setProbingIds] = useState<Set<number>>(() => new Set())
   const [detailChannelId, setDetailChannelId] = useState<number | null>(null)
+  const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(() => new Set())
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
 
   const form = useForm<ChannelFormValues>({
     resolver: zodResolver(channelSchema),
@@ -146,6 +148,53 @@ const ChannelsPage = () => {
     return { accessible, offline, idle }
   }, [channels, probes, probingIds])
 
+  const selectedChannels = useMemo(
+    () => channels.filter((channel) => selectedChannelIds.has(channel.id)),
+    [channels, selectedChannelIds],
+  )
+  const selectedCount = selectedChannels.length
+  const allSelected = channels.length > 0 && selectedCount === channels.length
+  const someSelected = selectedCount > 0 && !allSelected
+
+  const toggleChannelSelection = (id: number) => {
+    setSelectedChannelIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }
+
+  const toggleAllChannels = () => {
+    setSelectedChannelIds((previous) => {
+      if (allSelected) {
+        return new Set()
+      }
+      const next = new Set(previous)
+      channels.forEach((channel) => next.add(channel.id))
+      return next
+    })
+  }
+
+  useEffect(() => {
+    setSelectedChannelIds((previous) => {
+      const existing = new Set(channels.map((channel) => channel.id))
+      let changed = false
+      const next = new Set<number>()
+      for (const id of previous) {
+        if (existing.has(id)) {
+          next.add(id)
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : previous
+    })
+  }, [channels])
+
   const runProbe = useCallback(async (ids: number[]) => {
     if (ids.length === 0) {
       return
@@ -182,6 +231,43 @@ const ChannelsPage = () => {
       return
     }
     void runProbe(channels.map((channel) => channel.id))
+  }
+
+  const probeSelected = () => {
+    if (selectedCount === 0 || probingIds.size > 0) {
+      return
+    }
+    void runProbe([...selectedChannelIds])
+  }
+
+  const onBulkDelete = async () => {
+    const ids = [...selectedChannelIds]
+    setBulkDeleteOpen(false)
+    if (ids.length === 0) {
+      return
+    }
+
+    try {
+      const result = await deleteChannels(ids)
+      if (result.failed === 0) {
+        toast.success(`已删除 ${result.succeeded} 个频道`)
+      } else if (result.succeeded > 0) {
+        toast.info(`已删除 ${result.succeeded} 个频道，${result.failed} 个失败`)
+      } else {
+        toast.error('批量删除失败')
+      }
+
+      const succeededSet = new Set(result.succeededIds)
+      setSelectedChannelIds(new Set(result.failedIds))
+      setProbes((previous) => {
+        const next = { ...previous }
+        succeededSet.forEach((id) => delete next[id])
+        return next
+      })
+      await reloadChannels()
+    } catch {
+      toast.error('批量删除失败')
+    }
   }
 
   const selectedProbeChannel = channels.find((channel) => channel.id === detailChannelId)
@@ -302,10 +388,53 @@ const ChannelsPage = () => {
             </Button>
         </CardHeader>
         <CardContent className="p-0">
+            {selectedCount > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2">
+                    <span className="text-xs text-muted-foreground">
+                        已选 <span className="font-medium text-foreground">{selectedCount}</span> 个频道
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={probeSelected}
+                            disabled={probingIds.size > 0}
+                        >
+                            {probingIds.size > 0 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
+                            检测选中
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() => setBulkDeleteOpen(true)}
+                            disabled={probingIds.size > 0}
+                        >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            删除选中
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setSelectedChannelIds(new Set())}>
+                            取消选择
+                        </Button>
+                    </div>
+                </div>
+            )}
             <div className="rounded-md border-t">
                 <Table>
                     <TableHeader>
                         <TableRow>
+                            <TableHead className="w-[40px]">
+                                <input
+                                    type="checkbox"
+                                    className="h-4 w-4 accent-primary"
+                                    checked={allSelected}
+                                    ref={(input) => {
+                                        if (input) input.indeterminate = someSelected
+                                    }}
+                                    onChange={toggleAllChannels}
+                                    aria-label="全选频道"
+                                />
+                            </TableHead>
                             <TableHead className="w-[64px]">ID</TableHead>
                             <TableHead className="w-[230px]">名称</TableHead>
                             <TableHead className="w-[72px]">协议</TableHead>
@@ -317,7 +446,7 @@ const ChannelsPage = () => {
                     <TableBody>
                         {channels.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={6} className="h-24 text-center">
+                                <TableCell colSpan={7} className="h-24 text-center">
                                     暂无频道
                                 </TableCell>
                             </TableRow>
@@ -327,9 +456,19 @@ const ChannelsPage = () => {
                                 const hasChanged = draft.name !== channel.name || draft.url !== channel.url
                                 const probe = probes[channel.id]
                                 const checking = probingIds.has(channel.id)
+                                const selected = selectedChannelIds.has(channel.id)
                                 
                                 return (
-                                    <TableRow key={channel.id}>
+                                    <TableRow key={channel.id} className={selected ? 'bg-primary/5' : undefined}>
+                                        <TableCell className="py-2">
+                                            <input
+                                                type="checkbox"
+                                                className="h-4 w-4 accent-primary"
+                                                checked={selected}
+                                                onChange={() => toggleChannelSelection(channel.id)}
+                                                aria-label={`选择频道 ${channel.name}`}
+                                            />
+                                        </TableCell>
                                         <TableCell className="font-mono text-xs py-2">{channel.id}</TableCell>
                                         <TableCell className="py-2">
                                             <Input 
@@ -620,6 +759,26 @@ const ChannelsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认删除选中的频道？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除 {selectedCount} 个频道配置，可能会影响引用这些频道的任务。此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void onBulkDelete()}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              删除频道
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

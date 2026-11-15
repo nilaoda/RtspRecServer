@@ -2,6 +2,7 @@ import { toast } from 'sonner'
 import type {
   AppConfig,
   BulkTaskResult,
+  ChannelBulkResult,
   ChannelConfig,
   ChannelProbeResult,
   LogFileContent,
@@ -172,6 +173,13 @@ export const updateChannel = (id: number, payload: ChannelConfig) =>
 
 export const removeChannel = (id: number) =>
   fetchJson<{ message: string }>(`/api/channels/${id}`, { method: 'DELETE' })
+
+export const deleteChannels = (channelIds: number[]) =>
+  fetchJson<ChannelBulkResult>('/api/channels/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channelIds }),
+  })
 
 export const getRecordings = () => fetchJson<RecordingFileInfo[]>('/api/recordings', { silent: true })
 

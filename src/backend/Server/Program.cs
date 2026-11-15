@@ -212,6 +212,14 @@ try
             : Results.NotFound(ApiResponse.Create("频道不存在"));
     });
 
+    app.MapPost("/api/channels/bulk-delete", (
+        ConfigurationService service,
+        ChannelBulkRequest request) =>
+    {
+        var result = service.DeleteChannels(request.ChannelIds);
+        return Results.Ok(result);
+    });
+
     app.MapGet("/api/tasks", (RecordingManager manager) =>
     {
         var tasks = manager.GetAllTasks().Select(ToDto).ToList();

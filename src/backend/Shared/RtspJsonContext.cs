@@ -15,6 +15,8 @@ namespace RtspRecServer.Shared;
 [JsonSerializable(typeof(ChannelImportResult))]
 [JsonSerializable(typeof(ChannelProbeRequest))]
 [JsonSerializable(typeof(ChannelProbeResult))]
+[JsonSerializable(typeof(ChannelBulkRequest))]
+[JsonSerializable(typeof(ChannelBulkResult))]
 [JsonSerializable(typeof(List<ChannelProbeResult>))]
 [JsonSerializable(typeof(RecordingTask))]
 [JsonSerializable(typeof(RecordingTaskDto))]

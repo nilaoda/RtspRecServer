@@ -131,6 +131,30 @@ public class ConfigurationServiceTests
         }
     }
 
+    [Fact]
+    public void DeleteChannels_DeletesExistingChannelsAndReportsMissingIds()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var service = new ConfigurationService(directory);
+            var first = service.AddChannel(new ChannelConfig { Name = "CCTV-1", Url = "rtsp://example.com/1" });
+            var second = service.AddChannel(new ChannelConfig { Name = "CCTV-2", Url = "rtsp://example.com/2" });
+
+            var result = service.DeleteChannels([first.Id, second.Id, 9999]);
+
+            Assert.Equal(2, result.Succeeded);
+            Assert.Equal(1, result.Failed);
+            Assert.Equal([first.Id, second.Id], result.SucceededIds);
+            Assert.Equal([9999], result.FailedIds);
+            Assert.Empty(new ConfigurationService(directory).GetChannels());
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"rtsp-config-{Guid.NewGuid():N}");

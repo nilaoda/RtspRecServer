@@ -69,6 +69,13 @@ export type ChannelProbeResult = {
   elapsedSeconds: number
 }
 
+export type ChannelBulkResult = {
+  succeeded: number
+  failed: number
+  succeededIds: number[]
+  failedIds: number[]
+}
+
 export type BulkTaskResult = {
   succeeded: number
   failed: number
