@@ -43,8 +43,8 @@ namespace RtspRecServer.Server.Services.Epg
                 catch (Exception ex)
                 {
                     var logger = app.ServiceProvider.GetRequiredService<ILogger<IEpgService>>();
-                    logger.LogError(ex, $"获取频道节目单失败: {channelId}");
-                    return Results.Json(ApiResponse.Create("获取频道节目单失败"), RtspJsonContext.Default.ApiResponse, statusCode: 500);
+                    logger.LogError(ex, $"获取频道节目表失败: {channelId}");
+                    return Results.Json(ApiResponse.Create("获取频道节目表失败"), RtspJsonContext.Default.ApiResponse, statusCode: 500);
                 }
             });
 

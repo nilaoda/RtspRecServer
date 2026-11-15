@@ -28,7 +28,7 @@ const navItems = [
   { key: 'tasks', label: '任务管理', path: '/', icon: LayoutList },
   { key: 'channels', label: '频道配置', path: '/channels', icon: Tv },
   { key: 'recordings', label: '录制管理', path: '/recordings', icon: Video },
-  { key: 'epg', label: '节目单', path: '/epg', icon: CalendarDays },
+  { key: 'epg', label: '节目表', path: '/epg', icon: CalendarDays },
   { key: 'settings', label: '应用配置', path: '/settings', icon: Settings },
 ]
 

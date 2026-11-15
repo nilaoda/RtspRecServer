@@ -121,7 +121,7 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       await api.refreshEpgData()
       await loadAllData()
     } catch {
-      setError('节目单刷新失败')
+      setError('节目表刷新失败')
     } finally {
       setLoading(false)
     }

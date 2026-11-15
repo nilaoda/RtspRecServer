@@ -58,13 +58,13 @@ namespace RtspRecServer.Server.Services.Epg
             
             if (_cache.TryGetValue(cacheKey, out List<EpgProgram>? cachedPrograms) && cachedPrograms != null)
             {
-                _logger.LogDebug($"从缓存获取频道节目单: {channelId}");
+                _logger.LogDebug($"从缓存获取频道节目表: {channelId}");
                 return cachedPrograms;
             }
 
             var programs = await _innerService.GetChannelProgramsAsync(channelId);
             
-            // 节目信息缓存时间较短（5分钟），因为节目单会频繁变化
+            // 节目信息缓存时间较短（5分钟），因为节目表会频繁变化
             var programCacheOptions = new MemoryCacheEntryOptions
             {
                 SlidingExpiration = TimeSpan.FromMinutes(5),
@@ -73,7 +73,7 @@ namespace RtspRecServer.Server.Services.Epg
             
             _cache.Set(cacheKey, programs, programCacheOptions);
             
-            _logger.LogDebug($"缓存频道节目单: {channelId}，共{programs.Count}个节目");
+            _logger.LogDebug($"缓存频道节目表: {channelId}，共{programs.Count}个节目");
             return programs;
         }
 
@@ -160,7 +160,7 @@ namespace RtspRecServer.Server.Services.Epg
                 _cache.Remove(key);
             }
 
-            // 清除频道节目单缓存（需要清除所有频道的缓存）
+            // 清除频道节目表缓存（需要清除所有频道的缓存）
             if (_cache.TryGetValue("epg_all_channels", out List<EpgChannel>? channels) && channels != null)
             {
                 foreach (var channel in channels)

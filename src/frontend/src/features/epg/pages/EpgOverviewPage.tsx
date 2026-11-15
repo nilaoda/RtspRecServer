@@ -18,7 +18,7 @@ export default function EpgOverviewPage() {
   const { channels, currentPrograms, loading, now } = useEpgContext()
 
   if (loading && channels.length === 0) {
-    return <Loading tip="正在加载节目单数据..." />
+    return <Loading tip="正在加载节目表数据..." />
   }
 
   const getChannelCurrentProgram = (channelId: string) => {
@@ -29,7 +29,7 @@ export default function EpgOverviewPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-2">
           <PlayCircle className="h-6 w-6 text-primary" />
-          <h3 className="text-2xl font-semibold tracking-tight">EPG 实时节目单</h3>
+          <h3 className="text-2xl font-semibold tracking-tight">EPG 实时节目表</h3>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">

@@ -26,7 +26,7 @@ export const EpgLayout: React.FC = () => {
       <div className="flex justify-between items-center flex-shrink-0">
         <h2 className="text-2xl font-semibold flex items-center gap-2">
           <CalendarDays className="h-6 w-6" />
-          电子节目单
+          电子节目表
         </h2>
         <div className="flex gap-2">
           {isDetailPage ? (
@@ -42,14 +42,14 @@ export const EpgLayout: React.FC = () => {
               <AlertDialogTrigger asChild>
                 <Button disabled={loading}>
                     <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                    刷新节目单
+                    刷新节目表
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>刷新节目单</AlertDialogTitle>
+                  <AlertDialogTitle>刷新节目表</AlertDialogTitle>
                   <AlertDialogDescription>
-                    更新节目单需要从远程服务器下载并解析大量数据，请尽量不要频繁操作。确定要继续吗？
+                    更新节目表需要从远程服务器下载并解析大量数据，请尽量不要频繁操作。确定要继续吗？
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -67,7 +67,7 @@ export const EpgLayout: React.FC = () => {
              <div className="absolute inset-0 bg-background/50 z-50 flex items-center justify-center">
                  <div className="flex flex-col items-center gap-2">
                     <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-                    <span className="text-sm font-medium">节目单更新中...</span>
+                    <span className="text-sm font-medium">节目表更新中...</span>
                  </div>
              </div>
         )}

@@ -159,7 +159,7 @@ export default function EpgChannelPage() {
                 <div className="p-4 border-b bg-background flex justify-between items-center sticky top-0 z-10">
                     <div className="flex items-center gap-2 font-medium">
                         <Clock className="h-4 w-4 text-muted-foreground" />
-                        <span>节目单</span>
+                        <span>节目表</span>
                     </div>
                     <ToggleGroup type="single" value={selectedDate} onValueChange={(val) => val && setSelectedDate(val)}>
                         {dateOptions.map(option => (
@@ -172,7 +172,7 @@ export default function EpgChannelPage() {
 
                 <div className="flex-1 overflow-y-auto p-4 relative">
                     {loadingPrograms ? (
-                        <Loading tip="加载节目单..." />
+                        <Loading tip="加载节目表..." />
                     ) : filteredPrograms.length > 0 ? (
                         <div className="space-y-4 relative ml-4 border-l pl-4 py-2">
                             {filteredPrograms.map((program) => {
@@ -234,7 +234,7 @@ export default function EpgChannelPage() {
                         </div>
                     ) : (
                         <div className="h-full flex items-center justify-center text-muted-foreground">
-                            该频道暂无节目单信息
+                            该频道暂无节目表信息
                         </div>
                     )}
                 </div>

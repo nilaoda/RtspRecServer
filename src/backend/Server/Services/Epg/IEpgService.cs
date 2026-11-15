@@ -6,7 +6,7 @@ using RtspRecServer.Shared;
 namespace RtspRecServer.Server.Services.Epg
 {
     /// <summary>
-    /// EPG（电子节目单）服务接口
+    /// EPG（电子节目表）服务接口
     /// </summary>
     public interface IEpgService
     {
@@ -16,7 +16,7 @@ namespace RtspRecServer.Server.Services.Epg
         Task<List<EpgChannel>> GetChannelsAsync();
         
         /// <summary>
-        /// 获取频道节目单
+        /// 获取频道节目表
         /// </summary>
         Task<List<EpgProgram>> GetChannelProgramsAsync(string channelId);
         
