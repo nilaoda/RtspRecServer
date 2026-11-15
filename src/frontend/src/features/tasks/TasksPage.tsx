@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -298,7 +298,6 @@ const TasksPage = () => {
   const { tasks, channels, createTask, stopTask, updateTaskEndTime, deleteTask, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
-  const comboboxPortalRef = useRef<HTMLDivElement>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [openCombobox, setOpenCombobox] = useState(false)
   const [activeTab, setActiveTab] = useState<TaskTab>('active')
@@ -1134,7 +1133,7 @@ const TasksPage = () => {
       </AlertDialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-[500px]">
             <DialogHeader>
                 <DialogTitle>新建录制任务</DialogTitle>
                 <DialogDescription>
@@ -1156,21 +1155,27 @@ const TasksPage = () => {
                                                 variant="outline"
                                                 role="combobox"
                                                 className={cn(
-                                                    "w-full justify-between",
+                                                    "w-full min-w-0 justify-between",
                                                     !field.value && "text-muted-foreground"
                                                 )}
                                             >
-                                                {field.value
-                                                    ? channels.find(
-                                                        (channel) => String(channel.id) === field.value
-                                                    )?.name
-                                                    : "选择频道..."}
+                                                <span className="truncate">
+                                                    {field.value
+                                                        ? channels.find(
+                                                            (channel) => String(channel.id) === field.value
+                                                        )?.name
+                                                        : "选择频道..."}
+                                                </span>
                                                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                                             </Button>
                                         </FormControl>
                                     </PopoverTrigger>
-                                    <div ref={comboboxPortalRef} />
-                                    <PopoverContent container={comboboxPortalRef.current} className="w-[460px] p-0">
+                                    <PopoverContent
+                                        className="w-[var(--radix-popover-trigger-width)] p-0"
+                                        align="start"
+                                        sideOffset={4}
+                                        collisionPadding={16}
+                                    >
                                         <Command>
                                             <CommandInput placeholder="搜索频道..." />
                                             <CommandList>
@@ -1180,6 +1185,7 @@ const TasksPage = () => {
                                                         <CommandItem
                                                             value={`${channel.id} ${channel.name}`}
                                                             key={channel.id}
+                                                            className="gap-2"
                                                             onSelect={() => {
                                                                 form.setValue("channelId", String(channel.id))
                                                                 setOpenCombobox(false)
@@ -1187,13 +1193,13 @@ const TasksPage = () => {
                                                         >
                                                             <Check
                                                                 className={cn(
-                                                                    "mr-2 h-4 w-4",
+                                                                    "mr-2 h-4 w-4 shrink-0",
                                                                     channel.id.toString() === field.value
                                                                         ? "opacity-100"
                                                                         : "opacity-0"
                                                                 )}
                                                             />
-                                                            {channel.id} - {channel.name}
+                                                            <span className="truncate">{channel.id} - {channel.name}</span>
                                                         </CommandItem>
                                                     ))}
                                                 </CommandGroup>
@@ -1205,7 +1211,7 @@ const TasksPage = () => {
                             </FormItem>
                         )}
                     />
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <FormField
                             control={form.control}
                             name="startTime"
@@ -1245,7 +1251,7 @@ const TasksPage = () => {
                             </FormItem>
                         )}
                     />
-                    <DialogFooter>
+                    <DialogFooter className="gap-2 sm:gap-0">
                         <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
                         <Button type="submit">提交任务</Button>
                     </DialogFooter>
@@ -1255,7 +1261,7 @@ const TasksPage = () => {
       </Dialog>
 
       <Dialog open={endTimeEditOpen.isOpen} onOpenChange={(open) => !open && setEndTimeEditOpen({ isOpen: false, taskId: null })}>
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-[420px]">
           <DialogHeader>
             <DialogTitle>修改结束时间</DialogTitle>
             <DialogDescription>
@@ -1288,7 +1294,7 @@ const TasksPage = () => {
               </div>
             </div>
             <DateTimePicker date={editingEndTime} setDate={setEditingEndTime} />
-            <DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0">
               <Button type="button" variant="outline" onClick={() => setEndTimeEditOpen({ isOpen: false, taskId: null })}>取消</Button>
               <Button type="button" onClick={onSaveEndTime} disabled={savingEndTime}>
                 {savingEndTime ? '保存中...' : '保存'}
@@ -1299,7 +1305,7 @@ const TasksPage = () => {
       </Dialog>
 
       <Dialog open={Boolean(infoModal)} onOpenChange={(open) => !open && setInfoModal(null)}>
-        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+        <DialogContent className="max-h-[85dvh] max-w-[calc(100vw-2rem)] flex flex-col sm:max-w-3xl">
             <DialogHeader>
                 <DialogTitle>{infoModal?.title}</DialogTitle>
             </DialogHeader>

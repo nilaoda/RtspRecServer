@@ -101,12 +101,14 @@ export function DateTimePicker({
     <Button
       variant={"outline"}
       className={cn(
-        "w-full justify-start text-left font-normal",
+        "w-full min-w-0 justify-start text-left font-normal",
         !date && "text-muted-foreground"
       )}
     >
-      <CalendarIcon className="mr-2 h-4 w-4" />
-      {date ? format(date, "yyyy-MM-dd HH:mm:ss", { locale: zhCN }) : <span>选择日期和时间</span>}
+      <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
+      {date
+        ? <span className="truncate">{format(date, "yyyy-MM-dd HH:mm:ss", { locale: zhCN })}</span>
+        : <span className="truncate">选择日期和时间</span>}
     </Button>
   )
 
@@ -125,8 +127,8 @@ export function DateTimePicker({
             <Clock className="mr-2 h-4 w-4" />
             时间选择
           </div>
-          <div className="flex h-[300px] divide-x relative">
-            <ul ref={hourRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[136px]">
+          <div className="flex h-[220px] divide-x relative sm:h-[300px]">
+            <ul ref={hourRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px] sm:py-[136px]">
               {Array.from({ length: 24 }, (_, i) => i).map((hour) => (
                 <li
                   key={hour}
@@ -142,7 +144,7 @@ export function DateTimePicker({
                 </li>
               ))}
             </ul>
-            <ul ref={minuteRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[136px]">
+            <ul ref={minuteRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px] sm:py-[136px]">
               {Array.from({ length: 60 }, (_, i) => i).map((minute) => (
                 <li
                   key={minute}
@@ -158,7 +160,7 @@ export function DateTimePicker({
                 </li>
               ))}
             </ul>
-            <ul ref={secondRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[136px]">
+            <ul ref={secondRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px] sm:py-[136px]">
               {Array.from({ length: 60 }, (_, i) => i).map((second) => (
                 <li
                   key={second}
@@ -194,7 +196,7 @@ export function DateTimePicker({
         <DialogTrigger asChild>
           {triggerButton}
         </DialogTrigger>
-        <DialogContent className="max-w-[95vw] max-h-[90vh] p-0 overflow-hidden">
+        <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] p-0 overflow-hidden">
           <DialogHeader className="px-4 pt-4">
             <DialogTitle>选择日期和时间</DialogTitle>
           </DialogHeader>
