@@ -314,6 +314,18 @@ try
         return Results.File(task.FilePath, "application/octet-stream", fileName);
     });
 
+    app.MapGet("/api/tasks/{id:long}/download/{fileName}", (RecordingManager manager, long id, string fileName) =>
+    {
+        var task = manager.GetTask(id);
+        if (task?.FilePath is null || !File.Exists(task.FilePath))
+        {
+            return Results.NotFound(ApiResponse.Create("录制文件不存在"));
+        }
+
+        var actualFileName = Path.GetFileName(task.FilePath);
+        return Results.File(task.FilePath, "application/octet-stream", actualFileName);
+    });
+
     app.MapGet("/api/tasks/{id:long}/mediainfo", async (RecordingManager manager, long id) =>
     {
         var task = manager.GetTask(id);

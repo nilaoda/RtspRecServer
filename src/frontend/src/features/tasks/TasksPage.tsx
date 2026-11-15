@@ -221,6 +221,19 @@ const getTaskDisplay = (task: RecordingTaskDto, nowMs: number): TaskDisplay => {
   }
 }
 
+const getTaskDownloadFileName = (task: RecordingTaskDto) => {
+  const pathName = task.filePath?.split(/[\\/]/).pop()
+  if (pathName) {
+    return pathName
+  }
+
+  const taskName = task.taskName.trim() || `task-${task.id}`
+  return taskName.toLowerCase().endsWith('.ts') ? taskName : `${taskName}.ts`
+}
+
+const getTaskDownloadUrl = (task: RecordingTaskDto) =>
+  `/api/tasks/${task.id}/download/${encodeURIComponent(getTaskDownloadFileName(task))}`
+
 const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
   <Badge variant={statusVariant[status]} className={cn(
     "whitespace-nowrap",
@@ -677,7 +690,7 @@ const TasksPage = () => {
               <Info className="h-4 w-4" />
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-              <a href={`/api/tasks/${task.id}/download`} target="_blank" rel="noreferrer" aria-label="下载文件" title="下载文件">
+              <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer" aria-label="下载文件" title="下载文件">
                 <Download className="h-4 w-4" />
               </a>
             </Button>
@@ -1064,7 +1077,7 @@ const TasksPage = () => {
                                                         <Tooltip>
                                                             <TooltipTrigger asChild>
                                                                 <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                                                                    <a href={`/api/tasks/${task.id}/download`} target="_blank" rel="noreferrer">
+                                                                    <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer">
                                                                         <Download className="h-4 w-4" />
                                                                         <span className="sr-only">Download</span>
                                                                     </a>
