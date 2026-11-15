@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -297,6 +297,7 @@ const TasksPage = () => {
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [openCombobox, setOpenCombobox] = useState(false)
+  const comboboxListRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState<TaskTab>('active')
   const [page, setPage] = useState(1)
 
@@ -355,6 +356,38 @@ const TasksPage = () => {
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages))
   }, [totalPages])
+
+  useEffect(() => {
+    if (!openCombobox) {
+      return
+    }
+
+    let list: HTMLDivElement | null = null
+    const handleWheel = (event: WheelEvent) => {
+      if (!list || event.deltaY === 0) {
+        return
+      }
+
+      const maxScrollTop = list.scrollHeight - list.clientHeight
+      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, list.scrollTop + event.deltaY))
+      if (nextScrollTop === list.scrollTop) {
+        return
+      }
+
+      event.preventDefault()
+      list.scrollTop = nextScrollTop
+    }
+
+    const timer = window.setTimeout(() => {
+      list = comboboxListRef.current
+      list?.addEventListener("wheel", handleWheel, { passive: false })
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+      list?.removeEventListener("wheel", handleWheel)
+    }
+  }, [openCombobox])
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [stopConfirmOpen, setStopConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
@@ -1188,7 +1221,7 @@ const TasksPage = () => {
                                     >
                                         <Command>
                                             <CommandInput placeholder="搜索频道..." />
-                                            <CommandList>
+                                            <CommandList ref={comboboxListRef}>
                                                 <CommandEmpty>未找到频道</CommandEmpty>
                                                 <CommandGroup>
                                                     {channels.map((channel) => (
