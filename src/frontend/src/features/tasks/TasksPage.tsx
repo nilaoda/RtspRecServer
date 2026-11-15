@@ -468,15 +468,21 @@ const TasksPage = () => {
       event.preventDefault()
       list.scrollTop = nextScrollTop
     }
+    // Dialog 的滚动锁定会在 document 层拦截弹窗外的 touchmove，阻断冒泡以保留原生触摸滚动
+    const handleTouchMove = (event: TouchEvent) => {
+      event.stopPropagation()
+    }
 
     const timer = window.setTimeout(() => {
       list = comboboxListRef.current
       list?.addEventListener("wheel", handleWheel, { passive: false })
+      list?.addEventListener("touchmove", handleTouchMove, { passive: false })
     }, 0)
 
     return () => {
       window.clearTimeout(timer)
       list?.removeEventListener("wheel", handleWheel)
+      list?.removeEventListener("touchmove", handleTouchMove)
     }
   }, [openCombobox])
 
@@ -1477,6 +1483,12 @@ const TasksPage = () => {
                                         align="start"
                                         sideOffset={4}
                                         collisionPadding={16}
+                                        onOpenAutoFocus={(event) => {
+                                            // 触屏设备不自动聚焦搜索框，避免每次打开都弹出软键盘
+                                            if (window.matchMedia("(pointer: coarse)").matches) {
+                                                event.preventDefault()
+                                            }
+                                        }}
                                     >
                                         <Command>
                                             <CommandInput placeholder="搜索频道..." />
