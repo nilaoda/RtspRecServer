@@ -111,7 +111,7 @@ const SettingsPage = () => {
                         </SelectContent>
                       </Select>
                       <FormDescription>
-                        默认使用 MP2T/TCP。
+                        仅对 RTSP 回放录制生效；udpxy 直播源不使用该设置。
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

@@ -28,6 +28,7 @@ export type AppContextValue = {
     taskName: string | null
   }) => Promise<void>
   stopTask: (id: number) => Promise<void>
+  updateTaskEndTime: (id: number, endTime: string) => Promise<boolean>
   deleteTask: (id: number) => Promise<void>
   addChannel: (payload: { name: string; url: string }) => Promise<void>
   updateChannel: (payload: ChannelConfig) => Promise<void>

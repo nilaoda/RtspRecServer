@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw } from 'lucide-react'
+import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw, CalendarClock } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -131,7 +131,7 @@ const taskSchema = z.object({
 type TaskFormValues = z.infer<typeof taskSchema>
 
 const TasksPage = () => {
-  const { tasks, channels, createTask, stopTask, deleteTask, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
+  const { tasks, channels, createTask, stopTask, updateTaskEndTime, deleteTask, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const comboboxPortalRef = useRef<HTMLDivElement>(null)
@@ -147,6 +147,9 @@ const TasksPage = () => {
   const [stopConfirmOpen, setStopConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [retryConfirmOpen, setRetryConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
+  const [endTimeEditOpen, setEndTimeEditOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
+  const [editingEndTime, setEditingEndTime] = useState<Date | undefined>(undefined)
+  const [savingEndTime, setSavingEndTime] = useState(false)
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskSchema),
@@ -235,6 +238,39 @@ const TasksPage = () => {
     [getTaskMediaInfo],
   )
 
+  const openEndTimeEditor = useCallback((id: number, endTime: string) => {
+    setEditingEndTime(new Date(endTime))
+    setEndTimeEditOpen({ isOpen: true, taskId: id })
+  }, [])
+
+  const onSaveEndTime = async () => {
+    if (!endTimeEditOpen.taskId || !editingEndTime || savingEndTime) {
+      return
+    }
+
+    if (editingEndTime.getTime() <= Date.now()) {
+      toast.error('结束时间必须晚于当前时间')
+      return
+    }
+
+    setSavingEndTime(true)
+    try {
+      const saved = await updateTaskEndTime(endTimeEditOpen.taskId, editingEndTime.toISOString())
+      if (saved) {
+        setEndTimeEditOpen({ isOpen: false, taskId: null })
+      }
+    } finally {
+      setSavingEndTime(false)
+    }
+  }
+
+  const addEndTimeMinutes = (minutes: number) => {
+    setEditingEndTime((current) => {
+      const base = current && current.getTime() > Date.now() ? current : new Date()
+      return new Date(base.getTime() + minutes * 60 * 1000)
+    })
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -291,7 +327,9 @@ const TasksPage = () => {
                             
                             const recordedDuration = task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0
                                 ? task.pcrElapsedSeconds * 1000
-                                : 0
+                                : (Number.isFinite(startedAt)
+                                    ? Math.max(0, (normalizedStatus === 'Recording' ? nowMs : Number.isFinite(finishedAt) ? finishedAt : nowMs) - startedAt)
+                                    : 0)
 
                             const progress = normalizedStatus === 'Pending' ? 0
                                 : normalizedStatus === 'Completed' ? 100
@@ -311,6 +349,7 @@ const TasksPage = () => {
                             }
 
                             const showInfoActions = ['Completed', 'Failed', 'Stopped'].includes(normalizedStatus)
+                            const canEditEndTime = task.isLive && (normalizedStatus === 'Pending' || normalizedStatus === 'Recording')
                             const canRetry = normalizedStatus === 'Failed' || normalizedStatus === 'Stopped'
 
                             return (
@@ -332,8 +371,11 @@ const TasksPage = () => {
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="truncate max-w-full text-sm text-muted-foreground" title={`${task.channelId} - ${task.channelName}`}>
-                                            {task.channelId} - {task.channelName}
+                                        <div className="flex items-center gap-1 min-w-0 text-sm text-muted-foreground" title={`${task.channelId} - ${task.channelName}`}>
+                                            <span className="truncate">{task.channelId} - {task.channelName}</span>
+                                            {task.isLive && (
+                                                <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0">直播</Badge>
+                                            )}
                                         </div>
                                     </TableCell>
                                     <TableCell>
@@ -364,6 +406,26 @@ const TasksPage = () => {
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-1">
+                                            {canEditEndTime && (
+                                                <TooltipProvider>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-8 w-8"
+                                                                onClick={() => openEndTimeEditor(task.id, task.endTime)}
+                                                            >
+                                                                <CalendarClock className="h-4 w-4" />
+                                                                <span className="sr-only">修改结束时间</span>
+                                                            </Button>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent>
+                                                            <p>修改结束时间</p>
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                </TooltipProvider>
+                                            )}
                                             {normalizedStatus === 'Recording' && (
                                                 <TooltipProvider>
                                                     <Tooltip>
@@ -704,6 +766,50 @@ const TasksPage = () => {
                     </DialogFooter>
                 </form>
             </Form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={endTimeEditOpen.isOpen} onOpenChange={(open) => !open && setEndTimeEditOpen({ isOpen: false, taskId: null })}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>修改结束时间</DialogTitle>
+            <DialogDescription>
+              直播录制中延长会继续写入当前文件，缩短会按新时间停止。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm text-muted-foreground">
+              原结束时间：
+              {(() => {
+                const currentTask = tasks.find((item) => item.id === endTimeEditOpen.taskId)
+                return currentTask ? formatDateTime(new Date(currentTask.endTime)) : '--'
+              })()}
+            </div>
+            <div className="space-y-2">
+              <div className="text-xs text-muted-foreground">快捷延长</div>
+              <div className="flex flex-wrap gap-2">
+                {[5, 10, 30, 60].map((minutes) => (
+                  <Button
+                    key={minutes}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={savingEndTime}
+                    onClick={() => addEndTimeMinutes(minutes)}
+                  >
+                    +{minutes < 60 ? `${minutes} 分钟` : `${minutes / 60} 小时`}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <DateTimePicker date={editingEndTime} setDate={setEditingEndTime} />
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEndTimeEditOpen({ isOpen: false, taskId: null })}>取消</Button>
+              <Button type="button" onClick={onSaveEndTime} disabled={savingEndTime}>
+                {savingEndTime ? '保存中...' : '保存'}
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 

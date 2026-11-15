@@ -16,6 +16,7 @@ import {
   stopTask,
   updateChannel,
   updateConfig,
+  updateTaskEndTime as updateTaskEndTimeApi,
 } from '../services/api'
 import { connectWebSocket } from '../services/ws'
 import { AppContext, type AppContextValue } from './context'
@@ -234,6 +235,20 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifySuccess, reloadTasks],
   )
 
+  const updateTaskEndTimeAction = useCallback(
+    async (id: number, endTime: string) => {
+      try {
+        const updated = await updateTaskEndTimeApi(id, endTime)
+        setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, endTime: updated.endTime } : task)))
+        notifySuccess('结束时间已更新')
+        return true
+      } catch {
+        return false
+      }
+    },
+    [notifySuccess],
+  )
+
   const deleteTaskAction = useCallback(
     async (id: number) => {
       try {
@@ -361,6 +376,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadConfig,
       createTask: createTaskAction,
       stopTask: stopTaskAction,
+      updateTaskEndTime: updateTaskEndTimeAction,
       deleteTask: deleteTaskAction,
       addChannel: addChannelAction,
       updateChannel: updateChannelAction,
@@ -388,6 +404,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadConfig,
       createTaskAction,
       stopTaskAction,
+      updateTaskEndTimeAction,
       deleteTaskAction,
       addChannelAction,
       updateChannelAction,

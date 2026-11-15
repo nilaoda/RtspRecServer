@@ -101,6 +101,13 @@ export const createTask = (payload: {
 export const stopTask = (id: number) =>
   fetchJson<{ message: string }>(`/api/tasks/${id}/stop`, { method: 'POST' })
 
+export const updateTaskEndTime = (id: number, endTime: string) =>
+  fetchJson<RecordingTaskDto>(`/api/tasks/${id}/end-time`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endTime }),
+  })
+
 export const deleteTask = (id: number) =>
   fetchJson<{ message: string }>(`/api/tasks/${id}`, { method: 'DELETE' })
 

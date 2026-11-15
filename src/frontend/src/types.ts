@@ -13,6 +13,7 @@ export type RecordingTaskDto = {
   channelName: string
   taskName: string
   displayName: string
+  isLive: boolean
   startTime: string
   endTime: string
   status: RecordingStatus
