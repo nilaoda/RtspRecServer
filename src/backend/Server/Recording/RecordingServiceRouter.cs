@@ -6,13 +6,16 @@ public sealed class RecordingServiceRouter : IRecordingService
 {
     private readonly RtspRecordingService _rtspRecordingService;
     private readonly HttpLiveRecordingService _httpLiveRecordingService;
+    private readonly UdpLiveRecordingService _udpLiveRecordingService;
 
     public RecordingServiceRouter(
         RtspRecordingService rtspRecordingService,
-        HttpLiveRecordingService httpLiveRecordingService)
+        HttpLiveRecordingService httpLiveRecordingService,
+        UdpLiveRecordingService udpLiveRecordingService)
     {
         _rtspRecordingService = rtspRecordingService;
         _httpLiveRecordingService = httpLiveRecordingService;
+        _udpLiveRecordingService = udpLiveRecordingService;
     }
 
     public Task<RecordingResult> RecordAsync(
@@ -31,10 +34,16 @@ public sealed class RecordingServiceRouter : IRecordingService
                     task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken);
             }
 
+            if (LiveSourceClassifier.IsDirectLive(task.Url))
+            {
+                return _udpLiveRecordingService.RecordAsync(
+                    task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken);
+            }
+
             return Task.FromResult(new RecordingResult
             {
                 Success = false,
-                ErrorMessage = "当前版本暂不支持该直播源，请使用 udpxy HTTP 地址",
+                ErrorMessage = "当前版本不支持该直播源协议",
                 OutputPath = outputPath
             });
         }

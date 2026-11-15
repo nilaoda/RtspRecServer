@@ -58,6 +58,7 @@ try
     builder.Services.AddSingleton<RecordingTaskStore>();
     builder.Services.AddSingleton<RtspRecordingService>();
     builder.Services.AddSingleton<HttpLiveRecordingService>();
+    builder.Services.AddSingleton<UdpLiveRecordingService>();
     builder.Services.AddSingleton<IRecordingService, RecordingServiceRouter>();
     builder.Services.AddSingleton<WebSocketConnectionManager>();
     builder.Services.AddSingleton<IRecordingNotifier, WebSocketRecordingNotifier>();

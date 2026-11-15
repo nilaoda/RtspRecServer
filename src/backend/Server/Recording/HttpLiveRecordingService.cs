@@ -82,7 +82,7 @@ public sealed class HttpLiveRecordingService : IRecordingService
                     if (firstChunk)
                     {
                         firstChunk = false;
-                        if (!LooksLikeMpegTs(buffer.AsSpan(0, read)))
+                        if (!MpegTsValidator.LooksLikeMpegTs(buffer.AsSpan(0, read)))
                         {
                             return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
                         }
@@ -120,24 +120,6 @@ public sealed class HttpLiveRecordingService : IRecordingService
             Log.Error(ex, "HTTP 直播录制失败: {Url}", task.Url);
             return Finish(false, ex.Message, bytesWritten);
         }
-    }
-
-    private static bool LooksLikeMpegTs(ReadOnlySpan<byte> data)
-    {
-        if (data.Length < 564)
-        {
-            return true;
-        }
-
-        for (var offset = 0; offset <= 188 && offset + 188 < data.Length; offset++)
-        {
-            if (data[offset] == 0x47 && data[offset + 188] == 0x47)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static HttpClient CreateHttpClient()

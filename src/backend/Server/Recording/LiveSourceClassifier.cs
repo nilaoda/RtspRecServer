@@ -10,8 +10,7 @@ internal static class LiveSourceClassifier
         }
 
         var value = url.Trim();
-        if (value.StartsWith("rtp://", StringComparison.OrdinalIgnoreCase) ||
-            value.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+        if (IsDirectLive(value))
         {
             return true;
         }
@@ -25,6 +24,18 @@ internal static class LiveSourceClassifier
         }
 
         return false;
+    }
+
+    public static bool IsDirectLive(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        var value = url.Trim();
+        return value.StartsWith("rtp://", StringComparison.OrdinalIgnoreCase) ||
+               value.StartsWith("udp://", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsHttpLive(string url)

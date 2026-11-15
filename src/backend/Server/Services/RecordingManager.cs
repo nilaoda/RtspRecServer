@@ -97,10 +97,6 @@ public sealed class RecordingManager
         }
 
         var isLive = LiveSourceClassifier.IsLive(channel.Url);
-        if (isLive && !LiveSourceClassifier.IsHttpLive(channel.Url))
-        {
-            throw new InvalidOperationException("当前版本仅支持 udpxy HTTP 直播源");
-        }
 
         var suffix = $"{channel.Name}_{request.StartTime.ToLocalTime():yyyyMMddHHmmss}_{request.EndTime.ToLocalTime():yyyyMMddHHmmss}";
         var baseName = string.IsNullOrWhiteSpace(request.TaskName)

@@ -27,6 +27,16 @@ public class LiveSourceClassifierTests
     }
 
     [Theory]
+    [InlineData("rtp://239.1.1.1:8000", true)]
+    [InlineData("udp://@239.1.1.1:8000", true)]
+    [InlineData("http://host/rtp/239.1.1.1:8000", false)]
+    [InlineData("rtsp://host/live", false)]
+    public void IsDirectLive_RequiresRtpOrUdpScheme(string url, bool expected)
+    {
+        Assert.Equal(expected, LiveSourceClassifier.IsDirectLive(url));
+    }
+
+    [Theory]
     [InlineData("http://host/rtp/239.1.1.1:8000", true)]
     [InlineData("https://host/udp/239.1.1.1:8000", true)]
     [InlineData("  http://host/rtp/239.1.1.1:8000  ", true)]
