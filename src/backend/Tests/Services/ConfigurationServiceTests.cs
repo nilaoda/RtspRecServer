@@ -41,6 +41,53 @@ public class ConfigurationServiceTests
     }
 
     [Fact]
+    public void GetAppConfig_MissingWriteRecordingLog_DefaultsToTrue()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "recsettings.json"), "{\"maxRecordingTasks\":2}");
+            var service = new ConfigurationService(directory);
+
+            Assert.True(service.GetAppConfig().WriteRecordingLog);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void UpdateAppConfig_PersistsRecordingLogSwitch()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var service = new ConfigurationService(directory);
+            var updated = service.UpdateAppConfig(new AppConfigUpdateRequest
+            {
+                MaxRecordingTasks = 2,
+                RecordingTransport = "MP2T/RTP/TCP",
+                WriteRecordingLog = false
+            });
+
+            Assert.False(updated.WriteRecordingLog);
+            Assert.False(new ConfigurationService(directory).GetAppConfig().WriteRecordingLog);
+
+            var preserved = service.UpdateAppConfig(new AppConfigUpdateRequest
+            {
+                MaxRecordingTasks = 3,
+                RecordingTransport = "MP2T/TCP"
+            });
+            Assert.False(preserved.WriteRecordingLog);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public void AddChannels_RejectsEmptyBatch()
     {
         var directory = CreateTempDirectory();

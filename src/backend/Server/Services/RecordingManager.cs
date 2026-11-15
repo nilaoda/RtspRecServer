@@ -386,6 +386,8 @@ public sealed class RecordingManager
         {
             var lastUpdate = DateTimeOffset.UtcNow;
             var lastBytes = 0L;
+            using var recordingLog = RecordingLogWriter.Create(outputPath, config.WriteRecordingLog);
+            recordingLog?.WriteStart(started, outputPath, config.RecordingTransport, started.StartedAt ?? DateTimeOffset.Now);
             try
             {
                 var result = await _recordingService.RecordAsync(started, outputPath, duration, config.RecordingTransport, (progress) =>
@@ -393,6 +395,7 @@ public sealed class RecordingManager
                     session.BytesWritten = progress.BytesWritten;
                     session.UpdateBitrate(progress.BytesWritten); // 更新实时码率
                     session.UpdatePcrElapsedSeconds(progress.PcrElapsedSeconds); // 更新PCR时长
+                    recordingLog?.WriteProgress(progress);
 
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromSeconds(1) && progress.BytesWritten != lastBytes)
                     {
@@ -402,7 +405,8 @@ public sealed class RecordingManager
                         var pcrElapsed = session.GetPcrElapsedSeconds();
                         var update = _taskStore.TryUpdate(started.Id, current => current with
                         {
-                            BytesWritten = progress.BytesWritten
+                            BytesWritten = progress.BytesWritten,
+                            TsCheck = progress.TsCheck ?? current.TsCheck
                         });
 
                         if (update is not null)
@@ -462,7 +466,8 @@ public sealed class RecordingManager
                     BytesWritten = finalBytesWritten,
                     ErrorMessage = finalErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
                     FinishedAt = DateTimeOffset.UtcNow,
-                    PcrElapsedSeconds = result.PcrElapsedSeconds
+                    PcrElapsedSeconds = result.PcrElapsedSeconds,
+                    TsCheck = result.TsCheck ?? current.TsCheck
                 });
 
                 if (completed is not null)
@@ -471,9 +476,17 @@ public sealed class RecordingManager
                         ToDto(completed) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = result.PcrElapsedSeconds },
                         CancellationToken.None);
                 }
+
+                recordingLog?.WriteFinal(
+                    finalStatus,
+                    finalBytesWritten,
+                    result.PcrElapsedSeconds,
+                    finalErrorMessage,
+                    completed?.TsCheck ?? result.TsCheck);
             }
             catch (Exception ex)
             {
+                recordingLog?.WriteError(ex);
                 _logger.LogError(ex, "录制任务发生严重异常 {TaskId}。频道: {ChannelName}, URL: {Url}, 错误堆栈: {StackTrace}", 
                     started.Id, started.ChannelName, started.Url, ex.StackTrace);
                 var currentBitrate = session.GetCurrentBitrateKbps();
@@ -483,6 +496,9 @@ public sealed class RecordingManager
                     ErrorMessage = $"{ex.Message} (Stack: {ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim()})",
                     FinishedAt = DateTimeOffset.UtcNow
                 });
+
+                var failedFileBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : session.BytesWritten;
+                recordingLog?.WriteFinal(RecordingStatus.Failed, failedFileBytes, null, ex.Message, failed?.TsCheck);
 
                 if (failed is not null)
                 {
@@ -503,6 +519,20 @@ public sealed class RecordingManager
     public bool IsActive(long id)
     {
         return _activeSessions.ContainsKey(id);
+    }
+
+    public IReadOnlySet<string> GetActiveOutputPaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var session in _activeSessions.Values)
+        {
+            if (!string.IsNullOrWhiteSpace(session.OutputPath))
+            {
+                paths.Add(Path.GetFullPath(session.OutputPath));
+            }
+        }
+
+        return paths;
     }
 
     public void RequestStopAllActiveSessions()
@@ -544,7 +574,8 @@ public sealed class RecordingManager
             ErrorMessage = task.ErrorMessage,
             StartedAt = task.StartedAt,
             FinishedAt = task.FinishedAt,
-            PcrElapsedSeconds = task.PcrElapsedSeconds
+            PcrElapsedSeconds = task.PcrElapsedSeconds,
+            TsCheck = task.TsCheck
         };
     }
 

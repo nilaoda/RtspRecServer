@@ -19,6 +19,7 @@ public sealed record RecordingTask
     public DateTimeOffset? StartedAt { get; init; }
     public DateTimeOffset? FinishedAt { get; init; }
     public double? PcrElapsedSeconds { get; init; }
+    public TsCheckSummary? TsCheck { get; init; }
 }
 
 public sealed record RecordingTaskCreateRequest
@@ -52,6 +53,7 @@ public sealed record RecordingTaskDto
     public DateTimeOffset? FinishedAt { get; init; }
     public double? CurrentBitrateKbps { get; init; }
     public double? PcrElapsedSeconds { get; init; }
+    public TsCheckSummary? TsCheck { get; init; }
 }
 
 public sealed record RecordingTaskStatusUpdate
@@ -64,6 +66,7 @@ public sealed record RecordingTaskStatusUpdate
     public DateTimeOffset? FinishedAt { get; init; }
     public double? CurrentBitrateKbps { get; init; }
     public double? PcrElapsedSeconds { get; init; }
+    public TsCheckSummary? TsCheck { get; init; }
 }
 
 public sealed record DiskStatus
@@ -97,4 +100,5 @@ public sealed record RecordingProgress
     public long BytesWritten { get; init; }
     public double? PcrElapsedSeconds { get; init; }
     public double? CurrentBitrateKbps { get; init; }
+    public TsCheckSummary? TsCheck { get; init; }
 }

@@ -3,9 +3,23 @@ export type PageKey = 'tasks' | 'channels' | 'recordings' | 'settings'
 export type AppConfig = {
   maxRecordingTasks: number
   recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'
+  writeRecordingLog: boolean
 }
 
 export type RecordingStatus = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped' | 0 | 1 | 2 | 3 | 4
+
+export type TsCheckSummary = {
+  verdict: 'pass' | 'warning' | 'error' | 'incomplete' | 'unknown'
+  errorCount: number
+  warningCount: number
+  packetCount: number
+  bytesScanned: number
+  bitrateKbps: number
+  video?: string
+  audio?: string
+  pidCount: number
+  lastEvent?: string
+}
 
 export type RecordingTaskDto = {
   id: number
@@ -24,6 +38,7 @@ export type RecordingTaskDto = {
   finishedAt?: string
   currentBitrateKbps?: number
   pcrElapsedSeconds?: number
+  tsCheck?: TsCheckSummary
 }
 
 export type ChannelConfig = {

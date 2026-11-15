@@ -152,7 +152,11 @@ export const getRecordingMediaInfo = (filePath: string) =>
 
 export const getConfig = () => fetchJson<AppConfig>('/api/config', { silent: true })
 
-export const updateConfig = (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport'] }) =>
+export const updateConfig = (payload: {
+  maxRecordingTasks: number
+  recordingTransport: AppConfig['recordingTransport']
+  writeRecordingLog: boolean
+}) =>
   fetchJson<AppConfig>('/api/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

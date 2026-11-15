@@ -41,7 +41,7 @@ public sealed class ConfigurationService
             }
 
             var json = File.ReadAllText(_appConfigPath);
-            return JsonSerializer.Deserialize(json, RtspJsonContext.Default.AppConfig) ?? new AppConfig();
+            return DeserializeAppConfig(json);
         }
         finally
         {
@@ -55,7 +55,7 @@ public sealed class ConfigurationService
         try
         {
             var current = File.Exists(_appConfigPath)
-                ? JsonSerializer.Deserialize(File.ReadAllText(_appConfigPath), RtspJsonContext.Default.AppConfig) ?? new AppConfig()
+                ? DeserializeAppConfig(File.ReadAllText(_appConfigPath))
                 : new AppConfig();
 
             var transport = string.IsNullOrWhiteSpace(request.RecordingTransport)
@@ -64,7 +64,8 @@ public sealed class ConfigurationService
             var updated = current with
             {
                 MaxRecordingTasks = request.MaxRecordingTasks,
-                RecordingTransport = transport
+                RecordingTransport = transport,
+                WriteRecordingLog = request.WriteRecordingLog ?? current.WriteRecordingLog
             };
             WriteJson(_appConfigPath, updated);
             return updated;
@@ -223,6 +224,18 @@ public sealed class ConfigurationService
         {
             _lock.ExitWriteLock();
         }
+    }
+
+    private static AppConfig DeserializeAppConfig(string json)
+    {
+        var config = JsonSerializer.Deserialize(json, RtspJsonContext.Default.AppConfig) ?? new AppConfig();
+        // 源生成器会把缺失的布尔字段写成 false；旧配置应默认开启录制日志。
+        if (!json.Contains("\"writeRecordingLog\"", StringComparison.OrdinalIgnoreCase))
+        {
+            config = config with { WriteRecordingLog = true };
+        }
+
+        return config;
     }
 
     private static void WriteJson<T>(string path, T value)

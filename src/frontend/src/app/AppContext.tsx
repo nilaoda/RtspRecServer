@@ -302,7 +302,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifySuccess, reloadChannels],
   )
 
-  const updateConfigAction = useCallback(async (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport'] }) => {
+  const updateConfigAction = useCallback(async (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport']; writeRecordingLog: boolean }) => {
     try {
       const data = await updateConfig(payload)
       setAppConfig(data)

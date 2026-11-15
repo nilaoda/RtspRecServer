@@ -6,7 +6,7 @@ import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, Chevrons
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import type { RecordingStatus } from '../../types'
+import type { RecordingStatus, TsCheckSummary } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 
 import { cn } from "@/lib/utils"
@@ -116,6 +116,27 @@ const statusVariant: Record<RecordingStatusKey, "default" | "secondary" | "destr
   Completed: 'outline', // success -> outline (greenish via class)
   Failed: 'destructive', // error -> destructive (red)
   Stopped: 'secondary', // default -> secondary
+}
+
+const tsVerdictLabel: Record<string, string> = {
+  pass: '正常',
+  warning: '警告',
+  error: '异常',
+  incomplete: '未完成',
+  unknown: '未知',
+}
+
+const tsVerdictClass = (verdict?: string) => {
+  if (verdict === 'pass') return 'border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400'
+  if (verdict === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+  if (verdict === 'error') return 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
+  return 'border-border bg-muted text-muted-foreground'
+}
+
+const tsCodecText = (tsCheck?: TsCheckSummary) => {
+  if (!tsCheck) return '--'
+  const streams = [tsCheck.video, tsCheck.audio].filter(Boolean)
+  return streams.length > 0 ? streams.join(' + ') : '未识别轨道'
 }
 
 const taskSchema = z.object({
@@ -303,13 +324,14 @@ const TasksPage = () => {
                         <TableHead className="w-[160px]">时间</TableHead>
                         <TableHead className="w-[180px]">时长 / 进度</TableHead>
                         <TableHead className="w-[140px]">码率 / 大小</TableHead>
+                        <TableHead className="w-[170px]">TS 检测</TableHead>
                         <TableHead className="w-[180px] text-right">操作</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
                     {tasks.length === 0 ? (
                         <TableRow>
-                            <TableCell colSpan={8} className="h-24 text-center">
+                            <TableCell colSpan={9} className="h-24 text-center">
                                 暂无任务
                             </TableCell>
                         </TableRow>
@@ -418,6 +440,59 @@ const TasksPage = () => {
                                             <span className="font-mono whitespace-nowrap">{bitrateDisplay}</span>
                                             <span className="text-muted-foreground whitespace-nowrap">{formatBytes(task.bytesWritten)}</span>
                                         </div>
+                                    </TableCell>
+                                    <TableCell>
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <div
+                                                        className="flex w-[150px] cursor-help flex-col gap-1 text-xs"
+                                                        tabIndex={0}
+                                                        aria-label="TS 检测详情"
+                                                    >
+                                                        <div className="flex min-w-0 items-center gap-1.5">
+                                                            <Badge
+                                                                variant="outline"
+                                                                className={cn('shrink-0 text-[10px]', tsVerdictClass(task.tsCheck?.verdict))}
+                                                            >
+                                                                {task.tsCheck
+                                                                    ? tsVerdictLabel[task.tsCheck.verdict] ?? '未知'
+                                                                    : normalizedStatus === 'Recording'
+                                                                        ? '检测中'
+                                                                        : '--'}
+                                                            </Badge>
+                                                            <span className="truncate font-mono text-[10px] text-muted-foreground">
+                                                                {task.tsCheck
+                                                                    ? tsCodecText(task.tsCheck)
+                                                                    : normalizedStatus === 'Recording'
+                                                                        ? '等待数据'
+                                                                        : '--'}
+                                                            </span>
+                                                            {task.tsCheck && (
+                                                                <Info className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+                                                            )}
+                                                        </div>
+                                                        {task.tsCheck && (
+                                                            <span className="text-[10px] text-muted-foreground">
+                                                                错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </TooltipTrigger>
+                                                {task.tsCheck && (
+                                                    <TooltipContent side="top" align="start" className="max-w-[280px] space-y-1 text-xs">
+                                                        <div className="font-medium">
+                                                            TS 检测：{tsVerdictLabel[task.tsCheck.verdict] ?? '未知'}
+                                                        </div>
+                                                        <div>错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}</div>
+                                                        <div>视频：{task.tsCheck.video ?? '未识别'} · 音频：{task.tsCheck.audio ?? '未识别'}</div>
+                                                        <div>PID {task.tsCheck.pidCount} · 包数 {task.tsCheck.packetCount.toLocaleString()}</div>
+                                                        <div>码率 {task.tsCheck.bitrateKbps.toFixed(0)} Kb/s</div>
+                                                        {task.tsCheck.lastEvent && <div>最近事件：{task.tsCheck.lastEvent}</div>}
+                                                    </TooltipContent>
+                                                )}
+                                            </Tooltip>
+                                        </TooltipProvider>
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-1">

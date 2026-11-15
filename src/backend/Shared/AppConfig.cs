@@ -10,6 +10,7 @@ public sealed record AppConfig
     public string Password { get; init; } = "admin";
     public int MaxRecordingTasks { get; init; } = 1;
     public string RecordingTransport { get; init; } = "MP2T/TCP";
+    public bool WriteRecordingLog { get; init; } = true;
     public EpgConfig Epg { get; init; } = new();
 }
 
@@ -24,4 +25,5 @@ public sealed record AppConfigUpdateRequest
 {
     public int MaxRecordingTasks { get; init; }
     public string? RecordingTransport { get; init; }
+    public bool? WriteRecordingLog { get; init; }
 }

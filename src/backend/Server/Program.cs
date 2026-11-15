@@ -306,7 +306,7 @@ try
         return Results.Ok(status);
     });
 
-    app.MapGet("/api/recordings", (ConfigurationService configurationService) =>
+    app.MapGet("/api/recordings", (ConfigurationService configurationService, RecordingManager manager) =>
     {
         var config = configurationService.GetAppConfig();
         var recordPath = ResolveRecordPath(config.RecordPath);
@@ -315,7 +315,10 @@ try
             return Results.Ok(new List<RecordingFileInfo>());
         }
 
+        var activePaths = manager.GetActiveOutputPaths();
         var files = Directory.EnumerateFiles(recordPath, "*.*", SearchOption.TopDirectoryOnly)
+            .Where(path => string.Equals(Path.GetExtension(path), ".ts", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !activePaths.Contains(Path.GetFullPath(path)))
             .Select(path =>
             {
                 var info = new FileInfo(path);
@@ -403,7 +406,8 @@ static RecordingTaskDto ToDto(RecordingTask task)
         FinishedAt = task.FinishedAt,
         DisplayName = task.DisplayName,
         IsLive = task.IsLive,
-        PcrElapsedSeconds = task.PcrElapsedSeconds
+        PcrElapsedSeconds = task.PcrElapsedSeconds,
+        TsCheck = task.TsCheck
     };
 }
 

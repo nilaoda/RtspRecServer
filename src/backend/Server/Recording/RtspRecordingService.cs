@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
+using RtspRecServer.Server.Recording.TsAnalysis;
 using RtspRecServer.Shared;
 using Serilog;
 
@@ -15,6 +16,7 @@ public sealed record RecordingResult
     public long BytesWritten { get; init; }
     public string OutputPath { get; init; } = string.Empty;
     public double? PcrElapsedSeconds { get; init; }
+    public TsCheckSummary? TsCheck { get; init; }
 }
 
 public sealed class RtspRecordingService : IRecordingService
@@ -27,7 +29,7 @@ public sealed class RtspRecordingService : IRecordingService
         Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken)
     {
-        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport);
+        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport, task.TaskName);
         try
         {
             var result = await recorder.RunAsync(targetDuration, onProgress, cancellationToken);
@@ -36,7 +38,8 @@ public sealed class RtspRecordingService : IRecordingService
                 Success = !cancellationToken.IsCancellationRequested,
                 BytesWritten = result.BytesWritten,
                 OutputPath = outputPath,
-                PcrElapsedSeconds = result.PcrElapsedSeconds
+                PcrElapsedSeconds = result.PcrElapsedSeconds,
+                TsCheck = result.TsCheck
             };
         }
         catch (Exception ex)
@@ -46,12 +49,14 @@ public sealed class RtspRecordingService : IRecordingService
                 Success = false,
                 ErrorMessage = ex.Message,
                 BytesWritten = recorder.BytesWritten,
-                OutputPath = outputPath
+                OutputPath = outputPath,
+                TsCheck = recorder.CompleteTsCheck()
             };
         }
         finally
         {
             recorder.Close();
+            recorder.DisposeTsCheck();
         }
     }
 }
@@ -62,20 +67,24 @@ internal sealed class RtspStreamRecorder
     private readonly string _outputPath;
     private readonly string _recordingTransport;
     private readonly bool _useRtp;
+    private readonly string _displayName;
     private TcpClient? _client;
     private int _seq = 2;
+    private TsLiveAnalysisSession? _analysis;
     public long BytesWritten { get; private set; }
 
-    public RtspStreamRecorder(string url, string outputPath, string recordingTransport)
+    public RtspStreamRecorder(string url, string outputPath, string recordingTransport, string displayName)
     {
         _url = url;
         _outputPath = outputPath;
         _recordingTransport = recordingTransport;
+        _displayName = displayName;
         _useRtp = string.Equals(_recordingTransport, "MP2T/RTP/TCP", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<RecordingResult> RunAsync(TimeSpan? targetDuration, Action<RecordingProgress> onProgress, CancellationToken cancellationToken)
     {
+        _analysis = new TsLiveAnalysisSession(_displayName);
         Connect();
         var stream = _client!.GetStream();
         stream.ReadTimeout = 300000;
@@ -108,7 +117,9 @@ internal sealed class RtspStreamRecorder
             _client.Close();
             _client = null;
             _seq = 2;
-            return await new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport).RunAsync(targetDuration, onProgress, cancellationToken);
+            _analysis?.Dispose();
+            _analysis = null;
+            return await new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName).RunAsync(targetDuration, onProgress, cancellationToken);
         }
 
         if (!resp.Contains("200 OK"))
@@ -196,6 +207,7 @@ internal sealed class RtspStreamRecorder
                         }
                         await buffered.WriteAsync(payloadMemory.Slice(dataOffset, dataLength), cancellationToken);
                         BytesWritten += dataLength;
+                        _analysis?.Append(payloadMemory.Span.Slice(dataOffset, dataLength));
                     }
                     else
                     {
@@ -208,6 +220,7 @@ internal sealed class RtspStreamRecorder
                         payloadMemory.Span.Slice(dataOffset, dataLength).CopyTo(batchBuffer.AsSpan(batchOffset));
                         batchOffset += dataLength;
                         BytesWritten += dataLength;
+                        _analysis?.Append(payloadMemory.Span.Slice(dataOffset, dataLength));
                     }
                     
                     if (shouldStop)
@@ -228,7 +241,8 @@ internal sealed class RtspStreamRecorder
                         onProgress(new RecordingProgress 
                         { 
                             BytesWritten = BytesWritten, 
-                            PcrElapsedSeconds = currentPcrElapsedSeconds 
+                            PcrElapsedSeconds = currentPcrElapsedSeconds,
+                            TsCheck = _analysis?.GetSummary()
                         });
                         lastProgressTime = now;
                     }
@@ -258,7 +272,8 @@ internal sealed class RtspStreamRecorder
         onProgress(new RecordingProgress 
         { 
             BytesWritten = BytesWritten, 
-            PcrElapsedSeconds = finalPcrElapsedSeconds 
+            PcrElapsedSeconds = finalPcrElapsedSeconds,
+            TsCheck = _analysis?.GetSummary()
         });
 
         var duration = DateTime.UtcNow - startTime;
@@ -278,8 +293,17 @@ internal sealed class RtspStreamRecorder
             Success = true,
             BytesWritten = BytesWritten,
             PcrElapsedSeconds = finalPcrElapsedSeconds,
-            OutputPath = _outputPath
+            OutputPath = _outputPath,
+            TsCheck = _analysis?.Complete()
         };
+    }
+
+    public TsCheckSummary? CompleteTsCheck() => _analysis?.Complete();
+
+    public void DisposeTsCheck()
+    {
+        _analysis?.Dispose();
+        _analysis = null;
     }
 
     public void Close()

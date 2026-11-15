@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import {
   Select,
   SelectContent,
@@ -34,6 +35,7 @@ import {
 const settingsSchema = z.object({
   maxRecordingTasks: z.coerce.number().min(1, "最大并发必须大于 0").int("必须是整数"),
   recordingTransport: z.enum(["MP2T/TCP", "MP2T/RTP/TCP"]),
+  writeRecordingLog: z.boolean(),
 })
 
 type SettingsFormValues = z.infer<typeof settingsSchema>
@@ -42,6 +44,7 @@ const SettingsPage = () => {
   const { appConfig, updateConfig } = useAppContext()
   const initialValue = appConfig?.maxRecordingTasks ?? 1
   const initialTransport = appConfig?.recordingTransport ?? "MP2T/TCP"
+  const initialWriteRecordingLog = appConfig?.writeRecordingLog ?? true
 
   const form = useForm<SettingsFormValues>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,16 +52,22 @@ const SettingsPage = () => {
     defaultValues: {
       maxRecordingTasks: initialValue,
       recordingTransport: initialTransport,
+      writeRecordingLog: initialWriteRecordingLog,
     },
     values: { // Update form when initialValue changes
         maxRecordingTasks: initialValue,
         recordingTransport: initialTransport,
+        writeRecordingLog: initialWriteRecordingLog,
     }
   })
 
   const onSave = async (values: SettingsFormValues) => {
     try {
-        await updateConfig({ maxRecordingTasks: values.maxRecordingTasks, recordingTransport: values.recordingTransport })
+        await updateConfig({
+          maxRecordingTasks: values.maxRecordingTasks,
+          recordingTransport: values.recordingTransport,
+          writeRecordingLog: values.writeRecordingLog,
+        })
     } catch {
         // Handled in context
     }
@@ -114,6 +123,23 @@ const SettingsPage = () => {
                         仅对 RTSP 回放录制生效；udpxy 直播源不使用该设置。
                       </FormDescription>
                       <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="writeRecordingLog"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-center justify-between gap-4 rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <FormLabel>写入录制日志</FormLabel>
+                        <FormDescription>
+                          在录像文件旁生成同名 .log，记录 TS 检测和录制状态。关闭后仅影响之后启动的录制。
+                        </FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch checked={field.value} onCheckedChange={field.onChange} />
+                      </FormControl>
                     </FormItem>
                   )}
                 />

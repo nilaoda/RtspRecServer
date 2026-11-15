@@ -23,6 +23,7 @@ namespace RtspRecServer.Shared;
 [JsonSerializable(typeof(MediaInfoResponse))]
 [JsonSerializable(typeof(ApiResponse))]
 [JsonSerializable(typeof(SystemStatus))]
+[JsonSerializable(typeof(TsCheckSummary))]
 [JsonSerializable(typeof(EpgStatus))]
 [JsonSerializable(typeof(EpgDataCache))]
 [JsonSerializable(typeof(EpgChannel))]

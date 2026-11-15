@@ -1,5 +1,6 @@
 using System.Buffers;
 using Serilog;
+using RtspRecServer.Server.Recording.TsAnalysis;
 using RtspRecServer.Shared;
 
 namespace RtspRecServer.Server.Recording;
@@ -18,6 +19,19 @@ public sealed class HttpLiveRecordingService : IRecordingService
         CancellationToken cancellationToken)
     {
         var bytesWritten = 0L;
+        using var analysis = new TsLiveAnalysisSession(task.TaskName);
+
+        RecordingResult Finish(bool success, string? error, long bytes)
+        {
+            return new RecordingResult
+            {
+                Success = success,
+                ErrorMessage = error,
+                BytesWritten = bytes,
+                OutputPath = outputPath,
+                TsCheck = analysis.Complete()
+            };
+        }
 
         try
         {
@@ -25,13 +39,13 @@ public sealed class HttpLiveRecordingService : IRecordingService
             using var response = await HttpClient.GetAsync(task.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                return Failure($"直播源返回 HTTP {(int)response.StatusCode} {response.ReasonPhrase}", bytesWritten, outputPath);
+                return Finish(false, $"直播源返回 HTTP {(int)response.StatusCode} {response.ReasonPhrase}", bytesWritten);
             }
 
             var mediaType = response.Content.Headers.ContentType?.MediaType;
             if (mediaType is not null && mediaType.Equals("text/html", StringComparison.OrdinalIgnoreCase))
             {
-                return Failure($"直播源返回非视频内容 ({mediaType})", bytesWritten, outputPath);
+                return Finish(false, $"直播源返回非视频内容 ({mediaType})", bytesWritten);
             }
 
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -55,14 +69,14 @@ public sealed class HttpLiveRecordingService : IRecordingService
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
                         Log.Warning("HTTP 直播流超过 {Seconds} 秒无数据: {Url}", IdleTimeout.TotalSeconds, task.Url);
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten });
-                        return Failure("直播流无数据超时", bytesWritten, outputPath);
+                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                        return Finish(false, "直播流无数据超时", bytesWritten);
                     }
 
                     if (read == 0)
                     {
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten });
-                        return Failure("直播流已结束", bytesWritten, outputPath);
+                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                        return Finish(false, "直播流已结束", bytesWritten);
                     }
 
                     if (firstChunk)
@@ -70,17 +84,18 @@ public sealed class HttpLiveRecordingService : IRecordingService
                         firstChunk = false;
                         if (!LooksLikeMpegTs(buffer.AsSpan(0, read)))
                         {
-                            return Failure("直播源返回内容不是 MPEG-TS", bytesWritten, outputPath);
+                            return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
                         }
                     }
 
                     await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
                     bytesWritten += read;
+                    analysis.Append(buffer.AsSpan(0, read));
 
                     var now = DateTime.UtcNow;
                     if ((now - lastProgress).TotalSeconds >= 1.0)
                     {
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten });
+                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
                         lastProgress = now;
                     }
                 }
@@ -91,47 +106,20 @@ public sealed class HttpLiveRecordingService : IRecordingService
             }
 
             await file.FlushAsync(CancellationToken.None);
-            onProgress(new RecordingProgress { BytesWritten = bytesWritten });
+            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
 
-            return new RecordingResult
-            {
-                Success = !cancellationToken.IsCancellationRequested,
-                BytesWritten = bytesWritten,
-                OutputPath = outputPath
-            };
+            return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            onProgress(new RecordingProgress { BytesWritten = bytesWritten });
-            return new RecordingResult
-            {
-                Success = false,
-                BytesWritten = bytesWritten,
-                OutputPath = outputPath
-            };
+            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+            return Finish(false, null, bytesWritten);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "HTTP 直播录制失败: {Url}", task.Url);
-            return new RecordingResult
-            {
-                Success = false,
-                ErrorMessage = ex.Message,
-                BytesWritten = bytesWritten,
-                OutputPath = outputPath
-            };
+            return Finish(false, ex.Message, bytesWritten);
         }
-    }
-
-    private static RecordingResult Failure(string message, long bytesWritten, string outputPath)
-    {
-        return new RecordingResult
-        {
-            Success = false,
-            ErrorMessage = message,
-            BytesWritten = bytesWritten,
-            OutputPath = outputPath
-        };
     }
 
     private static bool LooksLikeMpegTs(ReadOnlySpan<byte> data)

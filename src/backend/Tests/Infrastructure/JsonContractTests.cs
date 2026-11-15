@@ -22,6 +22,7 @@ public class JsonContractTests
         Assert.Equal(9000, root.GetProperty("port").GetInt32());
         Assert.Equal(3, root.GetProperty("maxRecordingTasks").GetInt32());
         Assert.Equal("MP2T/RTP/TCP", root.GetProperty("recordingTransport").GetString());
+        Assert.True(root.GetProperty("writeRecordingLog").GetBoolean());
         Assert.True(root.TryGetProperty("epg", out _));
         Assert.False(root.TryGetProperty("Port", out _));
 
@@ -41,7 +42,14 @@ public class JsonContractTests
             Status = RecordingStatus.Recording,
             IsLive = true,
             BytesWritten = 12345,
-            TaskName = "Playback_CCTV-1"
+            TaskName = "Playback_CCTV-1",
+            TsCheck = new TsCheckSummary
+            {
+                Verdict = "pass",
+                Video = "H.264",
+                Audio = "AAC",
+                PidCount = 3
+            }
         };
 
         var json = JsonSerializer.Serialize(dto, RtspJsonContext.Default.RecordingTaskDto);
@@ -52,6 +60,8 @@ public class JsonContractTests
         Assert.Equal(1, root.GetProperty("status").GetInt32());
         Assert.True(root.GetProperty("isLive").GetBoolean());
         Assert.Equal(12345, root.GetProperty("bytesWritten").GetInt64());
+        Assert.Equal("pass", root.GetProperty("tsCheck").GetProperty("verdict").GetString());
+        Assert.Equal("H.264", root.GetProperty("tsCheck").GetProperty("video").GetString());
         Assert.False(root.TryGetProperty("Status", out _));
     }
 
