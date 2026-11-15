@@ -1,12 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw, CalendarClock } from 'lucide-react'
+import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw, CalendarClock, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import type { RecordingStatus, TsCheckSummary } from '../../types'
+import type { RecordingStatus, RecordingTaskDto, TsCheckSummary } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 
 import { cn } from "@/lib/utils"
@@ -66,6 +66,12 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { DateTimePicker } from "@/components/ui/date-time-picker"
 import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -118,6 +124,143 @@ const statusVariant: Record<RecordingStatusKey, "default" | "secondary" | "destr
   Stopped: 'secondary', // default -> secondary
 }
 
+type TaskTab = 'active' | 'completed' | 'failed'
+
+const PAGE_SIZE = 20
+
+const taskTabs: Record<TaskTab, { label: string; empty: string }> = {
+  active: { label: '正在录制', empty: '暂无正在录制或等待中的任务' },
+  completed: { label: '已完成录制', empty: '暂无已完成录制' },
+  failed: { label: '失败录制', empty: '暂无失败录制' },
+}
+
+const getTaskTab = (status: RecordingStatusKey): TaskTab => {
+  if (status === 'Failed') {
+    return 'failed'
+  }
+  if (status === 'Pending' || status === 'Recording') {
+    return 'active'
+  }
+  return 'completed'
+}
+
+const parseTaskTime = (value?: string) => {
+  if (!value) {
+    return Number.NaN
+  }
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : Number.NaN
+}
+
+const getTaskEndTime = (task: RecordingTaskDto) => {
+  const finishedAt = parseTaskTime(task.finishedAt)
+  return Number.isFinite(finishedAt) ? finishedAt : parseTaskTime(task.endTime)
+}
+
+type TaskDisplay = {
+  normalizedStatus: RecordingStatusKey
+  start: number
+  displayStart: number
+  startedAt: number
+  plannedDuration: number
+  recordedDuration: number
+  progress: number
+  bitrateDisplay: string
+  showInfoActions: boolean
+  canEditEndTime: boolean
+  canRetry: boolean
+}
+
+const getTaskDisplay = (task: RecordingTaskDto, nowMs: number): TaskDisplay => {
+  const normalizedStatus = normalizeStatus(task.status)
+  const start = parseTaskTime(task.startTime)
+  const end = parseTaskTime(task.endTime)
+  const startedAt = parseTaskTime(task.startedAt)
+  const finishedAt = parseTaskTime(task.finishedAt)
+  const displayStart = task.isLive && Number.isFinite(startedAt) ? startedAt : start
+  const durationStart = task.isLive
+    ? (Number.isFinite(startedAt)
+      ? startedAt
+      : normalizedStatus === 'Pending' && nowMs > start
+        ? nowMs
+        : start)
+    : start
+  const plannedDuration = Number.isFinite(durationStart) && Number.isFinite(end)
+    ? Math.max(0, end - durationStart)
+    : 0
+  const recordedDuration = task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0
+    ? task.pcrElapsedSeconds * 1000
+    : (Number.isFinite(startedAt)
+      ? Math.max(0, (normalizedStatus === 'Recording' ? nowMs : Number.isFinite(finishedAt) ? finishedAt : nowMs) - startedAt)
+      : 0)
+  const progress = normalizedStatus === 'Pending'
+    ? 0
+    : normalizedStatus === 'Completed'
+      ? 100
+      : (plannedDuration > 0 ? Math.min(100, Math.max(0, (recordedDuration / plannedDuration) * 100)) : 0)
+
+  let bitrateDisplay = '--'
+  if (task.currentBitrateKbps !== undefined && task.currentBitrateKbps > 0) {
+    bitrateDisplay = `${task.currentBitrateKbps.toFixed(1)} Kb/s`
+  } else if (Number.isFinite(startedAt) && task.bytesWritten > 0) {
+    const endTime = Number.isFinite(finishedAt) ? finishedAt : nowMs
+    const durationSeconds = Math.max(1, (endTime - startedAt) / 1000)
+    const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
+    bitrateDisplay = `${bitrateKbps.toFixed(1)} Kb/s`
+  }
+
+  return {
+    normalizedStatus,
+    start,
+    displayStart,
+    startedAt,
+    plannedDuration,
+    recordedDuration,
+    progress,
+    bitrateDisplay,
+    showInfoActions: ['Completed', 'Failed', 'Stopped'].includes(normalizedStatus),
+    canEditEndTime: task.isLive && (normalizedStatus === 'Pending' || normalizedStatus === 'Recording'),
+    canRetry: normalizedStatus === 'Failed' || normalizedStatus === 'Stopped',
+  }
+}
+
+const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
+  <Badge variant={statusVariant[status]} className={cn(
+    "whitespace-nowrap",
+    status === 'Completed' && "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
+    status === 'Failed' && "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
+    status === 'Pending' && "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
+    status === 'Recording' && "animate-pulse"
+  )}>
+    {statusLabel[status]}
+  </Badge>
+)
+
+const TaskProgress = ({
+  recordedDuration,
+  plannedDuration,
+  progress,
+  status,
+}: {
+  recordedDuration: number
+  plannedDuration: number
+  progress: number
+  status: RecordingStatusKey
+}) => (
+  <div className="w-full space-y-1">
+    <div className="flex justify-between gap-2 whitespace-nowrap font-mono text-xs">
+      <span>{formatDuration(recordedDuration)}</span>
+      <span className="text-muted-foreground">/ {formatDuration(plannedDuration)}</span>
+    </div>
+    <Progress value={progress} className="h-1.5" indicatorClassName={cn(
+      status === 'Failed' ? 'bg-destructive' :
+      status === 'Stopped' ? 'bg-yellow-500' :
+      status === 'Completed' ? 'bg-green-500' :
+      'bg-primary'
+    )} />
+  </div>
+)
+
 const tsVerdictLabel: Record<string, string> = {
   pass: '正常',
   warning: '警告',
@@ -158,11 +301,64 @@ const TasksPage = () => {
   const comboboxPortalRef = useRef<HTMLDivElement>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [openCombobox, setOpenCombobox] = useState(false)
+  const [activeTab, setActiveTab] = useState<TaskTab>('active')
+  const [page, setPage] = useState(1)
 
   const activeCount = useMemo(
-    () => tasks.filter((task) => task.status === 'Recording').length,
+    () => tasks.filter((task) => normalizeStatus(task.status) === 'Recording').length,
     [tasks],
   )
+
+  const taskCounts = useMemo(() => {
+    const counts: Record<TaskTab, number> = { active: 0, completed: 0, failed: 0 }
+    for (const task of tasks) {
+      counts[getTaskTab(normalizeStatus(task.status))] += 1
+    }
+    return counts
+  }, [tasks])
+
+  const visibleTasks = useMemo(() => {
+    const filtered = tasks.filter((task) => getTaskTab(normalizeStatus(task.status)) === activeTab)
+    return [...filtered].sort((left, right) => {
+      if (activeTab === 'active') {
+        const leftStatus = normalizeStatus(left.status)
+        const rightStatus = normalizeStatus(right.status)
+        if (leftStatus !== rightStatus) {
+          return leftStatus === 'Recording' ? -1 : 1
+        }
+        if (leftStatus === 'Recording') {
+          return right.id - left.id
+        }
+
+        const leftStart = parseTaskTime(left.startTime)
+        const rightStart = parseTaskTime(right.startTime)
+        return (Number.isFinite(leftStart) ? leftStart : 0) - (Number.isFinite(rightStart) ? rightStart : 0) || right.id - left.id
+      }
+
+      const leftEnd = getTaskEndTime(left)
+      const rightEnd = getTaskEndTime(right)
+      if (Number.isFinite(leftEnd) && Number.isFinite(rightEnd) && leftEnd !== rightEnd) {
+        return rightEnd - leftEnd
+      }
+      if (Number.isFinite(leftEnd) !== Number.isFinite(rightEnd)) {
+        return Number.isFinite(leftEnd) ? -1 : 1
+      }
+      return right.id - left.id
+    })
+  }, [tasks, activeTab])
+
+  const totalPages = Math.max(1, Math.ceil(visibleTasks.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pagedTasks = useMemo(
+    () => visibleTasks.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [visibleTasks, currentPage],
+  )
+  const rangeStart = visibleTasks.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1
+  const rangeEnd = Math.min(currentPage * PAGE_SIZE, visibleTasks.length)
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages))
+  }, [totalPages])
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [stopConfirmOpen, setStopConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
@@ -292,6 +488,91 @@ const TasksPage = () => {
     })
   }
 
+  const renderMobileActions = (task: RecordingTaskDto, display: TaskDisplay) => {
+    const { normalizedStatus, showInfoActions, canEditEndTime, canRetry } = display
+    return (
+      <div className="flex shrink-0 items-center gap-1">
+        {canEditEndTime && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => openEndTimeEditor(task.id, task.endTime)}
+            aria-label="修改结束时间"
+            title="修改结束时间"
+          >
+            <CalendarClock className="h-4 w-4" />
+          </Button>
+        )}
+        {normalizedStatus === 'Recording' && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setStopConfirmOpen({ isOpen: true, taskId: task.id })}
+            aria-label="停止任务"
+            title="停止任务"
+          >
+            <StopCircle className="h-4 w-4" />
+          </Button>
+        )}
+        {normalizedStatus === 'Pending' && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setCancelConfirmOpen({ isOpen: true, taskId: task.id })}
+            aria-label="取消任务"
+            title="取消任务"
+          >
+            <Ban className="h-4 w-4" />
+          </Button>
+        )}
+        {showInfoActions && (
+          <>
+            {canRetry && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setRetryConfirmOpen({ isOpen: true, taskId: task.id })}
+                aria-label="重试任务"
+                title="重试任务"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => onViewInfo(task.id, task.displayName || `Task ${task.id}`)}
+              aria-label="查看详情"
+              title="查看详情"
+            >
+              <Info className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+              <a href={`/api/tasks/${task.id}/download`} target="_blank" rel="noreferrer" aria-label="下载文件" title="下载文件">
+                <Download className="h-4 w-4" />
+              </a>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setDeleteConfirmOpen({ isOpen: true, taskId: task.id })}
+              aria-label="删除记录"
+              title="删除记录"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -309,93 +590,83 @@ const TasksPage = () => {
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            setActiveTab(value as TaskTab)
+            setPage(1)
+          }}
+        >
+          <CardHeader className="flex flex-row flex-wrap items-center gap-3 space-y-0 border-b pb-3">
             <CardTitle className="text-lg font-medium">任务列表</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="rounded-md border-t">
-            <Table>
+            <span className="text-xs text-muted-foreground sm:order-last sm:ml-auto">共 {tasks.length} 条</span>
+            <TabsList className="grid h-auto w-full grid-cols-3 gap-1 sm:order-none sm:inline-flex sm:w-auto">
+              {(Object.keys(taskTabs) as TaskTab[]).map((tab) => (
+                <TabsTrigger
+                  key={tab}
+                  value={tab}
+                  className="w-full justify-center gap-2 px-2 py-1.5 text-xs sm:w-auto sm:px-3 sm:text-sm"
+                >
+                  {taskTabs[tab].label}
+                  <span
+                    className={cn(
+                      "min-w-[20px] rounded-full px-1.5 py-0.5 text-center font-mono text-[10px] tabular-nums",
+                      activeTab === tab
+                        ? "bg-primary/10 text-primary"
+                        : "bg-background/70 text-muted-foreground",
+                    )}
+                  >
+                    {taskCounts[tab]}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </CardHeader>
+          <CardContent className="p-0">
+            <TabsContent value={activeTab} className="m-0">
+              <div className="hidden rounded-md md:block">
+                <Table>
                 <TableHeader>
                     <TableRow>
-                        <TableHead className="w-[60px]">ID</TableHead>
-                        <TableHead className="w-[100px]">状态</TableHead>
-                        <TableHead className="min-w-[150px]">任务名称</TableHead>
-                        <TableHead className="min-w-[120px]">频道</TableHead>
-                        <TableHead className="w-[160px]">时间</TableHead>
-                        <TableHead className="w-[180px]">时长 / 进度</TableHead>
-                        <TableHead className="w-[140px]">码率 / 大小</TableHead>
-                        <TableHead className="w-[170px]">TS 检测</TableHead>
-                        <TableHead className="w-[180px] text-right">操作</TableHead>
+                        <TableHead className="w-[48px]">ID</TableHead>
+                        <TableHead className="w-[80px]">状态</TableHead>
+                        <TableHead className="min-w-[140px]">任务名称</TableHead>
+                        <TableHead className="min-w-[110px]">频道</TableHead>
+                        <TableHead className="w-[150px]">时间</TableHead>
+                        <TableHead className="w-[145px]">时长 / 进度</TableHead>
+                        <TableHead className="w-[120px]">码率 / 大小</TableHead>
+                        <TableHead className="w-[145px]">TS 检测</TableHead>
+                        <TableHead className="w-[160px] text-right">操作</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
-                    {tasks.length === 0 ? (
+                    {pagedTasks.length === 0 ? (
                         <TableRow>
                             <TableCell colSpan={9} className="h-24 text-center">
-                                暂无任务
+                                {taskTabs[activeTab].empty}
                             </TableCell>
                         </TableRow>
                     ) : (
-                        tasks.map((task) => {
-                            const normalizedStatus = normalizeStatus(task.status)
-                            
-                            // Duration Logic
-                            const start = new Date(task.startTime).getTime()
-                            const end = new Date(task.endTime).getTime()
-                            const nowMs = now.getTime()
-                            const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
-                            const finishedAt = task.finishedAt ? new Date(task.finishedAt).getTime() : Number.NaN
-                            const displayStart = task.isLive && Number.isFinite(startedAt) ? startedAt : start
-                            const durationStart = task.isLive
-                                ? (Number.isFinite(startedAt)
-                                    ? startedAt
-                                    : normalizedStatus === 'Pending' && nowMs > start
-                                        ? nowMs
-                                        : start)
-                                : start
-                            const plannedDuration = Number.isFinite(durationStart) && Number.isFinite(end)
-                                ? Math.max(0, end - durationStart)
-                                : 0
-                            
-                            const recordedDuration = task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0
-                                ? task.pcrElapsedSeconds * 1000
-                                : (Number.isFinite(startedAt)
-                                    ? Math.max(0, (normalizedStatus === 'Recording' ? nowMs : Number.isFinite(finishedAt) ? finishedAt : nowMs) - startedAt)
-                                    : 0)
-
-                            const progress = normalizedStatus === 'Pending' ? 0
-                                : normalizedStatus === 'Completed' ? 100
-                                : normalizedStatus === 'Stopped' 
-                                    ? (plannedDuration > 0 ? Math.min(100, Math.max(0, (recordedDuration / plannedDuration) * 100)) : 0)
-                                    : (plannedDuration > 0 ? Math.min(100, Math.max(0, (recordedDuration / plannedDuration) * 100)) : 0)
-
-                            // Bitrate Logic
-                            let bitrateDisplay = '--'
-                            if (task.currentBitrateKbps !== undefined && task.currentBitrateKbps > 0) {
-                                bitrateDisplay = `${task.currentBitrateKbps.toFixed(1)} Kb/s`
-                            } else if (Number.isFinite(startedAt) && task.bytesWritten > 0) {
-                                const endTime = Number.isFinite(finishedAt) ? finishedAt : nowMs
-                                const durationSeconds = Math.max(1, (endTime - startedAt) / 1000)
-                                const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
-                                bitrateDisplay = `${bitrateKbps.toFixed(1)} Kb/s`
-                            }
-
-                            const showInfoActions = ['Completed', 'Failed', 'Stopped'].includes(normalizedStatus)
-                            const canEditEndTime = task.isLive && (normalizedStatus === 'Pending' || normalizedStatus === 'Recording')
-                            const canRetry = normalizedStatus === 'Failed' || normalizedStatus === 'Stopped'
+                        pagedTasks.map((task) => {
+                            const {
+                                normalizedStatus,
+                                start,
+                                startedAt,
+                                displayStart,
+                                plannedDuration,
+                                recordedDuration,
+                                progress,
+                                bitrateDisplay,
+                                showInfoActions,
+                                canEditEndTime,
+                                canRetry,
+                            } = getTaskDisplay(task, now.getTime())
 
                             return (
                                 <TableRow key={task.id}>
                                     <TableCell className="font-mono text-xs">{task.id}</TableCell>
                                     <TableCell>
-                                        <Badge variant={statusVariant[normalizedStatus]} className={cn(
-                                            normalizedStatus === 'Completed' && "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
-                                            normalizedStatus === 'Failed' && "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
-                                            normalizedStatus === 'Pending' && "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
-                                            normalizedStatus === 'Recording' && "animate-pulse"
-                                        )}>
-                                            {statusLabel[normalizedStatus]}
-                                        </Badge>
+                                        <TaskStatusBadge status={normalizedStatus} />
                                     </TableCell>
                                     <TableCell>
                                         <div className="font-medium truncate max-w-full" title={task.displayName || '--'}>
@@ -417,26 +688,20 @@ const TasksPage = () => {
                                                 ? `实际开始；预约开始：${formatDateTime(new Date(start))}`
                                                 : undefined}
                                         >
-                                            <span>{formatDateTime(new Date(displayStart))}</span>
-                                            <span>{formatDateTime(new Date(task.endTime))}</span>
+                                            <span className="whitespace-nowrap">{formatDateTime(new Date(displayStart))}</span>
+                                            <span className="whitespace-nowrap">{formatDateTime(new Date(task.endTime))}</span>
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="space-y-1 w-[180px]">
-                                            <div className="text-xs font-mono flex justify-between">
-                                                <span>{formatDuration(recordedDuration)}</span>
-                                                <span className="text-muted-foreground">/ {formatDuration(plannedDuration)}</span>
-                                            </div>
-                                            <Progress value={progress} className="h-1.5" indicatorClassName={cn(
-                                                normalizedStatus === 'Failed' ? 'bg-destructive' :
-                                                normalizedStatus === 'Stopped' ? 'bg-yellow-500' :
-                                                normalizedStatus === 'Completed' ? 'bg-green-500' :
-                                                'bg-primary'
-                                            )} />
-                                        </div>
+                                        <TaskProgress
+                                            recordedDuration={recordedDuration}
+                                            plannedDuration={plannedDuration}
+                                            progress={progress}
+                                            status={normalizedStatus}
+                                        />
                                     </TableCell>
                                     <TableCell>
-                                        <div className="flex flex-col text-xs w-[140px]">
+                                        <div className="flex flex-col text-xs w-full">
                                             <span className="font-mono whitespace-nowrap">{bitrateDisplay}</span>
                                             <span className="text-muted-foreground whitespace-nowrap">{formatBytes(task.bytesWritten)}</span>
                                         </div>
@@ -446,7 +711,7 @@ const TasksPage = () => {
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
                                                     <div
-                                                        className="flex w-[150px] cursor-help flex-col gap-1 text-xs"
+                                                        className="flex w-full cursor-help flex-col gap-1 text-xs"
                                                         tabIndex={0}
                                                         aria-label="TS 检测详情"
                                                     >
@@ -632,7 +897,137 @@ const TasksPage = () => {
                 </TableBody>
             </Table>
           </div>
-        </CardContent>
+          <div className="md:hidden">
+            {pagedTasks.length === 0 ? (
+              <div className="flex h-28 items-center justify-center px-4 text-center text-sm text-muted-foreground">
+                {taskTabs[activeTab].empty}
+              </div>
+            ) : (
+              <div className="divide-y">
+                {pagedTasks.map((task) => {
+                  const display = getTaskDisplay(task, now.getTime())
+                  const normalizedStatus = display.normalizedStatus
+                  return (
+                    <div key={task.id} className="space-y-3 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-1.5">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <TaskStatusBadge status={normalizedStatus} />
+                            <span className="truncate font-medium" title={task.displayName || '--'}>
+                              {task.displayName || '--'}
+                            </span>
+                          </div>
+                          <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                            <span className="truncate">{task.channelId} - {task.channelName}</span>
+                            {task.isLive && (
+                              <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
+                            )}
+                          </div>
+                        </div>
+                        <span className="shrink-0 font-mono text-xs text-muted-foreground">#{task.id}</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="space-y-1">
+                          <div className="text-muted-foreground">时间</div>
+                          <div className="whitespace-nowrap">{formatDateTime(new Date(display.displayStart))}</div>
+                          <div className="whitespace-nowrap text-muted-foreground">{formatDateTime(new Date(task.endTime))}</div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-muted-foreground">码率 / 大小</div>
+                          <div className="whitespace-nowrap font-mono">{display.bitrateDisplay}</div>
+                          <div className="whitespace-nowrap text-muted-foreground">{formatBytes(task.bytesWritten)}</div>
+                        </div>
+                      </div>
+
+                      <TaskProgress
+                        recordedDuration={display.recordedDuration}
+                        plannedDuration={display.plannedDuration}
+                        progress={display.progress}
+                        status={normalizedStatus}
+                      />
+
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <Badge
+                              variant="outline"
+                              className={cn('shrink-0 px-1.5 py-0 text-[10px]', tsVerdictClass(task.tsCheck?.verdict))}
+                            >
+                              {task.tsCheck
+                                ? tsVerdictLabel[task.tsCheck.verdict] ?? '未知'
+                                : normalizedStatus === 'Recording'
+                                  ? '检测中'
+                                  : '--'}
+                            </Badge>
+                            <span className="truncate font-mono text-[10px] text-muted-foreground">
+                              {task.tsCheck
+                                ? tsCodecText(task.tsCheck)
+                                : normalizedStatus === 'Recording'
+                                  ? '等待数据'
+                                  : '--'}
+                            </span>
+                          </div>
+                          {task.tsCheck && (
+                            <div className="text-[10px] text-muted-foreground">
+                              错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}
+                            </div>
+                          )}
+                          {task.tsCheck?.lastEvent && (
+                            <div className="truncate text-[10px] text-muted-foreground" title={task.tsCheck.lastEvent}>
+                              最近事件：{task.tsCheck.lastEvent}
+                            </div>
+                          )}
+                        </div>
+                        {renderMobileActions(task, display)}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm">
+            <span className="text-muted-foreground">
+              <span className="hidden sm:inline">
+                {visibleTasks.length === 0
+                  ? '共 0 条'
+                  : `第 ${rangeStart}-${rangeEnd} 条，共 ${visibleTasks.length} 条`}
+              </span>
+              <span className="sm:hidden">共 {visibleTasks.length} 条</span>
+            </span>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <span className="hidden whitespace-nowrap text-xs text-muted-foreground sm:inline">每页 {PAGE_SIZE} 条</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => setPage(Math.max(1, currentPage - 1))}
+                disabled={currentPage <= 1}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                上一页
+              </Button>
+              <span className="min-w-[76px] text-center text-xs text-muted-foreground">
+                第 {currentPage} / {totalPages} 页
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                disabled={currentPage >= totalPages}
+              >
+                下一页
+                <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          </TabsContent>
+          </CardContent>
+        </Tabs>
       </Card>
 
       <AlertDialog open={deleteConfirmOpen.isOpen} onOpenChange={(open) => !open && setDeleteConfirmOpen({ isOpen: false, taskId: null })}>
