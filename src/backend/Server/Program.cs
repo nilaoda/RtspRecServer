@@ -56,7 +56,9 @@ try
 
     builder.Services.AddSingleton<ConfigurationService>();
     builder.Services.AddSingleton<RecordingTaskStore>();
-    builder.Services.AddSingleton<IRecordingService, RtspRecordingService>();
+    builder.Services.AddSingleton<RtspRecordingService>();
+    builder.Services.AddSingleton<HttpLiveRecordingService>();
+    builder.Services.AddSingleton<IRecordingService, RecordingServiceRouter>();
     builder.Services.AddSingleton<WebSocketConnectionManager>();
     builder.Services.AddSingleton<IRecordingNotifier, WebSocketRecordingNotifier>();
     builder.Services.AddSingleton<RecordingManager>();
@@ -217,6 +219,23 @@ try
         return stopped ? Results.Ok(ApiResponse.Create("停止请求已发送")) : Results.BadRequest(ApiResponse.Create("任务未在录制中"));
     });
 
+    app.MapPut("/api/tasks/{id:long}/end-time", async (RecordingManager manager, long id, RecordingTaskEndTimeUpdateRequest request, CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var task = await manager.UpdateTaskEndTimeAsync(id, request.EndTime, cancellationToken);
+            return task is null ? Results.NotFound(ApiResponse.Create("任务不存在")) : Results.Ok(ToDto(task));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(ex.Message);
+        }
+    });
+
     app.MapDelete("/api/tasks/{id:long}", (RecordingManager manager, long id) =>
     {
         var task = manager.GetTask(id);
@@ -366,6 +385,7 @@ static RecordingTaskDto ToDto(RecordingTask task)
         StartedAt = task.StartedAt,
         FinishedAt = task.FinishedAt,
         DisplayName = task.DisplayName,
+        IsLive = task.IsLive,
         PcrElapsedSeconds = task.PcrElapsedSeconds
     };
 }

@@ -28,7 +28,9 @@ public sealed class RecordingBackgroundService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("录制后台服务启动成功");
-        
+
+        await _manager.ReconcileInterruptedTasksAsync(stoppingToken);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -36,6 +38,8 @@ public sealed class RecordingBackgroundService : BackgroundService
                 var now = DateTimeOffset.UtcNow;
                 var tasks = _manager.GetAllTasks();
                 var config = _configurationService.GetAppConfig();
+
+                _manager.StopSessionsDue(now);
                 
                 _logger.LogDebug("录制调度循环开始，当前任务数: {TaskCount}", tasks.Count);
 
@@ -58,6 +62,23 @@ public sealed class RecordingBackgroundService : BackgroundService
                         _logger.LogDebug("达到最大录制任务数限制，当前活跃任务数: {ActiveCount}, 最大限制: {MaxTasks}", 
                             _manager.ActiveCount, config.MaxRecordingTasks);
                         break;
+                    }
+
+                    if (task.IsLive)
+                    {
+                        if (now < task.StartTime)
+                        {
+                            continue;
+                        }
+
+                        if (task.EndTime <= now)
+                        {
+                            await _manager.FailMissedTaskAsync(task, stoppingToken);
+                            continue;
+                        }
+
+                        await _manager.TryStartTaskAsync(task, stoppingToken);
+                        continue;
                     }
 
                     // 近实时任务需要等待回放片段生成：开始时间在创建时刻前后 1 分钟内视为近实时

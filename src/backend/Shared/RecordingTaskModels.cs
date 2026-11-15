@@ -8,6 +8,7 @@ public sealed record RecordingTask
     public string Url { get; init; } = string.Empty;
     public string TaskName { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
+    public bool IsLive { get; init; }
     public DateTimeOffset StartTime { get; init; }
     public DateTimeOffset EndTime { get; init; }
     public RecordingStatus Status { get; init; } = RecordingStatus.Pending;
@@ -28,6 +29,11 @@ public sealed record RecordingTaskCreateRequest
     public string? TaskName { get; init; }
 }
 
+public sealed record RecordingTaskEndTimeUpdateRequest
+{
+    public DateTimeOffset EndTime { get; init; }
+}
+
 public sealed record RecordingTaskDto
 {
     public long Id { get; init; }
@@ -35,6 +41,7 @@ public sealed record RecordingTaskDto
     public string ChannelName { get; init; } = string.Empty;
     public string TaskName { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
+    public bool IsLive { get; init; }
     public DateTimeOffset StartTime { get; init; }
     public DateTimeOffset EndTime { get; init; }
     public RecordingStatus Status { get; init; }

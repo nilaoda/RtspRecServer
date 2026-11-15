@@ -9,6 +9,7 @@ public sealed class RecordingTaskStore : IDisposable
 {
     private readonly ConcurrentDictionary<long, RecordingTask> _tasks = new();
     private readonly object _fileLock = new();
+    private readonly object _stateLock = new();
     private readonly string _tasksPath;
     private readonly ILogger<RecordingTaskStore> _logger;
     private long _idSeed;
@@ -17,9 +18,14 @@ public sealed class RecordingTaskStore : IDisposable
     private readonly Task _saveTask;
 
     public RecordingTaskStore(ILogger<RecordingTaskStore> logger)
+        : this(logger, Path.Combine(AppContext.BaseDirectory, "tasks.json"))
+    {
+    }
+
+    internal RecordingTaskStore(ILogger<RecordingTaskStore> logger, string tasksPath)
     {
         _logger = logger;
-        _tasksPath = Path.Combine(AppContext.BaseDirectory, "tasks.json");
+        _tasksPath = tasksPath;
         LoadFromDisk();
         _saveTask = Task.Run(PeriodicSaveAsync);
     }
@@ -36,29 +42,49 @@ public sealed class RecordingTaskStore : IDisposable
 
     public RecordingTask Add(RecordingTask task)
     {
-        var id = Interlocked.Increment(ref _idSeed);
-        var created = task with { Id = id };
-        _tasks[created.Id] = created;
-        _isDirty = true;
-        return created;
+        lock (_stateLock)
+        {
+            var id = Interlocked.Increment(ref _idSeed);
+            var created = task with { Id = id };
+            _tasks[created.Id] = created;
+            _isDirty = true;
+            return created;
+        }
     }
 
-    public RecordingTask Update(RecordingTask task)
+    public RecordingTask? TryUpdate(long id, Func<RecordingTask, RecordingTask?> update)
     {
-        _tasks[task.Id] = task;
-        _isDirty = true;
-        return task;
+        lock (_stateLock)
+        {
+            if (!_tasks.TryGetValue(id, out var current))
+            {
+                return null;
+            }
+
+            var updated = update(current);
+            if (updated is null)
+            {
+                return null;
+            }
+
+            _tasks[id] = updated;
+            _isDirty = true;
+            return updated;
+        }
     }
 
     public bool Remove(long id)
     {
-        var removed = _tasks.TryRemove(id, out _);
-        if (removed)
+        lock (_stateLock)
         {
-            _isDirty = true;
-        }
+            var removed = _tasks.TryRemove(id, out _);
+            if (removed)
+            {
+                _isDirty = true;
+            }
 
-        return removed;
+            return removed;
+        }
     }
 
     private async Task PeriodicSaveAsync()

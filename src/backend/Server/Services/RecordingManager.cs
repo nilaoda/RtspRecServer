@@ -13,6 +13,7 @@ public sealed class RecordingManager
     private readonly IRecordingNotifier _notifier;
     private readonly ILogger<RecordingManager> _logger;
     private readonly ConcurrentDictionary<long, RecordingSession> _activeSessions = new();
+    private readonly object _taskTransitionLock = new();
 
     public RecordingManager(
         RecordingTaskStore taskStore,
@@ -95,9 +96,15 @@ public sealed class RecordingManager
             throw new InvalidOperationException("已存在相同参数的录制任务");
         }
 
+        var isLive = LiveSourceClassifier.IsLive(channel.Url);
+        if (isLive && !LiveSourceClassifier.IsHttpLive(channel.Url))
+        {
+            throw new InvalidOperationException("当前版本仅支持 udpxy HTTP 直播源");
+        }
+
         var suffix = $"{channel.Name}_{request.StartTime.ToLocalTime():yyyyMMddHHmmss}_{request.EndTime.ToLocalTime():yyyyMMddHHmmss}";
         var baseName = string.IsNullOrWhiteSpace(request.TaskName)
-            ? "Playback"
+            ? (isLive ? "Live" : "Playback")
             : request.TaskName.Trim();
         var taskName = $"{baseName}_{suffix}";
 
@@ -108,13 +115,14 @@ public sealed class RecordingManager
             Url = channel.Url,
             TaskName = taskName,
             DisplayName = baseName,
+            IsLive = isLive,
             StartTime = request.StartTime,
             EndTime = request.EndTime,
             Status = RecordingStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        var prepared = task with { Url = RecordingUrlBuilder.Build(task) };
+        var prepared = task with { Url = isLive ? task.Url : RecordingUrlBuilder.Build(task) };
         var created = _taskStore.Add(prepared);
         _logger.LogInformation("录制任务创建成功，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
             created.Id, created.TaskName, created.ChannelName);
@@ -125,29 +133,33 @@ public sealed class RecordingManager
 
     public bool DeleteTask(long id)
     {
-        if (_activeSessions.ContainsKey(id))
+        lock (_taskTransitionLock)
         {
-            return false;
+            if (_activeSessions.ContainsKey(id))
+            {
+                return false;
+            }
+
+            return _taskStore.Remove(id);
         }
-
-        return _taskStore.Remove(id);
-    }
-
-    public async Task<RecordingTask> UpdateTaskAsync(RecordingTask task, CancellationToken cancellationToken)
-    {
-        var updated = _taskStore.Update(task);
-        await _notifier.NotifyTaskUpdateAsync(ToDto(updated), cancellationToken);
-        return updated;
     }
 
     public async Task<bool> StopTaskAsync(long id, CancellationToken cancellationToken)
     {
         _logger.LogInformation("尝试停止录制任务，任务ID: {TaskId}", id);
-        
-        if (_activeSessions.TryRemove(id, out var session))
+
+        RecordingSession? session = null;
+        lock (_taskTransitionLock)
         {
-            session.ManualStopRequested = true;
-            session.Cancellation.Cancel();
+            if (_activeSessions.TryRemove(id, out session))
+            {
+                session.ManualStopRequested = true;
+                session.Cancellation.Cancel();
+            }
+        }
+
+        if (session is not null)
+        {
             await session.Completion;
             _logger.LogInformation("录制任务停止成功，任务ID: {TaskId}", id);
             return true;
@@ -157,87 +169,248 @@ public sealed class RecordingManager
         return false;
     }
 
+    public async Task<RecordingTask?> UpdateTaskEndTimeAsync(long id, DateTimeOffset endTime, CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        RecordingTask? updated;
+        RecordingSession? session = null;
+
+        lock (_taskTransitionLock)
+        {
+            if (_activeSessions.TryGetValue(id, out session) && session.ScheduledStopRequested)
+            {
+                throw new InvalidOperationException("任务已到结束时间并开始停止，无法延长");
+            }
+
+            updated = _taskStore.TryUpdate(id, current =>
+            {
+                if (!current.IsLive)
+                {
+                    throw new InvalidOperationException("仅直播任务支持修改结束时间");
+                }
+
+                if (current.Status is not (RecordingStatus.Pending or RecordingStatus.Recording))
+                {
+                    throw new InvalidOperationException("仅等待中或录制中的任务可修改结束时间");
+                }
+
+                if (endTime <= current.StartTime)
+                {
+                    throw new InvalidOperationException("结束时间必须大于开始时间");
+                }
+
+                if (endTime <= now)
+                {
+                    throw new InvalidOperationException("结束时间必须晚于当前时间");
+                }
+
+                return current with { EndTime = endTime };
+            });
+
+            if (updated is null)
+            {
+                return null;
+            }
+
+            session?.UpdateEndTime(endTime);
+        }
+
+        var result = session is null
+            ? updated
+            : updated with
+            {
+                BytesWritten = session.BytesWritten,
+                PcrElapsedSeconds = session.GetPcrElapsedSeconds()
+            };
+        var dto = ToDto(result) with
+        {
+            CurrentBitrateKbps = session?.GetCurrentBitrateKbps()
+        };
+        await _notifier.NotifyTaskUpdateAsync(dto, cancellationToken);
+        _logger.LogInformation("录制任务结束时间已更新，任务ID: {TaskId}, 新结束时间: {EndTime}", id, endTime);
+        return result;
+    }
+
+    public async Task FailMissedTaskAsync(RecordingTask task, CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var failed = _taskStore.TryUpdate(task.Id, current =>
+            current.Status == RecordingStatus.Pending && current.EndTime <= now
+                ? current with
+                {
+                    Status = RecordingStatus.Failed,
+                    ErrorMessage = "已超过计划结束时间，未启动",
+                    FinishedAt = now
+                }
+                : null);
+
+        if (failed is null)
+        {
+            return;
+        }
+
+        _logger.LogWarning("直播任务已错过结束时间，标记失败，任务ID: {TaskId}", task.Id);
+        await _notifier.NotifyTaskUpdateAsync(ToDto(failed), cancellationToken);
+    }
+
+    public void StopSessionsDue(DateTimeOffset now)
+    {
+        lock (_taskTransitionLock)
+        {
+            foreach (var session in _activeSessions.Values)
+            {
+                if (session.IsDue(now))
+                {
+                    session.RequestScheduledStop();
+                }
+            }
+        }
+    }
+
+    public async Task ReconcileInterruptedTasksAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var interruptedTasks = _taskStore.GetAll()
+            .Where(task => task.Status == RecordingStatus.Recording)
+            .ToList();
+
+        foreach (var task in interruptedTasks)
+        {
+            if (_activeSessions.ContainsKey(task.Id))
+            {
+                continue;
+            }
+
+            var failed = _taskStore.TryUpdate(task.Id, current =>
+                current.Status == RecordingStatus.Recording
+                    ? current with
+                    {
+                        Status = RecordingStatus.Failed,
+                        ErrorMessage = "服务重启中断",
+                        FinishedAt = now
+                    }
+                    : null);
+
+            if (failed is null)
+            {
+                continue;
+            }
+
+            _logger.LogWarning("录制任务因服务重启中断，任务ID: {TaskId}", failed.Id);
+            await _notifier.NotifyTaskUpdateAsync(ToDto(failed), cancellationToken);
+        }
+    }
+
     public async Task<bool> TryStartTaskAsync(RecordingTask task, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("尝试启动录制任务，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
+        _logger.LogInformation("尝试启动录制任务，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}",
             task.Id, task.TaskName, task.ChannelName);
 
-        if (_activeSessions.ContainsKey(task.Id))
-        {
-            _logger.LogWarning("录制任务启动失败：任务已在运行中，任务ID: {TaskId}", task.Id);
-            return false;
-        }
-
         var config = _configurationService.GetAppConfig();
-        var recordPath = ResolveRecordPath(config.RecordPath);
-        var fileName = task.TaskName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
-            ? task.TaskName
-            : $"{task.TaskName}.ts";
-        var outputPath = Path.Combine(recordPath, fileName);
+        RecordingTask started;
+        RecordingSession session;
+        string outputPath;
+        var sessionCompletion = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _logger.LogInformation("录制任务输出路径: {OutputPath}", outputPath);
-
-        // 如果是回放录制，通常需要在 URL 中附加时间参数。
-        // 这里假设基础 URL 不包含时间参数，我们需要根据 StartTime 和 EndTime 构造。
-        // 根据常见的 RTSP 回放标准（如海康/大华），格式可能为 rtsp://.../...?starttime=yyyyMMddTHHmmssZ&endtime=...
-        // 但不同厂商格式不同。如果 Channel.Url 已经是完整的，则不修改。
-        // 用户提到“根据用户输入来动态调整playback参数”，这里做一个简单的追加逻辑示例。
-        // 实际生产中可能需要根据 Channel 类型（Hikvision/Dahua/Onvif）来适配。
-        // 这里暂且假设如果 URL 中没有 '?'，则追加参数；如果有，则追加 '&starttime=...'
-        
-        // 简单处理：仅当任务时间是过去时间（暗示回放）时，才尝试附加参数？
-        // 或者始终附加？为了安全起见，我们假设 Channel.Url 是纯流地址。
-        
-        var started = task with
+        lock (_taskTransitionLock)
         {
-            Status = RecordingStatus.Recording,
-            StartedAt = DateTimeOffset.UtcNow,
-            FilePath = outputPath
-        };
+            var currentTask = _taskStore.GetById(task.Id);
+            if (currentTask is null || currentTask.Status != RecordingStatus.Pending)
+            {
+                _logger.LogWarning("录制任务启动失败：任务不存在或已不在等待状态，任务ID: {TaskId}", task.Id);
+                return false;
+            }
 
-        _taskStore.Update(started);
-        await _notifier.NotifyTaskUpdateAsync(ToDto(started), cancellationToken);
+            if (_activeSessions.ContainsKey(task.Id))
+            {
+                _logger.LogWarning("录制任务启动失败：任务已在运行中，任务ID: {TaskId}", task.Id);
+                return false;
+            }
 
-        var session = new RecordingSession(task.Id, outputPath);
-        if (!_activeSessions.TryAdd(task.Id, session))
-        {
-            return false;
+            var recordPath = ResolveRecordPath(config.RecordPath);
+            var fileName = currentTask.TaskName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                ? currentTask.TaskName
+                : $"{currentTask.TaskName}.ts";
+            outputPath = Path.Combine(recordPath, fileName);
+
+            _logger.LogInformation("录制任务输出路径: {OutputPath}", outputPath);
+
+            var startedAt = DateTimeOffset.UtcNow;
+            var updated = _taskStore.TryUpdate(task.Id, current =>
+                current.Status == RecordingStatus.Pending
+                    ? current with
+                    {
+                        Status = RecordingStatus.Recording,
+                        StartedAt = startedAt,
+                        FilePath = outputPath
+                    }
+                    : null);
+
+            if (updated is null)
+            {
+                _logger.LogWarning("录制任务启动失败：任务状态已变化，任务ID: {TaskId}", task.Id);
+                return false;
+            }
+
+            started = updated;
+            session = new RecordingSession(started.Id, outputPath, started.IsLive, started.EndTime);
+            session.Completion = sessionCompletion.Task;
+            if (!_activeSessions.TryAdd(started.Id, session))
+            {
+                _taskStore.TryUpdate(started.Id, current => current with
+                {
+                    Status = RecordingStatus.Failed,
+                    ErrorMessage = "任务已在运行中",
+                    FinishedAt = DateTimeOffset.UtcNow
+                });
+                _logger.LogWarning("录制任务启动失败：任务已在运行中，任务ID: {TaskId}", task.Id);
+                return false;
+            }
         }
 
-        var duration = task.EndTime - task.StartTime;
+        // 回放 URL 已在创建任务时构造；直播任务直接使用原始地址。
+        try
+        {
+            await _notifier.NotifyTaskUpdateAsync(ToDto(started), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "发送录制任务启动通知失败，任务ID: {TaskId}", started.Id);
+        }
 
-        session.Completion = Task.Run(async () =>
+        var duration = !started.IsLive && started.EndTime > started.StartTime
+            ? started.EndTime - started.StartTime
+            : (TimeSpan?)null;
+
+        _ = Task.Run(async () =>
         {
             var lastUpdate = DateTimeOffset.UtcNow;
             var lastBytes = 0L;
             try
             {
-                // 使用 taskWithUrl 而不是 started (started 中的 Url 还是原始的)
-                // 注意：RecordingService.RecordAsync 的第一个参数是 RecordingTask，
-                // 我们需要确保传进去的 Task 里的 Url 是 finalUrl。
-                // 但 started 是用来更新数据库的，数据库里是否要保存带参数的 URL？
-                // 通常数据库保留原始配置 URL 更好，运行时 URL 仅用于执行。
-                // 所以我们构造一个 runtimeTask 传给 RecordAsync。
-                
-                var runtimeTask = started;
-
-                var result = await _recordingService.RecordAsync(runtimeTask, outputPath, duration > TimeSpan.Zero ? duration : null, config.RecordingTransport, (progress) =>
+                var result = await _recordingService.RecordAsync(started, outputPath, duration, config.RecordingTransport, (progress) =>
                 {
                     session.BytesWritten = progress.BytesWritten;
                     session.UpdateBitrate(progress.BytesWritten); // 更新实时码率
                     session.UpdatePcrElapsedSeconds(progress.PcrElapsedSeconds); // 更新PCR时长
-                    
+
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromSeconds(1) && progress.BytesWritten != lastBytes)
                     {
                         lastUpdate = DateTimeOffset.UtcNow;
                         lastBytes = progress.BytesWritten;
                         var currentBitrate = session.GetCurrentBitrateKbps();
                         var pcrElapsed = session.GetPcrElapsedSeconds();
-                        var update = _taskStore.Update(started with
+                        var update = _taskStore.TryUpdate(started.Id, current => current with
                         {
                             BytesWritten = progress.BytesWritten
                         });
-                        _ = _notifier.NotifyTaskUpdateAsync(ToDto(update) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = pcrElapsed }, CancellationToken.None);
+
+                        if (update is not null)
+                        {
+                            _ = _notifier.NotifyTaskUpdateAsync(
+                                ToDto(update) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = pcrElapsed },
+                                CancellationToken.None);
+                        }
                     }
                 }, session.Cancellation.Token);
 
@@ -251,9 +424,9 @@ public sealed class RecordingManager
 
                 // 增加 PCR 时长校验逻辑：如果录制状态不是手动停止或已失败，则检查 PCR 时长
                 var finalErrorMessage = result.ErrorMessage;
-                if (finalStatus == RecordingStatus.Completed)
+                if (finalStatus == RecordingStatus.Completed && !started.IsLive)
                 {
-                    var plannedDurationSeconds = (task.EndTime - task.StartTime).TotalSeconds;
+                    var plannedDurationSeconds = (started.EndTime - started.StartTime).TotalSeconds;
                     var actualPcrSeconds = result.PcrElapsedSeconds ?? 0;
 
                     // 如果实际录制的 PCR 时长比预估时长少超过 60 秒（1 分钟），则标记为失败
@@ -262,7 +435,7 @@ public sealed class RecordingManager
                         finalStatus = RecordingStatus.Failed;
                         finalErrorMessage = $"录制时长不足：预估 {plannedDurationSeconds:F1}s，实际 PCR {actualPcrSeconds:F1}s (差距 > 60s)";
                         _logger.LogWarning("任务 {TaskId} 录制时长不足，判定为失败。预估: {Planned}s, 实际: {Actual}s", 
-                            task.Id, plannedDurationSeconds, actualPcrSeconds);
+                            started.Id, plannedDurationSeconds, actualPcrSeconds);
                     }
                 }
 
@@ -274,16 +447,16 @@ public sealed class RecordingManager
                 var finalBytesWritten = Math.Max(result.BytesWritten, fileBytes);
 
                 _logger.LogInformation("录制任务完成，任务ID: {TaskId}, 状态: {Status}, 写入字节数: {BytesWritten}", 
-                    task.Id, finalStatus, finalBytesWritten);
+                    started.Id, finalStatus, finalBytesWritten);
 
                 if (finalStatus == RecordingStatus.Failed)
                 {
                     _logger.LogError("录制任务 {TaskId} 失败。频道: {ChannelName}, URL: {Url}, 输出路径: {OutputPath}, 具体原因: {ErrorMessage}", 
-                        task.Id, task.ChannelName, task.Url, outputPath, finalErrorMessage ?? "未知错误");
+                        started.Id, started.ChannelName, started.Url, outputPath, finalErrorMessage ?? "未知错误");
                 }
 
                 var currentBitrate = session.GetCurrentBitrateKbps();
-                var completed = _taskStore.Update(started with
+                var completed = _taskStore.TryUpdate(started.Id, current => current with
                 {
                     Status = finalStatus,
                     BytesWritten = finalBytesWritten,
@@ -292,28 +465,38 @@ public sealed class RecordingManager
                     PcrElapsedSeconds = result.PcrElapsedSeconds
                 });
 
-                await _notifier.NotifyTaskUpdateAsync(ToDto(completed) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = result.PcrElapsedSeconds }, CancellationToken.None);
+                if (completed is not null)
+                {
+                    await _notifier.NotifyTaskUpdateAsync(
+                        ToDto(completed) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = result.PcrElapsedSeconds },
+                        CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "录制任务发生严重异常 {TaskId}。频道: {ChannelName}, URL: {Url}, 错误堆栈: {StackTrace}", 
-                    task.Id, task.ChannelName, task.Url, ex.StackTrace);
+                    started.Id, started.ChannelName, started.Url, ex.StackTrace);
                 var currentBitrate = session.GetCurrentBitrateKbps();
-                var failed = _taskStore.Update(started with
+                var failed = _taskStore.TryUpdate(started.Id, current => current with
                 {
                     Status = RecordingStatus.Failed,
                     ErrorMessage = $"{ex.Message} (Stack: {ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim()})",
                     FinishedAt = DateTimeOffset.UtcNow
                 });
-                await _notifier.NotifyTaskUpdateAsync(ToDto(failed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
+
+                if (failed is not null)
+                {
+                    await _notifier.NotifyTaskUpdateAsync(ToDto(failed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
+                }
             }
             finally
             {
-                _activeSessions.TryRemove(task.Id, out _);
+                _activeSessions.TryRemove(started.Id, out _);
+                sessionCompletion.TrySetResult(null);
             }
-        }, cancellationToken);
+        }, CancellationToken.None);
 
-        _logger.LogInformation("录制任务启动成功，任务ID: {TaskId}", task.Id);
+        _logger.LogInformation("录制任务启动成功，任务ID: {TaskId}", started.Id);
         return true;
     }
 
@@ -324,10 +507,13 @@ public sealed class RecordingManager
 
     public void RequestStopAllActiveSessions()
     {
-        foreach (var session in _activeSessions.Values)
+        lock (_taskTransitionLock)
         {
-            session.ManualStopRequested = true;
-            session.Cancellation.Cancel();
+            foreach (var session in _activeSessions.Values)
+            {
+                session.ManualStopRequested = true;
+                session.Cancellation.Cancel();
+            }
         }
     }
 
@@ -349,6 +535,7 @@ public sealed class RecordingManager
             ChannelName = task.ChannelName,
             TaskName = task.TaskName,
             DisplayName = task.DisplayName,
+            IsLive = task.IsLive,
             StartTime = task.StartTime,
             EndTime = task.EndTime,
             Status = task.Status,
@@ -363,18 +550,48 @@ public sealed class RecordingManager
 
     private sealed class RecordingSession
     {
-        public RecordingSession(long taskId, string outputPath)
+        public RecordingSession(long taskId, string outputPath, bool isLive, DateTimeOffset endTime)
         {
             TaskId = taskId;
             OutputPath = outputPath;
+            IsLive = isLive;
+            _endTimeUtcTicks = endTime.ToUniversalTime().Ticks;
         }
 
         public long TaskId { get; }
         public string OutputPath { get; }
+        public bool IsLive { get; }
         public CancellationTokenSource Cancellation { get; } = new();
         public Task Completion { get; set; } = Task.CompletedTask;
         public long BytesWritten { get; set; }
         public bool ManualStopRequested { get; set; }
+
+        private long _endTimeUtcTicks;
+        private int _scheduledStopRequested;
+
+        public DateTimeOffset EndTime => new(Interlocked.Read(ref _endTimeUtcTicks), TimeSpan.Zero);
+        public bool ScheduledStopRequested => Volatile.Read(ref _scheduledStopRequested) != 0;
+
+        public void UpdateEndTime(DateTimeOffset endTime)
+        {
+            Interlocked.Exchange(ref _endTimeUtcTicks, endTime.ToUniversalTime().Ticks);
+        }
+
+        public bool IsDue(DateTimeOffset now)
+        {
+            return IsLive && EndTime <= now;
+        }
+
+        public bool RequestScheduledStop()
+        {
+            if (Interlocked.Exchange(ref _scheduledStopRequested, 1) != 0)
+            {
+                return false;
+            }
+
+            Cancellation.Cancel();
+            return true;
+        }
         
         // 实时码率相关字段
         private long _lastBytesWritten = 0;
