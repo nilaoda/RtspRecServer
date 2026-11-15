@@ -39,6 +39,7 @@ public class JsonContractTests
         {
             Id = 7,
             Status = RecordingStatus.Recording,
+            IsLive = true,
             BytesWritten = 12345,
             TaskName = "Playback_CCTV-1"
         };
@@ -49,6 +50,7 @@ public class JsonContractTests
 
         Assert.Equal(7, root.GetProperty("id").GetInt64());
         Assert.Equal(1, root.GetProperty("status").GetInt32());
+        Assert.True(root.GetProperty("isLive").GetBoolean());
         Assert.Equal(12345, root.GetProperty("bytesWritten").GetInt64());
         Assert.False(root.TryGetProperty("Status", out _));
     }
