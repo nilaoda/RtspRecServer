@@ -44,10 +44,13 @@ namespace RtspRecServer.Server.Services.Epg
             }
 
             var channels = await _innerService.GetChannelsAsync();
-            
-            // 缓存频道列表
-            _cache.Set(cacheKey, channels, _cacheOptions);
-            
+
+            // 空结果不缓存（首屏与数据源未就绪的竞态会返回空列表），否则空状态会被缓存 15 分钟
+            if (channels.Count > 0)
+            {
+                _cache.Set(cacheKey, channels, _cacheOptions);
+            }
+
             _logger.LogDebug($"缓存频道列表，共{channels.Count}个频道");
             return channels;
         }
@@ -63,15 +66,18 @@ namespace RtspRecServer.Server.Services.Epg
             }
 
             var programs = await _innerService.GetChannelProgramsAsync(channelId);
-            
-            // 节目信息缓存时间较短（5分钟），因为节目表会频繁变化
-            var programCacheOptions = new MemoryCacheEntryOptions
+
+            // 节目信息缓存时间较短（5分钟），因为节目表会频繁变化；空结果不缓存
+            if (programs.Count > 0)
             {
-                SlidingExpiration = TimeSpan.FromMinutes(5),
-                Priority = CacheItemPriority.Normal
-            };
-            
-            _cache.Set(cacheKey, programs, programCacheOptions);
+                var programCacheOptions = new MemoryCacheEntryOptions
+                {
+                    SlidingExpiration = TimeSpan.FromMinutes(5),
+                    Priority = CacheItemPriority.Normal
+                };
+
+                _cache.Set(cacheKey, programs, programCacheOptions);
+            }
             
             _logger.LogDebug($"缓存频道节目表: {channelId}，共{programs.Count}个节目");
             return programs;
@@ -114,8 +120,11 @@ namespace RtspRecServer.Server.Services.Epg
             }
 
             var categories = await _innerService.GetCategoriesAsync();
-            
-            _cache.Set(cacheKey, categories, _cacheOptions);
+
+            if (categories.Count > 0)
+            {
+                _cache.Set(cacheKey, categories, _cacheOptions);
+            }
             
             _logger.LogDebug($"缓存分类列表，共{categories.Count}个分类");
             return categories;
@@ -132,8 +141,11 @@ namespace RtspRecServer.Server.Services.Epg
             }
 
             var channels = await _innerService.GetChannelsByCategoryAsync(category);
-            
-            _cache.Set(cacheKey, channels, _cacheOptions);
+
+            if (channels.Count > 0)
+            {
+                _cache.Set(cacheKey, channels, _cacheOptions);
+            }
             
             _logger.LogDebug($"缓存分类频道: {category}，共{channels.Count}个频道");
             return channels;

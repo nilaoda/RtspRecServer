@@ -87,32 +87,39 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 检查是否有节目即将结束，提前或准时刷新
     const checkAndRefresh = () => {
       const currentTime = Date.now();
-      
+
       // 增加冷却时间：如果 10 秒内刚刚刷新过，则跳过，防止死循环请求
       if (currentTime - lastRefreshRef.current < 10000) {
         return;
       }
 
-      const needsRefresh = currentPrograms.some(cp => {
-        const endTime = cp.endTime.getTime();
-        // 核心修复逻辑：
-        // 1. 如果当前时间已经超过了节目的结束时间，说明节目肯定已经换了，必须刷新。
-        // 2. 为了平滑过渡，我们在节目结束后的 1-2 秒内触发刷新，确保后端数据已更新。
-        // 3. 之前逻辑是提前 5 秒刷新，这会导致后端还没切换到新节目，前端就拿到了旧数据并进入 10 秒冷却。
-        const diff = currentTime - endTime;
-        return diff >= 1000 && diff <= 15000; // 节目结束后的 1 到 15 秒内触发刷新
-      });
+      // 列表为空说明首屏加载撞上了数据源未就绪（或刷新竞态），需要自愈重取，
+      // 否则空状态会一直卡住（some() 在空数组上恒为 false，永远不会自动恢复）
+      const needsRefresh =
+        currentPrograms.length === 0 ||
+        currentPrograms.some(cp => {
+          const endTime = cp.endTime.getTime();
+          // 核心修复逻辑：
+          // 1. 如果当前时间已经超过了节目的结束时间，说明节目肯定已经换了，必须刷新。
+          // 2. 为了平滑过渡，我们在节目结束后的 1-2 秒内触发刷新，确保后端数据已更新。
+          // 3. 之前逻辑是提前 5 秒刷新，这会导致后端还没切换到新节目，前端就拿到了旧数据并进入 10 秒冷却。
+          const diff = currentTime - endTime;
+          return diff >= 1000 && diff <= 15000; // 节目结束后的 1 到 15 秒内触发刷新
+        });
 
-      if (needsRefresh) {
-        console.log('Detected program ended, refreshing current programs to get next one...');
+      if (needsRefresh || channels.length === 0) {
+        console.log('Detected program ended or data not ready, refreshing current programs to get next one...');
         fetchCurrentPrograms();
+        if (channels.length === 0) {
+          fetchChannels();
+        }
       }
     };
 
     const timer = setInterval(checkAndRefresh, 5000); // 每 5 秒检查一次
 
     return () => clearInterval(timer);
-  }, [fetchCurrentPrograms, currentPrograms]); // 移除 now 依赖，靠 setInterval 驱动
+  }, [fetchCurrentPrograms, currentPrograms, channels, fetchChannels]); // 移除 now 依赖，靠 setInterval 驱动
 
   const refresh = async () => {
     setLoading(true)
