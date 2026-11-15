@@ -237,6 +237,23 @@ try
         return stopped ? Results.Ok(ApiResponse.Create("停止请求已发送")) : Results.BadRequest(ApiResponse.Create("任务未在录制中"));
     });
 
+    app.MapPost("/api/tasks/bulk-stop", async (
+        RecordingManager manager,
+        RecordingTaskBulkRequest request,
+        CancellationToken cancellationToken) =>
+    {
+        var result = await manager.StopTasksAsync(request.TaskIds, cancellationToken);
+        return Results.Ok(result);
+    });
+
+    app.MapPost("/api/tasks/bulk-delete", (
+        RecordingManager manager,
+        RecordingTaskBulkRequest request) =>
+    {
+        var result = manager.DeleteTasks(request.TaskIds);
+        return Results.Ok(result);
+    });
+
     app.MapPut("/api/tasks/{id:long}/end-time", async (RecordingManager manager, long id, RecordingTaskEndTimeUpdateRequest request, CancellationToken cancellationToken) =>
     {
         try

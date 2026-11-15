@@ -165,6 +165,80 @@ public sealed class RecordingManager
         return false;
     }
 
+    public async Task<RecordingTaskBulkResult> StopTasksAsync(
+        IReadOnlyCollection<long> taskIds,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var distinctIds = taskIds.Where(id => id > 0).Distinct().ToArray();
+        var sessions = new List<(long Id, RecordingSession Session)>();
+
+        lock (_taskTransitionLock)
+        {
+            foreach (var id in distinctIds)
+            {
+                if (_activeSessions.TryRemove(id, out var session))
+                {
+                    session.ManualStopRequested = true;
+                    session.Cancellation.Cancel();
+                    sessions.Add((id, session));
+                }
+            }
+        }
+
+        if (sessions.Count > 0)
+        {
+            await Task.WhenAll(sessions.Select(item => item.Session.Completion));
+        }
+
+        var succeededIds = sessions.Select(item => item.Id).ToArray();
+        var succeededSet = succeededIds.ToHashSet();
+        var failedIds = distinctIds.Where(id => !succeededSet.Contains(id)).ToArray();
+        _logger.LogInformation(
+            "批量停止任务完成：成功 {Succeeded}，失败 {Failed}",
+            succeededIds.Length,
+            failedIds.Length);
+
+        return new RecordingTaskBulkResult
+        {
+            Succeeded = succeededIds.Length,
+            Failed = failedIds.Length,
+            SucceededIds = succeededIds,
+            FailedIds = failedIds
+        };
+    }
+
+    public RecordingTaskBulkResult DeleteTasks(IReadOnlyCollection<long> taskIds)
+    {
+        var distinctIds = taskIds.Where(id => id > 0).Distinct().ToArray();
+        var succeededIds = new List<long>();
+        var failedIds = new List<long>();
+        foreach (var id in distinctIds)
+        {
+            if (DeleteTask(id))
+            {
+                succeededIds.Add(id);
+            }
+            else
+            {
+                failedIds.Add(id);
+            }
+        }
+
+        _logger.LogInformation(
+            "批量删除任务记录完成：成功 {Succeeded}，失败 {Failed}",
+            succeededIds.Count,
+            failedIds.Count);
+
+        return new RecordingTaskBulkResult
+        {
+            Succeeded = succeededIds.Count,
+            Failed = failedIds.Count,
+            SucceededIds = succeededIds.ToArray(),
+            FailedIds = failedIds.ToArray()
+        };
+    }
+
     public async Task<RecordingTask?> UpdateTaskEndTimeAsync(long id, DateTimeOffset endTime, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;

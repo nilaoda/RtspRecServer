@@ -47,6 +47,13 @@ export type ChannelConfig = {
   url: string
 }
 
+export type BulkTaskResult = {
+  succeeded: number
+  failed: number
+  succeededIds: number[]
+  failedIds: number[]
+}
+
 export type RecordingFileInfo = {
   fileName: string
   filePath: string

@@ -35,6 +35,19 @@ public sealed record RecordingTaskEndTimeUpdateRequest
     public DateTimeOffset EndTime { get; init; }
 }
 
+public sealed record RecordingTaskBulkRequest
+{
+    public long[] TaskIds { get; init; } = [];
+}
+
+public sealed record RecordingTaskBulkResult
+{
+    public int Succeeded { get; init; }
+    public int Failed { get; init; }
+    public long[] SucceededIds { get; init; } = [];
+    public long[] FailedIds { get; init; } = [];
+}
+
 public sealed record RecordingTaskDto
 {
     public long Id { get; init; }

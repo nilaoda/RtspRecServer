@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
 import type {
   AppConfig,
+  BulkTaskResult,
   ChannelConfig,
   RecordingFileInfo,
   RecordingTaskDto,
@@ -101,6 +102,13 @@ export const createTask = (payload: {
 export const stopTask = (id: number) =>
   fetchJson<{ message: string }>(`/api/tasks/${id}/stop`, { method: 'POST' })
 
+export const stopTasks = (ids: number[]) =>
+  fetchJson<BulkTaskResult>('/api/tasks/bulk-stop', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskIds: ids }),
+  })
+
 export const updateTaskEndTime = (id: number, endTime: string) =>
   fetchJson<RecordingTaskDto>(`/api/tasks/${id}/end-time`, {
     method: 'PUT',
@@ -110,6 +118,13 @@ export const updateTaskEndTime = (id: number, endTime: string) =>
 
 export const deleteTask = (id: number) =>
   fetchJson<{ message: string }>(`/api/tasks/${id}`, { method: 'DELETE' })
+
+export const deleteTasks = (ids: number[]) =>
+  fetchJson<BulkTaskResult>('/api/tasks/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskIds: ids }),
+  })
 
 export const getTaskMediaInfo = async (id: number) => {
   const data = await fetchJson<{ content?: string }>(`/api/tasks/${id}/mediainfo`)

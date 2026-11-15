@@ -5,6 +5,7 @@ import {
   addChannel,
   createTask,
   deleteTask,
+  deleteTasks as deleteTasksApi,
   getChannels,
   getConfig,
   getRecordings,
@@ -14,6 +15,7 @@ import {
   getTasks,
   removeChannel,
   stopTask,
+  stopTasks as stopTasksApi,
   updateChannel,
   updateConfig,
   updateTaskEndTime as updateTaskEndTimeApi,
@@ -235,6 +237,28 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifySuccess, reloadTasks],
   )
 
+  const stopTasksAction = useCallback(
+    async (ids: number[]) => {
+      if (ids.length === 0) return
+
+      try {
+        const result = await stopTasksApi(ids)
+        if (result.failed === 0) {
+          notifySuccess(`已发送 ${result.succeeded} 个停止请求`)
+        } else if (result.succeeded > 0) {
+          notifyError(`已发送 ${result.succeeded} 个停止请求，${result.failed} 个失败`)
+        } else {
+          notifyError('批量停止失败')
+        }
+      } catch {
+        notifyError('批量停止失败')
+      } finally {
+        reloadTasks()
+      }
+    },
+    [notifyError, notifySuccess, reloadTasks],
+  )
+
   const updateTaskEndTimeAction = useCallback(
     async (id: number, endTime: string) => {
       try {
@@ -261,6 +285,28 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       }
     },
     [notifySuccess, reloadTasks],
+  )
+
+  const deleteTasksAction = useCallback(
+    async (ids: number[]) => {
+      if (ids.length === 0) return
+
+      try {
+        const result = await deleteTasksApi(ids)
+        if (result.failed === 0) {
+          notifySuccess(`已删除 ${result.succeeded} 条任务记录`)
+        } else if (result.succeeded > 0) {
+          notifyError(`已删除 ${result.succeeded} 条记录，${result.failed} 条失败`)
+        } else {
+          notifyError('批量删除失败')
+        }
+      } catch {
+        notifyError('批量删除失败')
+      } finally {
+        reloadTasks()
+      }
+    },
+    [notifyError, notifySuccess, reloadTasks],
   )
 
   const addChannelAction = useCallback(
@@ -376,8 +422,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadConfig,
       createTask: createTaskAction,
       stopTask: stopTaskAction,
+      stopTasks: stopTasksAction,
       updateTaskEndTime: updateTaskEndTimeAction,
       deleteTask: deleteTaskAction,
+      deleteTasks: deleteTasksAction,
       addChannel: addChannelAction,
       updateChannel: updateChannelAction,
       deleteChannel: deleteChannelAction,
@@ -404,8 +452,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadConfig,
       createTaskAction,
       stopTaskAction,
+      stopTasksAction,
       updateTaskEndTimeAction,
       deleteTaskAction,
+      deleteTasksAction,
       addChannelAction,
       updateChannelAction,
       deleteChannelAction,

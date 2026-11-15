@@ -292,7 +292,7 @@ const taskSchema = z.object({
 type TaskFormValues = z.infer<typeof taskSchema>
 
 const TasksPage = () => {
-  const { tasks, channels, createTask, stopTask, updateTaskEndTime, deleteTask, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
+  const { tasks, channels, createTask, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
@@ -300,6 +300,9 @@ const TasksPage = () => {
   const comboboxListRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState<TaskTab>('active')
   const [page, setPage] = useState(1)
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set())
+  const [bulkStopConfirmOpen, setBulkStopConfirmOpen] = useState(false)
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
 
   const activeCount = useMemo(
     () => tasks.filter((task) => normalizeStatus(task.status) === 'Recording').length,
@@ -352,6 +355,67 @@ const TasksPage = () => {
   )
   const rangeStart = visibleTasks.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1
   const rangeEnd = Math.min(currentPage * PAGE_SIZE, visibleTasks.length)
+
+  const selectedTasks = useMemo(
+    () => tasks.filter((task) => selectedTaskIds.has(task.id)),
+    [tasks, selectedTaskIds],
+  )
+  const selectedRecordingIds = useMemo(
+    () => selectedTasks.filter((task) => normalizeStatus(task.status) === 'Recording').map((task) => task.id),
+    [selectedTasks],
+  )
+  const selectedDeletableIds = useMemo(
+    () => selectedTasks.filter((task) => normalizeStatus(task.status) !== 'Recording').map((task) => task.id),
+    [selectedTasks],
+  )
+  const pageTaskIds = useMemo(() => pagedTasks.map((task) => task.id), [pagedTasks])
+  const allPageSelected = pageTaskIds.length > 0 && pageTaskIds.every((id) => selectedTaskIds.has(id))
+  const somePageSelected = pageTaskIds.some((id) => selectedTaskIds.has(id)) && !allPageSelected
+  const selectedCount = selectedTasks.length
+
+  const toggleTaskSelection = useCallback((id: number) => {
+    setSelectedTaskIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
+  }, [])
+
+  const togglePageSelection = useCallback(() => {
+    setSelectedTaskIds((previous) => {
+      const next = new Set(previous)
+      if (allPageSelected) {
+        pageTaskIds.forEach((id) => next.delete(id))
+      } else {
+        pageTaskIds.forEach((id) => next.add(id))
+      }
+      return next
+    })
+  }, [allPageSelected, pageTaskIds])
+
+  const clearSelection = useCallback(() => {
+    setSelectedTaskIds(new Set())
+  }, [])
+
+  useEffect(() => {
+    setSelectedTaskIds((previous) => {
+      const existing = new Set(tasks.map((task) => task.id))
+      let changed = false
+      const next = new Set<number>()
+      for (const id of previous) {
+        if (existing.has(id)) {
+          next.add(id)
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : previous
+    })
+  }, [tasks])
 
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages))
@@ -517,6 +581,28 @@ const TasksPage = () => {
     })
   }
 
+  const onBulkStop = async () => {
+    const ids = [...selectedRecordingIds]
+    setBulkStopConfirmOpen(false)
+    if (ids.length === 0) {
+      return
+    }
+
+    await stopTasks(ids)
+    setSelectedTaskIds(new Set())
+  }
+
+  const onBulkDelete = async () => {
+    const ids = [...selectedDeletableIds]
+    setBulkDeleteConfirmOpen(false)
+    if (ids.length === 0) {
+      return
+    }
+
+    await deleteTasks(ids)
+    setSelectedTaskIds(new Set())
+  }
+
   const renderMobileActions = (task: RecordingTaskDto, display: TaskDisplay) => {
     const { normalizedStatus, showInfoActions, canEditEndTime, canRetry } = display
     return (
@@ -624,6 +710,7 @@ const TasksPage = () => {
           onValueChange={(value) => {
             setActiveTab(value as TaskTab)
             setPage(1)
+            setSelectedTaskIds(new Set())
           }}
         >
           <CardHeader className="flex flex-row flex-wrap items-center gap-3 space-y-0 border-b pb-3">
@@ -653,14 +740,82 @@ const TasksPage = () => {
           </CardHeader>
           <CardContent className="p-0">
             <TabsContent value={activeTab} className="m-0">
+              <div className={cn(
+                "flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2",
+                selectedCount === 0 && "md:hidden",
+              )}>
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground md:hidden">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-primary"
+                      checked={allPageSelected}
+                      ref={(input) => {
+                        if (input) input.indeterminate = somePageSelected
+                      }}
+                      onChange={togglePageSelection}
+                      aria-label="全选当前页任务"
+                    />
+                    全选本页
+                  </label>
+                  <span className="text-xs text-muted-foreground">
+                    已选 <span className="font-medium text-foreground">{selectedCount}</span> 项
+                  </span>
+                </div>
+                {selectedCount > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      onClick={() => setBulkStopConfirmOpen(true)}
+                      disabled={selectedRecordingIds.length === 0}
+                      title="仅停止正在录制的任务"
+                    >
+                      <StopCircle className="mr-1 h-3.5 w-3.5" />
+                      停止录制
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      onClick={() => setBulkDeleteConfirmOpen(true)}
+                      disabled={selectedDeletableIds.length === 0}
+                      title="删除任务记录；等待中的任务会被取消，录像文件不会删除"
+                    >
+                      <Trash2 className="mr-1 h-3.5 w-3.5" />
+                      删除记录
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" className="h-8" onClick={clearSelection}>
+                      取消选择
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground">勾选任务后可批量操作</span>
+                )}
+              </div>
               <div className="hidden rounded-md md:block">
                 <Table className="w-full min-w-[1120px] table-fixed">
                 <TableHeader>
                     <TableRow>
+                        <TableHead className="w-[3%]">
+                            <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-primary"
+                                checked={allPageSelected}
+                                ref={(input) => {
+                                    if (input) input.indeterminate = somePageSelected
+                                }}
+                                onChange={togglePageSelection}
+                                aria-label="全选当前页任务"
+                            />
+                        </TableHead>
                         <TableHead className="w-[4%]">ID</TableHead>
                         <TableHead className="w-[7%]">状态</TableHead>
-                        <TableHead className="w-[13%]">任务名称</TableHead>
-                        <TableHead className="w-[13%]">频道</TableHead>
+                        <TableHead className="w-[11%]">任务名称</TableHead>
+                        <TableHead className="w-[12%]">频道</TableHead>
                         <TableHead className="w-[12%]">时间</TableHead>
                         <TableHead className="w-[13%]">时长 / 进度</TableHead>
                         <TableHead className="w-[10%]">码率 / 大小</TableHead>
@@ -671,7 +826,7 @@ const TasksPage = () => {
                 <TableBody>
                     {pagedTasks.length === 0 ? (
                         <TableRow>
-                            <TableCell colSpan={9} className="h-24 text-center">
+                            <TableCell colSpan={10} className="h-24 text-center">
                                 {taskTabs[activeTab].empty}
                             </TableCell>
                         </TableRow>
@@ -691,9 +846,19 @@ const TasksPage = () => {
                                 canRetry,
                             } = getTaskDisplay(task, now.getTime())
                             const channel = channels.find((item) => item.id === task.channelId)
+                            const selected = selectedTaskIds.has(task.id)
 
                             return (
-                                <TableRow key={task.id}>
+                                <TableRow key={task.id} className={selected ? 'bg-primary/5' : undefined}>
+                                    <TableCell>
+                                        <input
+                                            type="checkbox"
+                                            className="h-4 w-4 accent-primary"
+                                            checked={selected}
+                                            onChange={() => toggleTaskSelection(task.id)}
+                                            aria-label={`选择任务 ${task.displayName || task.id}`}
+                                        />
+                                    </TableCell>
                                     <TableCell className="font-mono text-xs">{task.id}</TableCell>
                                     <TableCell>
                                         <TaskStatusBadge status={normalizedStatus} />
@@ -786,7 +951,6 @@ const TasksPage = () => {
                                                         </div>
                                                         <div>错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}</div>
                                                         <div>视频：{task.tsCheck.video ?? '未识别'} · 音频：{task.tsCheck.audio ?? '未识别'}</div>
-                                                        <div>PID {task.tsCheck.pidCount} · 包数 {task.tsCheck.packetCount.toLocaleString()}</div>
                                                         <div>码率 {task.tsCheck.bitrateKbps.toFixed(0)} Kb/s</div>
                                                         {task.tsCheck.lastEvent && <div>最近事件：{task.tsCheck.lastEvent}</div>}
                                                     </TooltipContent>
@@ -943,22 +1107,32 @@ const TasksPage = () => {
                   const display = getTaskDisplay(task, now.getTime())
                   const normalizedStatus = display.normalizedStatus
                   const channel = channels.find((item) => item.id === task.channelId)
+                  const selected = selectedTaskIds.has(task.id)
                   return (
-                    <div key={task.id} className="space-y-3 p-4">
+                    <div key={task.id} className={cn("space-y-3 p-4", selected && "bg-primary/5")}>
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 space-y-1.5">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <TaskStatusBadge status={normalizedStatus} />
-                            <span className="truncate font-medium" title={task.displayName || '--'}>
-                              {task.displayName || '--'}
-                            </span>
-                          </div>
-                          <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-                            <span className="truncate">{task.channelId} - {task.channelName}</span>
-                            {channel && <ChannelProtocolBadge url={channel.url} />}
-                            {task.isLive && (
-                              <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
-                            )}
+                        <div className="flex min-w-0 items-start gap-2.5">
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 shrink-0 accent-primary"
+                            checked={selected}
+                            onChange={() => toggleTaskSelection(task.id)}
+                            aria-label={`选择任务 ${task.displayName || task.id}`}
+                          />
+                          <div className="min-w-0 space-y-1.5">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <TaskStatusBadge status={normalizedStatus} />
+                              <span className="truncate font-medium" title={task.displayName || '--'}>
+                                {task.displayName || '--'}
+                              </span>
+                            </div>
+                            <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                              <span className="truncate">{task.channelId} - {task.channelName}</span>
+                              {channel && <ChannelProtocolBadge url={channel.url} />}
+                              {task.isLive && (
+                                <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <span className="shrink-0 font-mono text-xs text-muted-foreground">#{task.id}</span>
@@ -1108,6 +1282,46 @@ const TasksPage = () => {
                     className="bg-destructive hover:bg-destructive/90"
                 >
                     停止
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkStopConfirmOpen} onOpenChange={setBulkStopConfirmOpen}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>确认批量停止录制？</AlertDialogTitle>
+                <AlertDialogDescription>
+                    将向 {selectedRecordingIds.length} 个正在录制的任务发送停止请求；选中的其他状态任务不会受影响。
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction
+                    onClick={() => void onBulkStop()}
+                    className="bg-destructive hover:bg-destructive/90"
+                >
+                    停止录制
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>确认批量删除记录？</AlertDialogTitle>
+                <AlertDialogDescription>
+                    将删除 {selectedDeletableIds.length} 条任务记录；等待中的任务会被取消，录像文件不会被删除。正在录制的任务会被跳过。
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction
+                    onClick={() => void onBulkDelete()}
+                    className="bg-destructive hover:bg-destructive/90"
+                >
+                    删除记录
                 </AlertDialogAction>
             </AlertDialogFooter>
         </AlertDialogContent>
