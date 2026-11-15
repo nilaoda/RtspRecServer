@@ -169,20 +169,18 @@ namespace RtspRecServer.Server.Services.Epg
                 response.EnsureSuccessStatusCode();
 
                 await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                Stream decompressedStream = stream;
-                if (epgUrl.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
-                {
-                    decompressedStream = new System.IO.Compression.GZipStream(stream, System.IO.Compression.CompressionMode.Decompress);
-                }
+                // 部分源以 .gz 地址返回未压缩内容、或返回 zip 压缩包，按响应内容的魔数嗅探真实格式
+                var decoded = await EpgSourceDecoder.DecodeToXmlStreamAsync(stream, cancellationToken);
+                _logger.LogInformation("EPG 数据实际格式: {Format}", decoded.Format);
 
                 try
                 {
-                    var epgData = await _parserService.ParseXmlTvAsync(decompressedStream);
+                    var epgData = await _parserService.ParseXmlTvAsync(decoded.Stream);
                     await SaveEpgDataAsync(epgData);
                 }
                 finally
                 {
-                    if (decompressedStream != stream) await decompressedStream.DisposeAsync();
+                    await decoded.Stream.DisposeAsync();
                 }
             }
             catch (OperationCanceledException)

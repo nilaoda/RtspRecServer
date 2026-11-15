@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { PlayCircle, Clock, Calendar as CalendarIcon } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useEpgContext } from '../context/useEpgContext'
@@ -31,6 +31,29 @@ export default function EpgChannelPage() {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  }
+
+  // 'yyyy-MM-dd' 用本地时区构造，避免 new Date(str) 的 UTC 解析在负时区偏移下偏移一天
+  const parseDay = (value: string) => {
+    const [y, m, d] = value.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+
+  const dayDiff = (value: string) => {
+    const today = parseDay(formatDate(new Date()));
+    return Math.round((parseDay(value).getTime() - today.getTime()) / 86400000);
+  }
+
+  const dayLabel = (value: string) => {
+    switch (dayDiff(value)) {
+      case 0: return '今天';
+      case 1: return '明天';
+      case 2: return '后天';
+      case -1: return '昨天';
+      case -2: return '前天';
+      case -3: return '大前天';
+      default: return value;
+    }
   }
 
   const currentProgramRef = useRef<HTMLDivElement>(null)
@@ -78,14 +101,14 @@ export default function EpgChannelPage() {
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId)
 
-  const dateOptions = Array.from({ length: 4 }).map((_, i) => {
-    const d = new Date()
-    d.setDate(d.getDate() - i)
-    return {
-      label: i === 0 ? '今天' : i === 1 ? '昨天' : formatDate(d),
-      value: formatDate(d)
+  // 日期选项根据当前频道节目数据的实际范围动态生成（始终包含今天），源的覆盖天数不同也能自动适配
+  const dateOptions = useMemo(() => {
+    const dates = new Set<string>([formatDate(new Date())])
+    for (const p of programs) {
+      dates.add(formatDate(p.startTime))
     }
-  }).reverse()
+    return [...dates].sort().map((value) => ({ label: dayLabel(value), value }))
+  }, [programs])
 
   const filteredPrograms = programs.filter(p => {
     const programDate = formatDate(p.startTime)
