@@ -124,14 +124,24 @@ try
     Log.Information("配置静态文件...");
     var embeddedProvider = new EmbeddedFileProvider(typeof(Program).Assembly, "Server.wwwroot");
     app.Environment.WebRootFileProvider = embeddedProvider;
+    var staticFileOptions = new StaticFileOptions
+    {
+        FileProvider = embeddedProvider,
+        // 带内容 hash 的 /assets/* 可长缓存；入口文件（index.html、sw.js 等）必须每次协商，
+        // 否则发版后浏览器会沿用旧页面去引用已被替换的资源。
+        OnPrepareResponse = ctx =>
+        {
+            var headers = ctx.Context.Response.Headers;
+            headers.CacheControl = ctx.Context.Request.Path.StartsWithSegments("/assets")
+                ? "public, max-age=31536000, immutable"
+                : "no-cache";
+        }
+    };
     app.UseDefaultFiles(new DefaultFilesOptions
     {
         FileProvider = embeddedProvider
     });
-    app.UseStaticFiles(new StaticFileOptions
-    {
-        FileProvider = embeddedProvider
-    });
+    app.UseStaticFiles(staticFileOptions);
 
     Log.Information("映射端点...");
     app.Map("/ws", async context =>
@@ -480,7 +490,7 @@ try
     Log.Information("生命周期回调注册完成");
 
     Log.Information("完成配置，准备启动...");
-    app.MapFallbackToFile("index.html");
+    app.MapFallbackToFile("index.html", staticFileOptions);
     Log.Information("Fallback路由配置完成");
 
     Log.Information("监听地址: {Urls}", string.Join(", ", serverUrls));
