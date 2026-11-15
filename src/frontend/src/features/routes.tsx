@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom'
 import TasksPage from './tasks/TasksPage'
 import ChannelsPage from './channels/ChannelsPage'
+import M3uImportPage from './channels/M3uImportPage'
 import RecordingsPage from './recordings/RecordingsPage'
 import SettingsPage from './settings/SettingsPage'
 import { epgRoutes } from './epg'
@@ -10,6 +11,7 @@ const AppRoutes = () => {
     <Routes>
       <Route path="/" element={<TasksPage />} />
       <Route path="/channels" element={<ChannelsPage />} />
+      <Route path="/channels/import" element={<M3uImportPage />} />
       <Route path="/recordings" element={<RecordingsPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       {epgRoutes.map((route) => (

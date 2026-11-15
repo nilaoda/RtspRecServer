@@ -125,6 +125,14 @@ export const addChannel = (payload: { name: string; url: string }) =>
     body: JSON.stringify(payload),
   })
 
+export const importChannels = (channels: { name: string; url: string }[]) =>
+  fetchJson<{ addedCount: number; channels: ChannelConfig[] }>('/api/channels/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channels }),
+    silent: true,
+  })
+
 export const updateChannel = (id: number, payload: ChannelConfig) =>
   fetchJson<ChannelConfig>(`/api/channels/${id}`, {
     method: 'PUT',

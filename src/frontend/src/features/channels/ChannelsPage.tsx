@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Plus, Save, Trash2 } from 'lucide-react'
+import { FileUp, Plus, Save, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -101,8 +102,14 @@ const ChannelsPage = () => {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-lg font-medium">添加频道</CardTitle>
+            <Button asChild variant="outline" size="sm">
+                <Link to="/channels/import">
+                    <FileUp className="mr-2 h-4 w-4" />
+                    导入 M3U
+                </Link>
+            </Button>
         </CardHeader>
         <CardContent>
             <Form {...form}>

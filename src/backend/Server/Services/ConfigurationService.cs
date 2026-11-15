@@ -11,8 +11,13 @@ public sealed class ConfigurationService
     private readonly string _channelsPath;
 
     public ConfigurationService()
+        : this(AppContext.BaseDirectory)
     {
-        _basePath = AppContext.BaseDirectory;
+    }
+
+    internal ConfigurationService(string basePath)
+    {
+        _basePath = basePath;
         _appConfigPath = Path.Combine(_basePath, "recsettings.json");
         _channelsPath = Path.Combine(_basePath, "channels.json");
     }
@@ -111,6 +116,59 @@ public sealed class ConfigurationService
             channels.Add(created);
             WriteJson(_channelsPath, channels);
             return created;
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
+    public ChannelImportResult AddChannels(IReadOnlyList<ChannelImportItem>? items)
+    {
+        if (items is null || items.Count == 0)
+        {
+            throw new InvalidOperationException("没有可导入的频道");
+        }
+
+        _lock.EnterWriteLock();
+        try
+        {
+            var channels = File.Exists(_channelsPath)
+                ? JsonSerializer.Deserialize(File.ReadAllText(_channelsPath), RtspJsonContext.Default.ListChannelConfig) ?? new List<ChannelConfig>()
+                : new List<ChannelConfig>();
+
+            var nextId = channels.Count == 0 ? 0 : channels.Max(c => c.Id) + 1;
+            var created = new List<ChannelConfig>(items.Count);
+            foreach (var item in items)
+            {
+                if (item is null)
+                {
+                    throw new InvalidOperationException("频道名称和地址不能为空");
+                }
+
+                var name = item.Name?.Trim() ?? string.Empty;
+                var url = item.Url?.Trim() ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(url))
+                {
+                    throw new InvalidOperationException("频道名称和地址不能为空");
+                }
+
+                var channel = new ChannelConfig
+                {
+                    Id = nextId++,
+                    Name = name,
+                    Url = url
+                };
+                channels.Add(channel);
+                created.Add(channel);
+            }
+
+            WriteJson(_channelsPath, channels);
+            return new ChannelImportResult
+            {
+                AddedCount = created.Count,
+                Channels = created
+            };
         }
         finally
         {

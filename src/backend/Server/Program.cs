@@ -166,6 +166,23 @@ try
         return Results.Ok(service.AddChannel(channel));
     });
 
+    app.MapPost("/api/channels/import", (ConfigurationService service, ChannelImportRequest request) =>
+    {
+        try
+        {
+            var result = service.AddChannels(request.Channels);
+            return Results.Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(ex.Message);
+        }
+    });
+
     app.MapPut("/api/channels/{id:int}", (ConfigurationService service, int id, ChannelConfig channel) =>
     {
         var updated = service.UpdateChannel(id, channel);
