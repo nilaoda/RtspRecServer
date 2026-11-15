@@ -179,6 +179,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
             await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 128 * 1024);
             var sink = output ?? buffered!;
             var buffer = ArrayPool<byte>.Shared.Rent(65536);
+            using var rtpReorder = source.IsRtp ? new RtpReorderBuffer() : null;
 
             try
             {
@@ -188,6 +189,40 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 var lastProgress = startedAt;
                 var validTsSeen = false;
                 var foreignGroupPackets = 0;
+
+                async Task WritePayloadAsync(ReadOnlyMemory<byte> payload, CancellationToken token)
+                {
+                    await sink.WriteAsync(payload, token);
+                    bytesWritten += payload.Length;
+                    analysis.Append(payload.Span);
+
+                    var now = DateTime.UtcNow;
+                    if ((now - lastProgress).TotalSeconds >= 1.0)
+                    {
+                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                        lastProgress = now;
+                    }
+                }
+
+                async Task FlushReorderedAsync()
+                {
+                    if (rtpReorder is null)
+                    {
+                        return;
+                    }
+
+                    foreach (var packet in rtpReorder.Flush())
+                    {
+                        try
+                        {
+                            await WritePayloadAsync(packet.Payload, CancellationToken.None);
+                        }
+                        finally
+                        {
+                            packet.Dispose();
+                        }
+                    }
+                }
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -205,6 +240,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
                         Log.Warning("UDP 直播流超过 {Seconds} 秒无数据: {Url}", IdleTimeout.TotalSeconds, task.Url);
+                        await FlushReorderedAsync();
                         onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
                         return Finish(false, "直播流无数据超时", bytesWritten);
                     }
@@ -235,11 +271,17 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
 
                     var datagram = buffer.AsSpan(0, received.ReceivedBytes);
-                    if (!TryResolveTsPayload(datagram, source.IsRtp, out var dataOffset, out var dataLength))
+                    if (!TryResolveTsPayload(
+                            datagram,
+                            source.IsRtp,
+                            out var dataOffset,
+                            out var dataLength,
+                            out var rtpSequence))
                     {
                         if (!validTsSeen && DateTime.UtcNow - startedAt > InvalidDataTimeout)
                         {
                             Log.Warning("UDP 直播源未返回有效的 MPEG-TS 数据: {Url}", task.Url);
+                            await FlushReorderedAsync();
                             return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
                         }
 
@@ -247,18 +289,31 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
 
                     validTsSeen = true;
-                    await sink.WriteAsync(buffer.AsMemory(dataOffset, dataLength), cancellationToken);
-                    bytesWritten += dataLength;
-                    analysis.Append(buffer.AsSpan(dataOffset, dataLength));
-
-                    var now = DateTime.UtcNow;
-                    if ((now - lastProgress).TotalSeconds >= 1.0)
+                    if (rtpSequence.HasValue && rtpReorder is not null)
                     {
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                        lastProgress = now;
+                        var ready = rtpReorder.Push(
+                            rtpSequence.Value,
+                            buffer.AsSpan(dataOffset, dataLength),
+                            DateTime.UtcNow);
+                        foreach (var packet in ready)
+                        {
+                            try
+                            {
+                                await WritePayloadAsync(packet.Payload, cancellationToken);
+                            }
+                            finally
+                            {
+                                packet.Dispose();
+                            }
+                        }
+                    }
+                    else
+                    {
+                        await WritePayloadAsync(buffer.AsMemory(dataOffset, dataLength), cancellationToken);
                     }
                 }
 
+                await FlushReorderedAsync();
                 await sink.FlushAsync(CancellationToken.None);
                 onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
                 return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
@@ -365,10 +420,12 @@ public sealed class UdpLiveRecordingService : IRecordingService
         ReadOnlySpan<byte> datagram,
         bool isRtp,
         out int offset,
-        out int length)
+        out int length,
+        out ushort? rtpSequence)
     {
         offset = 0;
         length = datagram.Length;
+        rtpSequence = null;
         if (length == 0)
         {
             return false;
@@ -383,6 +440,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 return false;
             }
 
+            rtpSequence = (ushort)((datagram[2] << 8) | datagram[3]);
             offset = headerLength;
             length -= headerLength;
 

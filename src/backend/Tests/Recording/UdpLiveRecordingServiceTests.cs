@@ -133,6 +133,71 @@ public class UdpLiveRecordingServiceTests
         }
     }
 
+    [Fact]
+    public async Task RecordsOutOfOrderRtpPacketsInSequenceOrder()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"rtsp-rtp-order-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(directory, "recording.ts");
+        var port = GetFreeUdpPort();
+        var task = new RecordingTask
+        {
+            Id = 1,
+            ChannelId = 1,
+            ChannelName = "Test",
+            TaskName = "Live_Order",
+            IsLive = true,
+            Url = $"rtp://127.0.0.1:{port}",
+            StartTime = DateTimeOffset.UtcNow,
+            EndTime = DateTimeOffset.UtcNow.AddMinutes(1)
+        };
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var service = new UdpLiveRecordingService();
+        var recording = service.RecordAsync(
+            task,
+            outputPath,
+            targetDuration: null,
+            recordingTransport: "MP2T/TCP",
+            onProgress: _ => { },
+            cancellationToken: cancellation.Token);
+
+        try
+        {
+            await WaitUntilAsync(() => File.Exists(outputPath), TimeSpan.FromSeconds(3));
+            using (var sender = new UdpClient(AddressFamily.InterNetwork))
+            {
+                foreach (var sequence in new ushort[] { 3, 1, 4, 2 })
+                {
+                    var payload = new byte[188];
+                    payload[0] = 0x47;
+                    payload[1] = (byte)sequence;
+                    var datagram = CreateRtpPacket(payload, sequence);
+                    await sender.SendAsync(datagram, datagram.Length, new IPEndPoint(IPAddress.Loopback, port));
+                }
+            }
+
+            await Task.Delay(500);
+            cancellation.Cancel();
+            await recording;
+
+            var written = await File.ReadAllBytesAsync(outputPath);
+            Assert.Equal(188 * 4, written.Length);
+            Assert.Equal([1, 2, 3, 4], new[] { written[1], written[189], written[377], written[565] });
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
     private static int GetFreeUdpPort()
     {
         using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
@@ -151,11 +216,13 @@ public class UdpLiveRecordingServiceTests
         return payload;
     }
 
-    private static byte[] CreateRtpPacket(byte[] tsPayload)
+    private static byte[] CreateRtpPacket(byte[] tsPayload, ushort sequence = 0)
     {
         var packet = new byte[12 + tsPayload.Length];
         packet[0] = 0x80;
         packet[1] = 0x21;
+        packet[2] = (byte)(sequence >> 8);
+        packet[3] = (byte)sequence;
         tsPayload.CopyTo(packet.AsSpan(12));
         return packet;
     }

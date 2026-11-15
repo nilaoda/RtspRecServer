@@ -98,7 +98,10 @@ public sealed class RecordingManager
 
         var isLive = LiveSourceClassifier.IsLive(channel.Url);
 
-        var suffix = $"{channel.Name}_{request.StartTime.ToLocalTime():yyyyMMddHHmmss}_{request.EndTime.ToLocalTime():yyyyMMddHHmmss}";
+        var localStart = request.StartTime.ToLocalTime();
+        var suffix = isLive
+            ? $"{channel.Name}_{localStart:yyyyMMddHHmmss}"
+            : $"{channel.Name}_{localStart:yyyyMMddHHmmss}_{request.EndTime.ToLocalTime():yyyyMMddHHmmss}";
         var baseName = string.IsNullOrWhiteSpace(request.TaskName)
             ? (isLive ? "Live" : "Playback")
             : request.TaskName.Trim();
