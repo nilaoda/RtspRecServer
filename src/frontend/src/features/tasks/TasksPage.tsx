@@ -185,9 +185,10 @@ const getTaskDisplay = (task: RecordingTaskDto, nowMs: number): TaskDisplay => {
   const plannedDuration = Number.isFinite(durationStart) && Number.isFinite(end)
     ? Math.max(0, end - durationStart)
     : 0
+  const hasRecordedData = task.bytesWritten > 0 || (task.pcrElapsedSeconds ?? 0) > 0
   const recordedDuration = task.pcrElapsedSeconds !== undefined && task.pcrElapsedSeconds > 0
     ? task.pcrElapsedSeconds * 1000
-    : (Number.isFinite(startedAt)
+    : (hasRecordedData && Number.isFinite(startedAt)
       ? Math.max(0, (normalizedStatus === 'Recording' ? nowMs : Number.isFinite(finishedAt) ? finishedAt : nowMs) - startedAt)
       : 0)
   const progress = normalizedStatus === 'Pending'
