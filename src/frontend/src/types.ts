@@ -8,6 +8,11 @@ export type AppConfig = {
 
 export type RecordingStatus = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped' | 0 | 1 | 2 | 3 | 4
 
+export type TsStreamTrack = {
+  pid: number
+  label: string
+}
+
 export type TsCheckSummary = {
   verdict: 'pass' | 'warning' | 'error' | 'incomplete' | 'unknown'
   errorCount: number
@@ -17,6 +22,8 @@ export type TsCheckSummary = {
   bitrateKbps: number
   video?: string
   audio?: string
+  videoTracks?: TsStreamTrack[]
+  audioTracks?: TsStreamTrack[]
   pidCount: number
   lastEvent?: string
 }
@@ -45,6 +52,21 @@ export type ChannelConfig = {
   id: number
   name: string
   url: string
+}
+
+export type ChannelProbeResult = {
+  channelId: number
+  accessible: boolean
+  videoTracks: TsStreamTrack[]
+  audioTracks: TsStreamTrack[]
+  resolution?: string
+  bitrateKbps?: number
+  tsVerdict?: 'pass' | 'warning' | 'error' | 'incomplete' | 'unknown'
+  errorCount: number
+  warningCount: number
+  errorMessage?: string
+  checkedAt: string
+  elapsedSeconds: number
 }
 
 export type BulkTaskResult = {

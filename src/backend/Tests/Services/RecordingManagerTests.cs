@@ -246,7 +246,8 @@ public class RecordingManagerTests : IDisposable
             TimeSpan? targetDuration,
             string recordingTransport,
             Action<RecordingProgress> onProgress,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Stream? output = null)
         {
             Started.TrySetResult();
             try
@@ -273,7 +274,8 @@ public class RecordingManagerTests : IDisposable
             TimeSpan? targetDuration,
             string recordingTransport,
             Action<RecordingProgress> onProgress,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Stream? output = null)
         {
             return Task.FromResult(new RecordingResult
             {

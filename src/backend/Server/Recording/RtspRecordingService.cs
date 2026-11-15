@@ -27,9 +27,10 @@ public sealed class RtspRecordingService : IRecordingService
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Stream? output = null)
     {
-        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport, task.TaskName);
+        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport, task.TaskName, output);
         try
         {
             var result = await recorder.RunAsync(targetDuration, onProgress, cancellationToken);
@@ -68,17 +69,19 @@ internal sealed class RtspStreamRecorder
     private readonly string _recordingTransport;
     private readonly bool _useRtp;
     private readonly string _displayName;
+    private readonly Stream? _output;
     private TcpClient? _client;
     private int _seq = 2;
     private TsLiveAnalysisSession? _analysis;
     public long BytesWritten { get; private set; }
 
-    public RtspStreamRecorder(string url, string outputPath, string recordingTransport, string displayName)
+    public RtspStreamRecorder(string url, string outputPath, string recordingTransport, string displayName, Stream? output = null)
     {
         _url = url;
         _outputPath = outputPath;
         _recordingTransport = recordingTransport;
         _displayName = displayName;
+        _output = output;
         _useRtp = string.Equals(_recordingTransport, "MP2T/RTP/TCP", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -119,7 +122,7 @@ internal sealed class RtspStreamRecorder
             _seq = 2;
             _analysis?.Dispose();
             _analysis = null;
-            return await new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName).RunAsync(targetDuration, onProgress, cancellationToken);
+            return await new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName, _output).RunAsync(targetDuration, onProgress, cancellationToken);
         }
 
         if (!resp.Contains("200 OK"))
@@ -152,9 +155,15 @@ internal sealed class RtspStreamRecorder
         }
         _ = ReceiveHead(stream);
 
-        EnsureOutputPath(_outputPath);
-        await using var fileStream = new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
-        await using var buffered = new BufferedStream(fileStream, 64 * 1024);
+        if (_output is null)
+        {
+            EnsureOutputPath(_outputPath);
+        }
+        await using var ownedFile = _output is null
+            ? new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous)
+            : null;
+        await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 64 * 1024);
+        var sink = _output ?? buffered!;
 
         var header = new byte[4];
         while (!cancellationToken.IsCancellationRequested)
@@ -202,10 +211,10 @@ internal sealed class RtspStreamRecorder
                     {
                         if (batchOffset > 0)
                         {
-                            await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                            await sink.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
                             batchOffset = 0;
                         }
-                        await buffered.WriteAsync(payloadMemory.Slice(dataOffset, dataLength), cancellationToken);
+                        await sink.WriteAsync(payloadMemory.Slice(dataOffset, dataLength), cancellationToken);
                         BytesWritten += dataLength;
                         _analysis?.Append(payloadMemory.Span.Slice(dataOffset, dataLength));
                     }
@@ -213,7 +222,7 @@ internal sealed class RtspStreamRecorder
                     {
                         if (batchOffset + dataLength > BatchSize)
                         {
-                            await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                            await sink.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
                             batchOffset = 0;
                         }
 
@@ -257,11 +266,11 @@ internal sealed class RtspStreamRecorder
         // 写入剩余数据
         if (batchOffset > 0)
         {
-            await buffered.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+            await sink.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
         }
         ArrayPool<byte>.Shared.Return(batchBuffer);
         
-        await buffered.FlushAsync(cancellationToken);
+        await sink.FlushAsync(cancellationToken);
         
         // 最终进度报告
         double? finalPcrElapsedSeconds = null;

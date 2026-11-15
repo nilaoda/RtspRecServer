@@ -10,5 +10,6 @@ public interface IRecordingService
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Stream? output = null);
 }

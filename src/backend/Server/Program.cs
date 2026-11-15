@@ -63,6 +63,7 @@ try
     builder.Services.AddSingleton<WebSocketConnectionManager>();
     builder.Services.AddSingleton<IRecordingNotifier, WebSocketRecordingNotifier>();
     builder.Services.AddSingleton<RecordingManager>();
+    builder.Services.AddSingleton<ChannelProbeService>();
     builder.Services.AddHostedService<RecordingBackgroundService>();
 
     // 添加EPG服务
@@ -182,6 +183,20 @@ try
         {
             return Results.Problem(ex.Message);
         }
+    });
+
+    app.MapGet("/api/channels/probes", (ChannelProbeService service) =>
+    {
+        return Results.Ok(service.GetResults().ToList());
+    });
+
+    app.MapPost("/api/channels/probe", async (
+        ChannelProbeService service,
+        ChannelProbeRequest request,
+        CancellationToken cancellationToken) =>
+    {
+        var results = await service.ProbeAsync(request.ChannelIds, cancellationToken);
+        return Results.Ok(results.ToList());
     });
 
     app.MapPut("/api/channels/{id:int}", (ConfigurationService service, int id, ChannelConfig channel) =>

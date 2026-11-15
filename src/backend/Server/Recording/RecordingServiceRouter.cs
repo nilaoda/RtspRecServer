@@ -24,20 +24,21 @@ public sealed class RecordingServiceRouter : IRecordingService
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Stream? output = null)
     {
         if (task.IsLive)
         {
             if (LiveSourceClassifier.IsHttpLive(task.Url))
             {
                 return _httpLiveRecordingService.RecordAsync(
-                    task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken);
+                    task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken, output);
             }
 
             if (LiveSourceClassifier.IsDirectLive(task.Url))
             {
                 return _udpLiveRecordingService.RecordAsync(
-                    task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken);
+                    task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken, output);
             }
 
             return Task.FromResult(new RecordingResult
@@ -49,6 +50,6 @@ public sealed class RecordingServiceRouter : IRecordingService
         }
 
         return _rtspRecordingService.RecordAsync(
-            task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken);
+            task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken, output);
     }
 }

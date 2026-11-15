@@ -94,8 +94,8 @@ internal sealed class RecordingLogWriter : IDisposable
             $"包数={tsCheck.PacketCount}",
             $"错误={tsCheck.ErrorCount}",
             $"警告={tsCheck.WarningCount}",
-            $"视频={tsCheck.Video ?? "未识别"}",
-            $"音频={tsCheck.Audio ?? "未识别"}",
+            $"视频={FormatTracks(tsCheck.VideoTracks, tsCheck.Video)}",
+            $"音频={FormatTracks(tsCheck.AudioTracks, tsCheck.Audio)}",
             $"PID={tsCheck.PidCount}"
         };
         if (!string.IsNullOrWhiteSpace(tsCheck.LastEvent))
@@ -132,7 +132,7 @@ internal sealed class RecordingLogWriter : IDisposable
         }
         if (tsCheck is not null)
         {
-            WriteLine($"TS 检测: {VerdictText(tsCheck.Verdict)} · 错误={tsCheck.ErrorCount} · 警告={tsCheck.WarningCount} · 视频={tsCheck.Video ?? "未识别"} · 音频={tsCheck.Audio ?? "未识别"} · PID={tsCheck.PidCount} · 包数={tsCheck.PacketCount}");
+            WriteLine($"TS 检测: {VerdictText(tsCheck.Verdict)} · 错误={tsCheck.ErrorCount} · 警告={tsCheck.WarningCount} · 视频={FormatTracks(tsCheck.VideoTracks, tsCheck.Video)} · 音频={FormatTracks(tsCheck.AudioTracks, tsCheck.Audio)} · PID={tsCheck.PidCount} · 包数={tsCheck.PacketCount}");
             if (!string.IsNullOrWhiteSpace(tsCheck.LastEvent))
             {
                 WriteLine($"最近事件: {tsCheck.LastEvent}");
@@ -196,6 +196,16 @@ internal sealed class RecordingLogWriter : IDisposable
         "incomplete" => "未完成",
         _ => "未知",
     };
+
+    private static string FormatTracks(IReadOnlyList<TsStreamTrack> tracks, string? fallback)
+    {
+        var labels = tracks
+            .Select(track => track.Label)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return labels.Length > 0 ? string.Join(" / ", labels) : fallback ?? "未识别";
+    }
 
     private static string StatusText(RecordingStatus status) => status switch
     {

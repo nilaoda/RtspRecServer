@@ -6,7 +6,7 @@ import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, Chevrons
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import type { RecordingStatus, RecordingTaskDto, TsCheckSummary } from '../../types'
+import type { RecordingStatus, RecordingTaskDto, TsCheckSummary, TsStreamTrack } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 
@@ -273,9 +273,18 @@ const tsVerdictClass = (verdict?: string) => {
   return 'border-border bg-muted text-muted-foreground'
 }
 
+const tsTrackText = (tracks?: TsStreamTrack[], fallback?: string) => {
+  const labels = tracks?.map((track) => track.label).filter(Boolean) ?? []
+  const unique = [...new Set(labels)]
+  return unique.length > 0 ? unique.join(' / ') : fallback || '未识别'
+}
+
 const tsCodecText = (tsCheck?: TsCheckSummary) => {
   if (!tsCheck) return '--'
-  const streams = [tsCheck.video, tsCheck.audio].filter(Boolean)
+  const streams = [
+    tsTrackText(tsCheck.videoTracks, tsCheck.video),
+    tsTrackText(tsCheck.audioTracks, tsCheck.audio),
+  ].filter((value) => value !== '未识别')
   return streams.length > 0 ? streams.join(' + ') : '未识别轨道'
 }
 
@@ -950,7 +959,7 @@ const TasksPage = () => {
                                                             TS 检测：{tsVerdictLabel[task.tsCheck.verdict] ?? '未知'}
                                                         </div>
                                                         <div>错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}</div>
-                                                        <div>视频：{task.tsCheck.video ?? '未识别'} · 音频：{task.tsCheck.audio ?? '未识别'}</div>
+                                                        <div>视频：{tsTrackText(task.tsCheck.videoTracks, task.tsCheck.video)} · 音频：{tsTrackText(task.tsCheck.audioTracks, task.tsCheck.audio)}</div>
                                                         <div>码率 {task.tsCheck.bitrateKbps.toFixed(0)} Kb/s</div>
                                                         {task.tsCheck.lastEvent && <div>最近事件：{task.tsCheck.lastEvent}</div>}
                                                     </TooltipContent>

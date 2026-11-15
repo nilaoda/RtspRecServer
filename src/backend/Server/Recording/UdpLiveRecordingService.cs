@@ -136,7 +136,8 @@ public sealed class UdpLiveRecordingService : IRecordingService
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Stream? output = null)
     {
         var bytesWritten = 0L;
         using var analysis = new TsLiveAnalysisSession(task.TaskName);
@@ -160,16 +161,23 @@ public sealed class UdpLiveRecordingService : IRecordingService
 
         try
         {
-            EnsureOutputPath(outputPath);
+            if (output is null)
+            {
+                EnsureOutputPath(outputPath);
+            }
+
             using var socket = CreateSocket(source);
-            await using var fileStream = new FileStream(
-                outputPath,
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.Read,
-                64 * 1024,
-                FileOptions.Asynchronous);
-            await using var file = new BufferedStream(fileStream, 128 * 1024);
+            await using var ownedFile = output is null
+                ? new FileStream(
+                    outputPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    64 * 1024,
+                    FileOptions.Asynchronous)
+                : null;
+            await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 128 * 1024);
+            var sink = output ?? buffered!;
             var buffer = ArrayPool<byte>.Shared.Rent(65536);
 
             try
@@ -239,7 +247,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
 
                     validTsSeen = true;
-                    await file.WriteAsync(buffer.AsMemory(dataOffset, dataLength), cancellationToken);
+                    await sink.WriteAsync(buffer.AsMemory(dataOffset, dataLength), cancellationToken);
                     bytesWritten += dataLength;
                     analysis.Append(buffer.AsSpan(dataOffset, dataLength));
 
@@ -251,7 +259,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
                 }
 
-                await file.FlushAsync(CancellationToken.None);
+                await sink.FlushAsync(CancellationToken.None);
                 onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
                 return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
             }

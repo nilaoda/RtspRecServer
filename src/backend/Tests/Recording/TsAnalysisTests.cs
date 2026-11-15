@@ -36,6 +36,38 @@ public class TsAnalysisTests
     }
 
     [Fact]
+    public void LiveSession_MapsMultipleAudioTracks()
+    {
+        var packets = new List<byte[]>
+        {
+            CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
+            CreatePsiPacket(0x0100, 0, BuildPmtSection(
+                0x0101,
+                (TsStreamTypes.H264, 0x0101),
+                (TsStreamTypes.Aac, 0x0102),
+                (TsStreamTypes.Ac3, 0x0103))),
+            CreatePacket(0x0101, 0, pcrBase: 0),
+            CreatePesPacket(0x0101, 1, 90_000),
+            CreatePesPacket(0x0102, 0, 90_000, 0xC0),
+            CreatePesPacket(0x0103, 0, 90_000, 0xBD),
+            CreatePacket(0x0101, 2, pcrBase: 3_000),
+        };
+
+        using var session = new TsLiveAnalysisSession("test");
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        Assert.True(summary!.AudioTracks.Length >= 2);
+        Assert.Contains(summary.AudioTracks, track => track.Label.Contains("AAC"));
+        Assert.Contains(summary.AudioTracks, track => track.Label.Contains("AC-3"));
+    }
+
+    [Fact]
     public void LiveSession_MapsHevcAndAc3Streams()
     {
         var packets = new List<byte[]>

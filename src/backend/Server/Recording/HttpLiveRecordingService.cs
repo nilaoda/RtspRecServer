@@ -16,7 +16,8 @@ public sealed class HttpLiveRecordingService : IRecordingService
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Stream? output = null)
     {
         var bytesWritten = 0L;
         using var analysis = new TsLiveAnalysisSession(task.TaskName);
@@ -35,7 +36,11 @@ public sealed class HttpLiveRecordingService : IRecordingService
 
         try
         {
-            EnsureOutputPath(outputPath);
+            if (output is null)
+            {
+                EnsureOutputPath(outputPath);
+            }
+
             using var response = await HttpClient.GetAsync(task.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
@@ -49,7 +54,10 @@ public sealed class HttpLiveRecordingService : IRecordingService
             }
 
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
-            await using var file = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 32 * 1024, FileOptions.Asynchronous);
+            await using var ownedFile = output is null
+                ? new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 32 * 1024, FileOptions.Asynchronous)
+                : null;
+            var sink = output ?? ownedFile!;
             var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
             var lastProgress = DateTime.UtcNow;
             var firstChunk = true;
@@ -88,7 +96,7 @@ public sealed class HttpLiveRecordingService : IRecordingService
                         }
                     }
 
-                    await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    await sink.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
                     bytesWritten += read;
                     analysis.Append(buffer.AsSpan(0, read));
 
@@ -105,7 +113,7 @@ public sealed class HttpLiveRecordingService : IRecordingService
                 ArrayPool<byte>.Shared.Return(buffer);
             }
 
-            await file.FlushAsync(CancellationToken.None);
+            await sink.FlushAsync(CancellationToken.None);
             onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
 
             return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);

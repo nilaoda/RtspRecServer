@@ -112,9 +112,18 @@ internal static class TsCheckSummaryMapper
 {
     public static TsCheckSummary FromProgress(TsCheckProgress progress)
     {
-        var video = FindPid(progress.Pids, static pid =>
-            pid.StreamType is byte streamType && TsStreamTypes.IsVideo(streamType));
-        var audio = FindPid(progress.Pids, IsAudio);
+        var videoTracks = FindTracks(
+            progress.Pids,
+            static pid => pid.Pid >= 0 && pid.StreamType is byte streamType && TsStreamTypes.IsVideo(streamType),
+            static pid => pid.Pid,
+            static pid => pid.PacketCount,
+            static pid => FormatPid(pid));
+        var audioTracks = FindTracks(
+            progress.Pids,
+            static pid => pid.Pid >= 0 && IsAudio(pid),
+            static pid => pid.Pid,
+            static pid => pid.PacketCount,
+            static pid => FormatPid(pid));
 
         return new TsCheckSummary
         {
@@ -130,8 +139,10 @@ internal static class TsCheckSummaryMapper
             PacketCount = progress.PacketCount,
             BytesScanned = progress.BytesScanned,
             BitrateKbps = progress.BytesPerSecond * 8 / 1024,
-            Video = video is { } videoPid ? FormatPid(videoPid) : null,
-            Audio = audio is { } audioPid ? FormatPid(audioPid) : null,
+            Video = videoTracks.FirstOrDefault()?.Label,
+            Audio = audioTracks.FirstOrDefault()?.Label,
+            VideoTracks = videoTracks,
+            AudioTracks = audioTracks,
             PidCount = progress.Pids.Count(static pid => pid.Pid >= 0),
             LastEvent = FormatEvent(progress.NewEvent),
         };
@@ -139,9 +150,18 @@ internal static class TsCheckSummaryMapper
 
     public static TsCheckSummary FromResult(TsCheckResult result)
     {
-        var video = FindPid(result.Pids.Values, static pid =>
-            pid.StreamType is byte streamType && TsStreamTypes.IsVideo(streamType));
-        var audio = FindPid(result.Pids.Values, IsAudio);
+        var videoTracks = FindTracks(
+            result.Pids.Values,
+            static pid => pid.Pid >= 0 && pid.StreamType is byte streamType && TsStreamTypes.IsVideo(streamType),
+            static pid => pid.Pid,
+            static pid => pid.PacketCount,
+            static pid => FormatPid(pid));
+        var audioTracks = FindTracks(
+            result.Pids.Values,
+            static pid => pid.Pid >= 0 && IsAudio(pid),
+            static pid => pid.Pid,
+            static pid => pid.PacketCount,
+            static pid => FormatPid(pid));
         var lastEvent = result.Events.LastOrDefault(static item => item.Severity == TsCheckSeverity.Error)
                         ?? result.Events.LastOrDefault(static item => item.Severity == TsCheckSeverity.Warning);
 
@@ -162,57 +182,31 @@ internal static class TsCheckSummaryMapper
             BitrateKbps = result.Elapsed.TotalSeconds > 0
                 ? result.BytesScanned * 8 / result.Elapsed.TotalSeconds / 1024
                 : 0,
-            Video = video is { } videoPid ? FormatPid(videoPid) : null,
-            Audio = audio is { } audioPid ? FormatPid(audioPid) : null,
+            Video = videoTracks.FirstOrDefault()?.Label,
+            Audio = audioTracks.FirstOrDefault()?.Label,
+            VideoTracks = videoTracks,
+            AudioTracks = audioTracks,
             PidCount = result.Pids.Count,
             LastEvent = FormatEvent(lastEvent),
         };
     }
 
-    private static TsCheckPidProgress? FindPid(
-        IEnumerable<TsCheckPidProgress> pids,
-        Func<TsCheckPidProgress, bool> predicate)
+    private static TsStreamTrack[] FindTracks<T>(
+        IEnumerable<T> pids,
+        Func<T, bool> predicate,
+        Func<T, int> getPid,
+        Func<T, long> getPacketCount,
+        Func<T, string> format)
     {
-        TsCheckPidProgress? best = null;
-        long bestPackets = -1;
-        foreach (var pid in pids)
-        {
-            if (pid.Pid < 0 || !predicate(pid))
+        return pids
+            .Where(predicate)
+            .OrderByDescending(getPacketCount)
+            .Select(pid => new TsStreamTrack
             {
-                continue;
-            }
-
-            if (pid.PacketCount > bestPackets)
-            {
-                bestPackets = pid.PacketCount;
-                best = pid;
-            }
-        }
-
-        return best;
-    }
-
-    private static TsCheckPidSummary? FindPid(
-        IEnumerable<TsCheckPidSummary> pids,
-        Func<TsCheckPidSummary, bool> predicate)
-    {
-        TsCheckPidSummary? best = null;
-        long bestPackets = -1;
-        foreach (var pid in pids)
-        {
-            if (pid.Pid < 0 || !predicate(pid))
-            {
-                continue;
-            }
-
-            if (pid.PacketCount > bestPackets)
-            {
-                bestPackets = pid.PacketCount;
-                best = pid;
-            }
-        }
-
-        return best;
+                Pid = getPid(pid),
+                Label = format(pid)
+            })
+            .ToArray();
     }
 
     private static bool IsAudio(TsCheckPidProgress pid) =>
