@@ -46,6 +46,21 @@ jobs:
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Set up dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_SDK_VERSION }}
+
+      - name: Run backend tests
+        run: dotnet test src/backend/Tests/Tests.csproj -c Debug --nologo
+
   build-web:
     runs-on: ubuntu-latest
     needs: set-date
