@@ -6,6 +6,7 @@ public sealed class RecordingBackgroundService : BackgroundService
 {
     private readonly RecordingManager _manager;
     private readonly ConfigurationService _configurationService;
+    private readonly RecordingTimerService _timerService;
     private readonly WebSocketConnectionManager _connections;
     private readonly ILogger<RecordingBackgroundService> _logger;
 
@@ -16,11 +17,13 @@ public sealed class RecordingBackgroundService : BackgroundService
     public RecordingBackgroundService(
         RecordingManager manager,
         ConfigurationService configurationService,
+        RecordingTimerService timerService,
         WebSocketConnectionManager connections,
         ILogger<RecordingBackgroundService> logger)
     {
         _manager = manager;
         _configurationService = configurationService;
+        _timerService = timerService;
         _connections = connections;
         _logger = logger;
     }
@@ -40,7 +43,10 @@ public sealed class RecordingBackgroundService : BackgroundService
                 var config = _configurationService.GetAppConfig();
 
                 _manager.StopSessionsDue(now);
-                
+
+                // 扫描定时规则，命中窗口则自动生成录制任务
+                await _timerService.ScanAndGenerateAsync(now, stoppingToken);
+
                 _logger.LogDebug("录制调度循环开始，当前任务数: {TaskCount}", tasks.Count);
 
                 // 推送系统状态（每 5 秒）

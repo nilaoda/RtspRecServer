@@ -20,6 +20,9 @@ public sealed record RecordingTask
     public DateTimeOffset? FinishedAt { get; init; }
     public double? PcrElapsedSeconds { get; init; }
     public TsCheckSummary? TsCheck { get; init; }
+
+    // 非空表示该任务由定时规则自动生成
+    public long? TimerId { get; init; }
 }
 
 public sealed record RecordingTaskCreateRequest
@@ -28,6 +31,7 @@ public sealed record RecordingTaskCreateRequest
     public DateTimeOffset StartTime { get; init; }
     public DateTimeOffset EndTime { get; init; }
     public string? TaskName { get; init; }
+    public long? TimerId { get; init; }
 }
 
 public sealed record RecordingTaskEndTimeUpdateRequest
@@ -67,6 +71,9 @@ public sealed record RecordingTaskDto
     public double? CurrentBitrateKbps { get; init; }
     public double? PcrElapsedSeconds { get; init; }
     public TsCheckSummary? TsCheck { get; init; }
+
+    // 非空表示该任务由定时规则自动生成
+    public long? TimerId { get; init; }
 }
 
 public sealed record RecordingTaskStatusUpdate

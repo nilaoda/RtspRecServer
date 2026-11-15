@@ -9,7 +9,9 @@ import type {
   LogFileInfo,
   RecordingFileInfo,
   RecordingTaskDto,
+  RecordingTimer,
   SystemStatus,
+  TimerUpsertPayload,
 } from '../types'
 import type {
   EpgChannel,
@@ -137,6 +139,27 @@ export const getTaskMediaInfo = async (id: number) => {
 
 export const getTaskLog = (id: number) =>
   fetchJson<LogFileContent>(`/api/tasks/${id}/log`, { silent: true })
+
+// ---- 定时录制规则 ----
+
+export const getTimers = () => fetchJson<RecordingTimer[]>('/api/timers', { silent: true })
+
+export const createTimer = (payload: TimerUpsertPayload) =>
+  fetchJson<RecordingTimer>('/api/timers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+export const updateTimer = (id: number, payload: TimerUpsertPayload) =>
+  fetchJson<RecordingTimer>(`/api/timers/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+export const deleteTimer = (id: number) =>
+  fetchJson<{ message: string }>(`/api/timers/${id}`, { method: 'DELETE' })
 
 export const getChannels = () => fetchJson<ChannelConfig[]>('/api/channels', { silent: true })
 

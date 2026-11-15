@@ -46,6 +46,42 @@ export type RecordingTaskDto = {
   currentBitrateKbps?: number
   pcrElapsedSeconds?: number
   tsCheck?: TsCheckSummary
+  timerId?: number
+}
+
+// 定时录制规则：按频道 + 每周几 + 每日时间窗口自动生成录制任务
+export type RecordingTimer = {
+  id: number
+  name: string
+  channelId: number
+  channelName: string
+  url: string
+  // "HH:mm"；endTime <= startTime 表示跨午夜窗口
+  startTime: string
+  endTime: string
+  // 7 位布尔，0=周一 … 6=周日
+  weekdays: boolean[]
+  preOffsetMinutes: number
+  postOffsetMinutes: number
+  // "yyyy-MM-dd"，null 表示不限
+  startDate?: string
+  endDate?: string
+  enabled: boolean
+  lastTriggeredAt?: string
+  createdAt: string
+}
+
+export type TimerUpsertPayload = {
+  name: string
+  channelId: number
+  startTime: string
+  endTime: string
+  weekdays: boolean[]
+  preOffsetMinutes: number
+  postOffsetMinutes: number
+  startDate?: string | null
+  endDate?: string | null
+  enabled: boolean
 }
 
 export type ChannelConfig = {

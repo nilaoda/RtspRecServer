@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { AppConfig, ChannelConfig, RecordingFileInfo, RecordingTaskDto, SystemStatus, RecordingStatus } from '../types'
+import type { AppConfig, ChannelConfig, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TimerUpsertPayload } from '../types'
 import {
   addChannel,
   createTask,
+  createTimer as createTimerApi,
   deleteTask,
   deleteTasks as deleteTasksApi,
+  deleteTimer as deleteTimerApi,
   getChannels,
   getConfig,
   getRecordings,
@@ -13,11 +15,13 @@ import {
   getSystemStatus,
   getTaskMediaInfo,
   getTasks,
+  getTimers,
   removeChannel,
   stopTask,
   stopTasks as stopTasksApi,
   updateChannel,
   updateConfig,
+  updateTimer as updateTimerApi,
   updateTaskEndTime as updateTaskEndTimeApi,
 } from '../services/api'
 import { connectWebSocket } from '../services/ws'
@@ -42,6 +46,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [tasks, setTasks] = useState<RecordingTaskDto[]>([])
   const [channels, setChannels] = useState<ChannelConfig[]>([])
   const [recordings, setRecordings] = useState<RecordingFileInfo[]>([])
+  const [timers, setTimers] = useState<RecordingTimer[]>([])
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
   const [now, setNow] = useState(new Date())
@@ -96,6 +101,15 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     }
   }, [notifyError])
 
+  const reloadTimers = useCallback(async () => {
+    try {
+      const data = await getTimers()
+      setTimers(data)
+    } catch {
+      notifyError('加载定时规则失败')
+    }
+  }, [notifyError])
+
   const reloadConfig = useCallback(async () => {
     try {
       const data = await getConfig()
@@ -122,10 +136,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadTasks()
       reloadChannels()
       reloadRecordings()
+      reloadTimers()
       reloadConfig()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadConfig])
+  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadTimers, reloadConfig])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -151,6 +166,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadTasks()
       reloadChannels()
       reloadRecordings()
+      reloadTimers()
       reloadConfig()
     }
     const onVisible = () => {
@@ -164,7 +180,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', sync)
     }
-  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadConfig])
+  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadTimers, reloadConfig])
 
   useEffect(() => {
     let cancelled = false
@@ -348,6 +364,48 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifySuccess, reloadChannels],
   )
 
+  const createTimerAction = useCallback(
+    async (payload: TimerUpsertPayload) => {
+      try {
+        await createTimerApi(payload)
+        notifySuccess('定时规则已创建')
+        reloadTimers()
+      } catch {
+        return
+      }
+    },
+    [notifySuccess, reloadTimers],
+  )
+
+  const updateTimerAction = useCallback(
+    async (id: number, payload: TimerUpsertPayload) => {
+      try {
+        await updateTimerApi(id, payload)
+        notifySuccess('定时规则已保存')
+        reloadTimers()
+        // 规则更新/删除会级联清理预生成的待录任务，任务列表需要同步
+        reloadTasks()
+      } catch {
+        return
+      }
+    },
+    [notifySuccess, reloadTimers, reloadTasks],
+  )
+
+  const deleteTimerAction = useCallback(
+    async (id: number) => {
+      try {
+        await deleteTimerApi(id)
+        notifySuccess('已删除定时规则')
+        reloadTimers()
+        reloadTasks()
+      } catch {
+        return
+      }
+    },
+    [notifySuccess, reloadTimers, reloadTasks],
+  )
+
   const updateConfigAction = useCallback(async (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport']; writeRecordingLog: boolean }) => {
     try {
       const data = await updateConfig(payload)
@@ -402,6 +460,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       tasks,
       channels,
       recordings,
+      timers,
       systemStatus,
       appConfig,
       now,
@@ -419,6 +478,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadTasks,
       reloadChannels,
       reloadRecordings,
+      reloadTimers,
       reloadConfig,
       createTask: createTaskAction,
       stopTask: stopTaskAction,
@@ -429,6 +489,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       addChannel: addChannelAction,
       updateChannel: updateChannelAction,
       deleteChannel: deleteChannelAction,
+      createTimer: createTimerAction,
+      updateTimer: updateTimerAction,
+      deleteTimer: deleteTimerAction,
       updateConfig: updateConfigAction,
       getTaskMediaInfo,
       getRecordingMediaInfo,
@@ -438,6 +501,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       tasks,
       channels,
       recordings,
+      timers,
       systemStatus,
       appConfig,
       now,
@@ -449,6 +513,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadTasks,
       reloadChannels,
       reloadRecordings,
+      reloadTimers,
       reloadConfig,
       createTaskAction,
       stopTaskAction,
@@ -459,6 +524,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       addChannelAction,
       updateChannelAction,
       deleteChannelAction,
+      createTimerAction,
+      updateTimerAction,
+      deleteTimerAction,
       updateConfigAction,
       debouncedTotalBitrateKbps,
     ],

@@ -769,11 +769,14 @@ const TasksPage = () => {
                                     <TableCell>
                                         <div className="flex min-w-0 flex-col gap-0.5 text-sm text-muted-foreground" title={`${task.channelId} - ${task.channelName}`}>
                                             <span className="truncate">{task.channelId} - {task.channelName}</span>
-                                            {(channel || task.isLive) && (
+                                            {(channel || task.isLive || task.timerId) && (
                                                 <div className="flex items-center gap-1">
                                                     {channel && <ChannelProtocolBadge url={channel.url} />}
                                                     {task.isLive && (
                                                         <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
+                                                    )}
+                                                    {task.timerId && (
+                                                        <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">定时</Badge>
                                                     )}
                                                 </div>
                                             )}
@@ -1029,6 +1032,9 @@ const TasksPage = () => {
                               {channel && <ChannelProtocolBadge url={channel.url} />}
                               {task.isLive && (
                                 <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
+                              )}
+                              {task.timerId && (
+                                <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">定时</Badge>
                               )}
                             </div>
                           </div>

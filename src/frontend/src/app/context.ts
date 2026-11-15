@@ -4,13 +4,16 @@ import type {
   ChannelConfig,
   RecordingFileInfo,
   RecordingTaskDto,
+  RecordingTimer,
   SystemStatus,
+  TimerUpsertPayload,
 } from '../types'
 
 export type AppContextValue = {
   tasks: RecordingTaskDto[]
   channels: ChannelConfig[]
   recordings: RecordingFileInfo[]
+  timers: RecordingTimer[]
   systemStatus: SystemStatus | null
   appConfig: AppConfig | null
   now: Date
@@ -20,6 +23,7 @@ export type AppContextValue = {
   reloadTasks: () => Promise<void>
   reloadChannels: () => Promise<void>
   reloadRecordings: () => Promise<void>
+  reloadTimers: () => Promise<void>
   reloadConfig: () => Promise<void>
   createTask: (payload: {
     channelId: number
@@ -35,6 +39,9 @@ export type AppContextValue = {
   addChannel: (payload: { name: string; url: string }) => Promise<void>
   updateChannel: (payload: ChannelConfig) => Promise<void>
   deleteChannel: (id: number) => Promise<void>
+  createTimer: (payload: TimerUpsertPayload) => Promise<void>
+  updateTimer: (id: number, payload: TimerUpsertPayload) => Promise<void>
+  deleteTimer: (id: number) => Promise<void>
   updateConfig: (payload: { maxRecordingTasks: number; recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'; writeRecordingLog: boolean }) => Promise<void>
   getTaskMediaInfo: (id: number) => Promise<string>
   getRecordingMediaInfo: (filePath: string) => Promise<string>

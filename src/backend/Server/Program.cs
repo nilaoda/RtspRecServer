@@ -64,6 +64,8 @@ try
     builder.Services.AddSingleton<IRecordingNotifier, WebSocketRecordingNotifier>();
     builder.Services.AddSingleton<RecordingManager>();
     builder.Services.AddSingleton<ChannelProbeService>();
+    builder.Services.AddSingleton<RecordingTimerStore>();
+    builder.Services.AddSingleton<RecordingTimerService>();
     builder.Services.AddHostedService<RecordingBackgroundService>();
 
     // 添加EPG服务
@@ -320,6 +322,50 @@ try
             : Results.BadRequest(ApiResponse.Create("删除失败"));
     });
 
+    // ---- 定时录制规则 ----
+
+    app.MapGet("/api/timers", (RecordingTimerService service) => Results.Ok(service.GetAll()));
+
+    app.MapPost("/api/timers", (RecordingTimerService service, TimerUpsertRequest request) =>
+    {
+        try
+        {
+            return Results.Ok(service.Create(request));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(ex.Message);
+        }
+    });
+
+    app.MapPut("/api/timers/{id:long}", (RecordingTimerService service, long id, TimerUpsertRequest request) =>
+    {
+        try
+        {
+            var timer = service.Update(id, request);
+            return timer is null ? Results.NotFound(ApiResponse.Create("定时规则不存在")) : Results.Ok(timer);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(ex.Message);
+        }
+    });
+
+    app.MapDelete("/api/timers/{id:long}", (RecordingTimerService service, long id) =>
+    {
+        return service.Delete(id)
+            ? Results.Ok(ApiResponse.Create("定时规则已删除"))
+            : Results.NotFound(ApiResponse.Create("定时规则不存在"));
+    });
+
     app.MapGet("/api/tasks/{id:long}/download", (RecordingManager manager, long id) =>
     {
         var task = manager.GetTask(id);
@@ -528,7 +574,8 @@ static RecordingTaskDto ToDto(RecordingTask task)
         DisplayName = task.DisplayName,
         IsLive = task.IsLive,
         PcrElapsedSeconds = task.PcrElapsedSeconds,
-        TsCheck = task.TsCheck
+        TsCheck = task.TsCheck,
+        TimerId = task.TimerId
     };
 }
 

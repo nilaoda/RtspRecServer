@@ -118,7 +118,8 @@ public sealed class RecordingManager
             StartTime = request.StartTime,
             EndTime = request.EndTime,
             Status = RecordingStatus.Pending,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = DateTimeOffset.UtcNow,
+            TimerId = request.TimerId
         };
 
         var prepared = task with { Url = isLive ? task.Url : RecordingUrlBuilder.Build(task) };
@@ -141,6 +142,27 @@ public sealed class RecordingManager
 
             return _taskStore.Remove(id);
         }
+    }
+
+    /// <summary>
+    /// 删除定时规则预生成的未开始任务（规则更新/删除后由 RecordingTimerService 调用）。
+    /// </summary>
+    public int RemovePendingTasksByTimer(long timerId)
+    {
+        var removed = 0;
+        foreach (var task in _taskStore.GetAll().Where(t => t.TimerId == timerId && t.Status == RecordingStatus.Pending))
+        {
+            if (DeleteTask(task.Id))
+            {
+                removed++;
+            }
+        }
+
+        if (removed > 0)
+        {
+            _logger.LogInformation("已清理定时规则 {TimerId} 预生成的 {Count} 个待录任务", timerId, removed);
+        }
+        return removed;
     }
 
     public async Task<bool> StopTaskAsync(long id, CancellationToken cancellationToken)
