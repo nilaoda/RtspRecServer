@@ -4,6 +4,8 @@ import type {
   BulkTaskResult,
   ChannelConfig,
   ChannelProbeResult,
+  LogFileContent,
+  LogFileInfo,
   RecordingFileInfo,
   RecordingTaskDto,
   SystemStatus,
@@ -132,6 +134,9 @@ export const getTaskMediaInfo = async (id: number) => {
   return data?.content ?? ''
 }
 
+export const getTaskLog = (id: number) =>
+  fetchJson<LogFileContent>(`/api/tasks/${id}/log`, { silent: true })
+
 export const getChannels = () => fetchJson<ChannelConfig[]>('/api/channels', { silent: true })
 
 export const addChannel = (payload: { name: string; url: string }) =>
@@ -171,9 +176,13 @@ export const removeChannel = (id: number) =>
 export const getRecordings = () => fetchJson<RecordingFileInfo[]>('/api/recordings', { silent: true })
 
 export const getRecordingMediaInfo = (filePath: string) =>
-  fetchJson<{ content?: string }>(`/api/recordings/mediainfo?filePath=${encodeURIComponent(filePath)}`).then(
-    (data) => data?.content ?? '',
-  )
+  fetchJson<{ content?: string }>(`/api/recordings/mediainfo?filePath=${encodeURIComponent(filePath)}`)
+    .then((data) => data?.content ?? '')
+
+export const getLogs = () => fetchJson<LogFileInfo[]>('/api/logs', { silent: true })
+
+export const getLogContent = (fileName: string) =>
+  fetchJson<LogFileContent>(`/api/logs/${encodeURIComponent(fileName)}`, { silent: true })
 
 export const getConfig = () => fetchJson<AppConfig>('/api/config', { silent: true })
 

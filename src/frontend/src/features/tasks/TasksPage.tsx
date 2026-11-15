@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw, CalendarClock, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw, CalendarClock, ChevronLeft, ChevronRight, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
+import { getTaskLog } from '../../services/api'
 import type { RecordingStatus, RecordingTaskDto, TsCheckSummary, TsStreamTrack } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
@@ -318,7 +319,10 @@ const TasksPage = () => {
   const { tasks, channels, createTask, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
+  const [infoTaskId, setInfoTaskId] = useState<number | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
+  const [logModal, setLogModal] = useState<{ title: string; content: string; truncated: boolean } | null>(null)
+  const [logLoading, setLogLoading] = useState(false)
   const [openCombobox, setOpenCombobox] = useState(false)
   const comboboxListRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState<TaskTab>('active')
@@ -558,18 +562,36 @@ const TasksPage = () => {
   const onViewInfo = useCallback(
     async (id: number, title: string) => {
       setInfoLoading(true)
+      setInfoTaskId(id)
       setInfoModal({ title, content: '' }) // Open modal first
       try {
         const info = await getTaskMediaInfo(id)
         setInfoModal({ title, content: info })
       } catch {
         setInfoModal(null)
+        setInfoTaskId(null)
       } finally {
         setInfoLoading(false)
       }
     },
     [getTaskMediaInfo],
   )
+
+  const onViewLog = useCallback(async (id: number, title: string) => {
+    setInfoModal(null)
+    setInfoTaskId(null)
+    setLogLoading(true)
+    setLogModal({ title: `${title} · 录制日志`, content: '', truncated: false })
+    try {
+      const data = await getTaskLog(id)
+      setLogModal({ title: `${title} · 录制日志`, content: data.content, truncated: data.truncated })
+    } catch {
+      setLogModal(null)
+      toast.error('录制日志不存在或加载失败')
+    } finally {
+      setLogLoading(false)
+    }
+  }, [])
 
   const openEndTimeEditor = useCallback((id: number, endTime: string) => {
     setEditingEndTime(new Date(endTime))
@@ -1586,7 +1608,7 @@ const TasksPage = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(infoModal)} onOpenChange={(open) => !open && setInfoModal(null)}>
+      <Dialog open={Boolean(infoModal)} onOpenChange={(open) => { if (!open) { setInfoModal(null); setInfoTaskId(null) } }}>
         <DialogContent className="max-h-[85dvh] max-w-[calc(100vw-2rem)] flex flex-col sm:max-w-3xl">
             <DialogHeader>
                 <DialogTitle>{infoModal?.title}</DialogTitle>
@@ -1600,6 +1622,48 @@ const TasksPage = () => {
                     <pre className="whitespace-pre">{infoModal?.content}</pre>
                 )}
             </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+                <Button type="button" variant="outline" onClick={() => { setInfoModal(null); setInfoTaskId(null) }}>
+                    关闭
+                </Button>
+                <Button
+                    type="button"
+                    onClick={() => {
+                        if (infoTaskId) {
+                            void onViewLog(infoTaskId, infoModal?.title || `Task ${infoTaskId}`)
+                        }
+                    }}
+                    disabled={infoLoading || infoTaskId === null}
+                >
+                    <FileText className="mr-2 h-4 w-4" />
+                    查看录制日志
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(logModal)} onOpenChange={(open) => { if (!open) setLogModal(null) }}>
+        <DialogContent className="max-h-[85dvh] max-w-[calc(100vw-2rem)] flex flex-col sm:max-w-3xl">
+            <DialogHeader>
+                <DialogTitle>{logModal?.title}</DialogTitle>
+                {logModal?.truncated && (
+                    <DialogDescription>日志较大，仅显示最后部分内容。</DialogDescription>
+                )}
+            </DialogHeader>
+            <div className="flex-1 overflow-auto overflow-x-auto bg-muted/50 p-4 rounded-md font-mono text-xs">
+                {logLoading ? (
+                    <div className="flex items-center justify-center h-40">
+                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    </div>
+                ) : (
+                    <pre className="whitespace-pre">{logModal?.content || '暂无日志内容'}</pre>
+                )}
+            </div>
+            <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setLogModal(null)}>
+                    关闭
+                </Button>
+            </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

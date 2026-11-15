@@ -76,6 +76,19 @@ export type BulkTaskResult = {
   failedIds: number[]
 }
 
+export type LogFileInfo = {
+  fileName: string
+  fileSizeBytes: number
+  modifiedAt: string
+}
+
+export type LogFileContent = {
+  fileName: string
+  content: string
+  truncated: boolean
+  modifiedAt: string
+}
+
 export type RecordingFileInfo = {
   fileName: string
   filePath: string

@@ -338,6 +338,64 @@ try
         return Results.Ok(new MediaInfoResponse { Content = info });
     });
 
+    app.MapGet("/api/tasks/{id:long}/log", async (RecordingManager manager, long id) =>
+    {
+        var task = manager.GetTask(id);
+        if (task?.FilePath is null)
+        {
+            return Results.NotFound(ApiResponse.Create("任务没有录制文件"));
+        }
+
+        var logPath = Path.ChangeExtension(task.FilePath, ".log");
+        if (!File.Exists(logPath))
+        {
+            return Results.NotFound(ApiResponse.Create("录制日志不存在"));
+        }
+
+        return Results.Ok(await ReadLogFileAsync(logPath));
+    });
+
+    app.MapGet("/api/logs", () =>
+    {
+        if (!Directory.Exists(logsPath))
+        {
+            return Results.Ok(new List<LogFileInfo>());
+        }
+
+        var files = Directory.EnumerateFiles(logsPath, "log-*.txt", SearchOption.TopDirectoryOnly)
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(info => info.LastWriteTimeUtc)
+            .Select(info => new LogFileInfo
+            {
+                FileName = info.Name,
+                FileSizeBytes = info.Length,
+                ModifiedAt = new DateTimeOffset(info.LastWriteTimeUtc)
+            })
+            .ToList();
+
+        return Results.Ok(files);
+    });
+
+    app.MapGet("/api/logs/{fileName}", async (string fileName) =>
+    {
+        if (!TryGetLogPath(logsPath, fileName, out var logPath))
+        {
+            return Results.NotFound(ApiResponse.Create("日志文件不存在"));
+        }
+
+        return Results.Ok(await ReadLogFileAsync(logPath));
+    });
+
+    app.MapGet("/api/logs/{fileName}/download", (string fileName) =>
+    {
+        if (!TryGetLogPath(logsPath, fileName, out var logPath))
+        {
+            return Results.NotFound(ApiResponse.Create("日志文件不存在"));
+        }
+
+        return Results.File(logPath, "text/plain; charset=utf-8", fileName);
+    });
+
     app.MapGet("/api/system/status", (ConfigurationService configurationService) =>
     {
         var config = configurationService.GetAppConfig();
@@ -547,6 +605,62 @@ static string DecodeOutput(byte[] bytes)
     {
         return Encoding.GetEncoding("GB18030").GetString(bytes);
     }
+}
+
+static bool TryGetLogPath(string rootPath, string fileName, out string logPath)
+{
+    logPath = string.Empty;
+    if (string.IsNullOrWhiteSpace(fileName) ||
+        !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal) ||
+        !fileName.StartsWith("log-", StringComparison.OrdinalIgnoreCase) ||
+        !fileName.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    var candidate = Path.Combine(rootPath, fileName);
+    if (!File.Exists(candidate))
+    {
+        return false;
+    }
+
+    logPath = candidate;
+    return true;
+}
+
+static async Task<LogFileContent> ReadLogFileAsync(string path, int maxBytes = 256 * 1024)
+{
+    var info = new FileInfo(path);
+    await using var stream = new FileStream(
+        path,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete,
+        4096,
+        FileOptions.Asynchronous | FileOptions.SequentialScan);
+    var length = stream.Length;
+    var readLength = (int)Math.Min(length, maxBytes);
+    var buffer = new byte[readLength];
+    if (readLength > 0)
+    {
+        stream.Seek(length - readLength, SeekOrigin.Begin);
+        await stream.ReadExactlyAsync(buffer);
+    }
+
+    var content = Encoding.UTF8.GetString(buffer);
+    var truncated = length > readLength;
+    if (truncated)
+    {
+        content = $"（仅显示最后 {Math.Max(1, readLength / 1024)} KB）\n{content}";
+    }
+
+    return new LogFileContent
+    {
+        FileName = info.Name,
+        Content = content,
+        Truncated = truncated,
+        ModifiedAt = new DateTimeOffset(info.LastWriteTimeUtc)
+    };
 }
 
 static string ResolveRecordPath(string recordPath)
