@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
 import { importChannels } from '../../services/api'
+import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import { parseM3u, readM3uFile, type ParsedM3uChannel } from './m3u'
 
 import { Badge } from '@/components/ui/badge'
@@ -522,6 +523,7 @@ const M3uImportPage = () => {
                       <TableHead className="min-w-[220px]">频道</TableHead>
                       <TableHead className="w-[100px]">分组</TableHead>
                       <TableHead className="w-[72px]">类型</TableHead>
+                      <TableHead className="w-[64px]">协议</TableHead>
                       <TableHead className="min-w-[260px]">地址</TableHead>
                       <TableHead className="w-[86px]">状态</TableHead>
                     </TableRow>
@@ -529,7 +531,7 @@ const M3uImportPage = () => {
                   <TableBody>
                     {filtered.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                        <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                           没有匹配的频道
                         </TableCell>
                       </TableRow>
@@ -575,6 +577,9 @@ const M3uImportPage = () => {
                               <Badge variant="outline" className={cn('text-[10px]', typeBadgeClass(item.type))}>
                                 {typeLabel[item.type]}
                               </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <ChannelProtocolBadge url={item.url} />
                             </TableCell>
                             <TableCell>
                               <div className="flex min-w-0 items-center gap-1">
@@ -646,6 +651,7 @@ const M3uImportPage = () => {
                             <Badge variant="outline" className={cn('text-[10px]', typeBadgeClass(item.type))}>
                               {typeLabel[item.type]}
                             </Badge>
+                            <ChannelProtocolBadge url={item.url} />
                           </div>
                           <div className="flex min-w-0 items-center gap-1">
                             <span className="truncate font-mono text-[11px] text-muted-foreground" title={item.url}>

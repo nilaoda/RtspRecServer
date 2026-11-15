@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { useAppContext } from '../../app/context'
 import type { RecordingStatus, RecordingTaskDto, TsCheckSummary } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
+import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -124,20 +125,16 @@ const statusVariant: Record<RecordingStatusKey, "default" | "secondary" | "destr
   Stopped: 'secondary', // default -> secondary
 }
 
-type TaskTab = 'active' | 'completed' | 'failed'
+type TaskTab = 'active' | 'completed'
 
 const PAGE_SIZE = 20
 
 const taskTabs: Record<TaskTab, { label: string; empty: string }> = {
   active: { label: '正在录制', empty: '暂无正在录制或等待中的任务' },
   completed: { label: '已完成录制', empty: '暂无已完成录制' },
-  failed: { label: '失败录制', empty: '暂无失败录制' },
 }
 
 const getTaskTab = (status: RecordingStatusKey): TaskTab => {
-  if (status === 'Failed') {
-    return 'failed'
-  }
   if (status === 'Pending' || status === 'Recording') {
     return 'active'
   }
@@ -309,7 +306,7 @@ const TasksPage = () => {
   )
 
   const taskCounts = useMemo(() => {
-    const counts: Record<TaskTab, number> = { active: 0, completed: 0, failed: 0 }
+    const counts: Record<TaskTab, number> = { active: 0, completed: 0 }
     for (const task of tasks) {
       counts[getTaskTab(normalizeStatus(task.status))] += 1
     }
@@ -599,7 +596,7 @@ const TasksPage = () => {
           <CardHeader className="flex flex-row flex-wrap items-center gap-3 space-y-0 border-b pb-3">
             <CardTitle className="text-lg font-medium">任务列表</CardTitle>
             <span className="text-xs text-muted-foreground sm:order-last sm:ml-auto">共 {tasks.length} 条</span>
-            <TabsList className="grid h-auto w-full grid-cols-3 gap-1 sm:order-none sm:inline-flex sm:w-auto">
+            <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:order-none sm:inline-flex sm:w-auto">
               {(Object.keys(taskTabs) as TaskTab[]).map((tab) => (
                 <TabsTrigger
                   key={tab}
@@ -624,18 +621,18 @@ const TasksPage = () => {
           <CardContent className="p-0">
             <TabsContent value={activeTab} className="m-0">
               <div className="hidden rounded-md md:block">
-                <Table>
+                <Table className="w-full min-w-[1120px] table-fixed">
                 <TableHeader>
                     <TableRow>
-                        <TableHead className="w-[48px]">ID</TableHead>
-                        <TableHead className="w-[80px]">状态</TableHead>
-                        <TableHead className="min-w-[140px]">任务名称</TableHead>
-                        <TableHead className="min-w-[110px]">频道</TableHead>
-                        <TableHead className="w-[150px]">时间</TableHead>
-                        <TableHead className="w-[145px]">时长 / 进度</TableHead>
-                        <TableHead className="w-[120px]">码率 / 大小</TableHead>
-                        <TableHead className="w-[145px]">TS 检测</TableHead>
-                        <TableHead className="w-[160px] text-right">操作</TableHead>
+                        <TableHead className="w-[4%]">ID</TableHead>
+                        <TableHead className="w-[7%]">状态</TableHead>
+                        <TableHead className="w-[13%]">任务名称</TableHead>
+                        <TableHead className="w-[13%]">频道</TableHead>
+                        <TableHead className="w-[12%]">时间</TableHead>
+                        <TableHead className="w-[13%]">时长 / 进度</TableHead>
+                        <TableHead className="w-[10%]">码率 / 大小</TableHead>
+                        <TableHead className="w-[14%]">TS 检测</TableHead>
+                        <TableHead className="w-[14%] text-right">操作</TableHead>
                     </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -660,6 +657,7 @@ const TasksPage = () => {
                                 canEditEndTime,
                                 canRetry,
                             } = getTaskDisplay(task, now.getTime())
+                            const channel = channels.find((item) => item.id === task.channelId)
 
                             return (
                                 <TableRow key={task.id}>
@@ -673,10 +671,15 @@ const TasksPage = () => {
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="flex items-center gap-1 min-w-0 text-sm text-muted-foreground" title={`${task.channelId} - ${task.channelName}`}>
+                                        <div className="flex min-w-0 flex-col gap-0.5 text-sm text-muted-foreground" title={`${task.channelId} - ${task.channelName}`}>
                                             <span className="truncate">{task.channelId} - {task.channelName}</span>
-                                            {task.isLive && (
-                                                <Badge variant="outline" className="shrink-0 text-[10px] px-1 py-0">直播</Badge>
+                                            {(channel || task.isLive) && (
+                                                <div className="flex items-center gap-1">
+                                                    {channel && <ChannelProtocolBadge url={channel.url} />}
+                                                    {task.isLive && (
+                                                        <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
                                     </TableCell>
@@ -725,7 +728,7 @@ const TasksPage = () => {
                                                                         ? '检测中'
                                                                         : '--'}
                                                             </Badge>
-                                                            <span className="truncate font-mono text-[10px] text-muted-foreground">
+                                                            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground">
                                                                 {task.tsCheck
                                                                     ? tsCodecText(task.tsCheck)
                                                                     : normalizedStatus === 'Recording'
@@ -906,6 +909,7 @@ const TasksPage = () => {
                 {pagedTasks.map((task) => {
                   const display = getTaskDisplay(task, now.getTime())
                   const normalizedStatus = display.normalizedStatus
+                  const channel = channels.find((item) => item.id === task.channelId)
                   return (
                     <div key={task.id} className="space-y-3 p-4">
                       <div className="flex items-start justify-between gap-3">
@@ -918,6 +922,7 @@ const TasksPage = () => {
                           </div>
                           <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                             <span className="truncate">{task.channelId} - {task.channelName}</span>
+                            {channel && <ChannelProtocolBadge url={channel.url} />}
                             {task.isLive && (
                               <Badge variant="outline" className="shrink-0 px-1 py-0 text-[10px]">直播</Badge>
                             )}
@@ -1145,7 +1150,11 @@ const TasksPage = () => {
                     <FormField
                         control={form.control}
                         name="channelId"
-                        render={({ field }) => (
+                        render={({ field }) => {
+                            const selectedChannel = channels.find(
+                                (channel) => String(channel.id) === field.value
+                            )
+                            return (
                             <FormItem className="flex flex-col">
                                 <FormLabel>频道</FormLabel>
                                 <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
@@ -1159,13 +1168,14 @@ const TasksPage = () => {
                                                     !field.value && "text-muted-foreground"
                                                 )}
                                             >
-                                                <span className="truncate">
-                                                    {field.value
-                                                        ? channels.find(
-                                                            (channel) => String(channel.id) === field.value
-                                                        )?.name
-                                                        : "选择频道..."}
-                                                </span>
+                                                {selectedChannel ? (
+                                                    <span className="flex min-w-0 items-center gap-2">
+                                                        <span className="truncate">{selectedChannel.name}</span>
+                                                        <ChannelProtocolBadge url={selectedChannel.url} />
+                                                    </span>
+                                                ) : (
+                                                    <span className="truncate">选择频道...</span>
+                                                )}
                                                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                                             </Button>
                                         </FormControl>
@@ -1200,6 +1210,7 @@ const TasksPage = () => {
                                                                 )}
                                                             />
                                                             <span className="truncate">{channel.id} - {channel.name}</span>
+                                                            <ChannelProtocolBadge url={channel.url} className="ml-auto" />
                                                         </CommandItem>
                                                     ))}
                                                 </CommandGroup>
@@ -1209,7 +1220,8 @@ const TasksPage = () => {
                                 </Popover>
                                 <FormMessage />
                             </FormItem>
-                        )}
+                            )
+                        }}
                     />
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <FormField

@@ -7,6 +7,7 @@ import { FileUp, Plus, Save, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
+import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 
 import { Button } from "@/components/ui/button"
 import {
@@ -68,6 +69,7 @@ const ChannelsPage = () => {
       url: '',
     },
   })
+  const urlValue = form.watch('url')
 
   const onAdd = async (values: ChannelFormValues) => {
     try {
@@ -132,7 +134,10 @@ const ChannelsPage = () => {
                         name="url"
                         render={({ field }) => (
                             <FormItem className="flex-1 w-full">
-                                <FormLabel>频道地址</FormLabel>
+                                <FormLabel className="flex items-center justify-between gap-2">
+                                    <span>频道地址</span>
+                                    {urlValue?.trim() ? <ChannelProtocolBadge url={urlValue} /> : null}
+                                </FormLabel>
                                 <FormControl>
                                     <Input placeholder="rtsp://..." {...field} />
                                 </FormControl>
@@ -160,6 +165,7 @@ const ChannelsPage = () => {
                         <TableRow>
                             <TableHead className="w-[80px]">ID</TableHead>
                             <TableHead className="w-[250px]">名称</TableHead>
+                            <TableHead className="w-[72px]">协议</TableHead>
                             <TableHead className="min-w-[300px]">地址</TableHead>
                             <TableHead className="w-[150px] text-right">操作</TableHead>
                         </TableRow>
@@ -167,7 +173,7 @@ const ChannelsPage = () => {
                     <TableBody>
                         {channels.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={4} className="h-24 text-center">
+                                <TableCell colSpan={5} className="h-24 text-center">
                                     暂无频道
                                 </TableCell>
                             </TableRow>
@@ -188,6 +194,9 @@ const ChannelsPage = () => {
                                                 }))}
                                                 className="h-8"
                                             />
+                                        </TableCell>
+                                        <TableCell className="py-2">
+                                            <ChannelProtocolBadge url={draft.url} />
                                         </TableCell>
                                         <TableCell className="py-2">
                                             <Input 
