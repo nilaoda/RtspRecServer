@@ -148,7 +148,7 @@ namespace RtspRecServer.Server.Services.Epg
                         {
                             case "display-name":
                                 var lang = subReader.GetAttribute("lang") ?? "zh";
-                                var name = await subReader.ReadElementContentAsStringAsync();
+                                var name = await ReadElementTextAsync(subReader);
                                 if (string.IsNullOrEmpty(channel.Name) || lang == "zh")
                                 {
                                     channel.Name = name.Trim();
@@ -223,7 +223,7 @@ namespace RtspRecServer.Server.Services.Epg
                             {
                                 case "title":
                                     var lang = subReader.GetAttribute("lang") ?? "zh";
-                                    var title = await subReader.ReadElementContentAsStringAsync();
+                                    var title = await ReadElementTextAsync(subReader);
                                     if (string.IsNullOrEmpty(program.Title) || lang == "zh")
                                     {
                                         program.Title = title.Trim();
@@ -231,17 +231,17 @@ namespace RtspRecServer.Server.Services.Epg
                                     }
                                     break;
                                 case "sub-title":
-                                    program.SubTitle = (await subReader.ReadElementContentAsStringAsync()).Trim();
+                                    program.SubTitle = (await ReadElementTextAsync(subReader)).Trim();
                                     break;
                                 case "desc":
-                                    var desc = await subReader.ReadElementContentAsStringAsync();
+                                    var desc = await ReadElementTextAsync(subReader);
                                     if (string.IsNullOrEmpty(program.Description))
                                     {
                                         program.Description = desc.Trim();
                                     }
                                     break;
                                 case "category":
-                                    var category = (await subReader.ReadElementContentAsStringAsync()).Trim();
+                                    var category = (await ReadElementTextAsync(subReader)).Trim();
                                     if (!string.IsNullOrEmpty(category))
                                     {
                                         program.Categories.Add(category);
@@ -260,14 +260,21 @@ namespace RtspRecServer.Server.Services.Epg
                                     break;
                                 case "episode-num":
                                     var episodeSystem = subReader.GetAttribute("system") ?? "";
-                                    var episodeText = await subReader.ReadElementContentAsStringAsync();
+                                    var episodeText = await ReadElementTextAsync(subReader);
                                     ParseEpisodeInfo(program, episodeText, episodeSystem);
                                     break;
                                 case "star-rating":
-                                    await ParseStarRatingAsync(program, subReader);
+                                    using (var ratingReader = subReader.ReadSubtree())
+                                    {
+                                        await ParseStarRatingAsync(program, ratingReader);
+                                    }
                                     break;
                                 case "rating":
-                                    await ParseRatingAsync(program, subReader);
+                                    using (var ratingReader = subReader.ReadSubtree())
+                                    {
+                                        await ratingReader.ReadAsync();
+                                        await ParseRatingAsync(program, ratingReader);
+                                    }
                                     break;
                                 case "premiere":
                                     program.IsPremiere = true;
@@ -282,7 +289,10 @@ namespace RtspRecServer.Server.Services.Epg
                                     program.IsSubtitled = true;
                                     break;
                                 case "video":
-                                    await ParseVideoInfoAsync(program, subReader);
+                                    using (var videoReader = subReader.ReadSubtree())
+                                    {
+                                        await ParseVideoInfoAsync(program, videoReader);
+                                    }
                                     break;
                             }
                         }
@@ -350,6 +360,17 @@ namespace RtspRecServer.Server.Services.Epg
                 _logger.LogWarning(ex, $"解析时间失败: {timeStr}");
                 return null;
             }
+        }
+
+        private static async Task<string> ReadElementTextAsync(XmlReader reader)
+        {
+            using var subReader = reader.ReadSubtree();
+            if (!await subReader.ReadAsync())
+            {
+                return string.Empty;
+            }
+
+            return await subReader.ReadElementContentAsStringAsync();
         }
 
         private void ParseEpisodeInfo(EpgProgram program, string episodeText, string system)
