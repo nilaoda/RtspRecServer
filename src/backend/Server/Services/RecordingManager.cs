@@ -114,7 +114,7 @@ public sealed class RecordingManager
             CreatedAt = DateTimeOffset.UtcNow
         };
 
-        var prepared = task with { Url = BuildRecordingUrl(task) };
+        var prepared = task with { Url = RecordingUrlBuilder.Build(task) };
         var created = _taskStore.Add(prepared);
         _logger.LogInformation("录制任务创建成功，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
             created.Id, created.TaskName, created.ChannelName);
@@ -360,34 +360,6 @@ public sealed class RecordingManager
             PcrElapsedSeconds = task.PcrElapsedSeconds
         };
     }
-
-    private static string BuildRecordingUrl(RecordingTask task)
-    {
-        var url = task.Url;
-        if (url.Contains("playseek=", StringComparison.OrdinalIgnoreCase))
-        {
-            return url;
-        }
-
-        if (url.Contains("/PLTV/", StringComparison.OrdinalIgnoreCase))
-        {
-            var startLocal = task.StartTime.ToLocalTime().ToString("yyyyMMddHHmmss");
-            var endLocal = task.EndTime.ToLocalTime().AddMinutes(1).ToString("yyyyMMddHHmmss");
-            var separator = url.Contains('?') ? '&' : '?';
-            return $"{url}{separator}playseek={startLocal}-{endLocal}";
-        }
-
-        if (url.Contains("starttime=", StringComparison.OrdinalIgnoreCase))
-        {
-            return url;
-        }
-
-        var startUtc = task.StartTime.ToUniversalTime().ToString("yyyyMMddTHHmmssZ");
-        var endUtc = task.EndTime.ToUniversalTime().AddMinutes(1).ToString("yyyyMMddTHHmmssZ");
-        var querySeparator = url.Contains('?') ? '&' : '?';
-        return $"{url}{querySeparator}starttime={startUtc}&endtime={endUtc}";
-    }
-
 
     private sealed class RecordingSession
     {

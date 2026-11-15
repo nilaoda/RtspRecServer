@@ -1,8 +1,6 @@
 using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using RtspRecServer.Shared;
@@ -184,7 +182,7 @@ internal sealed class RtspStreamRecorder
                 {
                     packetCount++;
                     var payloadMemory = payload.AsMemory(0, length);
-                    if (!TryResolvePayloadSegment(payloadMemory.Span, _useRtp, ref firstPcrTicks, ref lastPcrTicks, targetTicks, packetCount, out var dataOffset, out var dataLength, out var shouldStop))
+                    if (!RtpPayloadParser.TryResolvePayloadSegment(payloadMemory.Span, _useRtp, ref firstPcrTicks, ref lastPcrTicks, targetTicks, packetCount, out var dataOffset, out var dataLength, out var shouldStop))
                     {
                         continue;
                     }
@@ -225,7 +223,7 @@ internal sealed class RtspStreamRecorder
                         double? currentPcrElapsedSeconds = null;
                         if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
                         {
-                            currentPcrElapsedSeconds = CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
+                            currentPcrElapsedSeconds = PcrParser.CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
                         }
                         onProgress(new RecordingProgress 
                         { 
@@ -255,7 +253,7 @@ internal sealed class RtspStreamRecorder
         double? finalPcrElapsedSeconds = null;
         if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
         {
-            finalPcrElapsedSeconds = CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
+            finalPcrElapsedSeconds = PcrParser.CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
         }
         onProgress(new RecordingProgress 
         { 
@@ -267,7 +265,7 @@ internal sealed class RtspStreamRecorder
         if (stoppedByPcr)
         {
             var elapsedSeconds = lastPcrTicks.HasValue && firstPcrTicks.HasValue
-                ? CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value)
+                ? PcrParser.CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value)
                 : 0;
             Log.Information("RTSP录制达到PCR时长限制，已录制 {Seconds} 秒，任务目标 {TargetSeconds} 秒", elapsedSeconds, targetDuration?.TotalSeconds ?? 0);
         }
@@ -283,171 +281,6 @@ internal sealed class RtspStreamRecorder
             OutputPath = _outputPath
         };
     }
-
-    private static bool TryUpdatePcrTicks(ReadOnlySpan<byte> payload, ref long? first, ref long? last, out long elapsedTicks)
-    {
-        elapsedTicks = 0;
-        if (payload.Length < 188)
-        {
-            return false;
-        }
-
-        // 性能优化：减少边界检查，使用unsafe代码提高性能
-        ref byte payloadRef = ref MemoryMarshal.GetReference(payload);
-        var offset = 0;
-        
-        while (offset + 188 <= payload.Length)
-        {
-            // 快速检查同步字节
-            if (Unsafe.Add(ref payloadRef, offset) != 0x47)
-            {
-                offset++;
-                continue;
-            }
-
-            if (TryGetPcrTicks(payload.Slice(offset, 188), out var pcrTicks))
-            {
-                first ??= pcrTicks;
-                last = pcrTicks;
-                if (first.HasValue && last.HasValue)
-                {
-                    elapsedTicks = CalculateElapsedTicks(first.Value, last.Value);
-                    return true;
-                }
-            }
-
-            offset += 188;
-        }
-
-        return false;
-    }
-
-    private static bool TryGetPcrTicks(ReadOnlySpan<byte> packet, out long ticks)
-    {
-        ticks = 0;
-        if (packet.Length < 188 || packet[0] != 0x47)
-        {
-            return false;
-        }
-
-        // 性能优化：使用位操作快速检查
-        var adaptationFieldControl = (packet[3] >> 4) & 0x3;
-        if (adaptationFieldControl != 2 && adaptationFieldControl != 3)
-        {
-            return false;
-        }
-
-        var adaptationLength = packet[4];
-        if (adaptationLength < 7 || 5 + adaptationLength > 188)
-        {
-            return false;
-        }
-
-        // 快速检查PCR标志
-        if ((packet[5] & 0x10) == 0)
-        {
-            return false;
-        }
-
-        // 性能优化：使用BitConverter和位操作快速读取PCR
-        var baseIndex = 6;
-        var pcrBase = ((long)packet[baseIndex] << 25)
-                      | ((long)packet[baseIndex + 1] << 17)
-                      | ((long)packet[baseIndex + 2] << 9)
-                      | ((long)packet[baseIndex + 3] << 1)
-                      | ((long)(packet[baseIndex + 4] >> 7));
-        var pcrExt = ((packet[baseIndex + 4] & 0x1) << 8) | packet[baseIndex + 5];
-
-        ticks = pcrBase * 300L + pcrExt;
-        return true;
-    }
-
-    private static long CalculateElapsedTicks(long firstTicks, long lastTicks)
-    {
-        var wrap = (1L << 33) * 300L;
-        return lastTicks >= firstTicks ? lastTicks - firstTicks : lastTicks + wrap - firstTicks;
-    }
-
-    private static double CalculateElapsedSeconds(long firstTicks, long lastTicks)
-    {
-        return CalculateElapsedTicks(firstTicks, lastTicks) / 27_000_000D;
-    }
-
-    private static bool TryResolvePayloadSegment(
-        ReadOnlySpan<byte> payload,
-        bool useRtp,
-        ref long? firstPcrTicks,
-        ref long? lastPcrTicks,
-        long targetTicks,
-        int packetCount,
-        out int dataOffset,
-        out int dataLength,
-        out bool shouldStop)
-    {
-        dataOffset = 0;
-        dataLength = payload.Length;
-        shouldStop = false;
-
-        if (useRtp && payload.Length > 0 && payload[0] != 0x47)
-        {
-            if (!TryGetRtpHeaderLength(payload, out var rtpHeaderLength) || rtpHeaderLength >= payload.Length)
-            {
-                return false;
-            }
-            dataOffset = rtpHeaderLength;
-            dataLength = payload.Length - rtpHeaderLength;
-        }
-
-        if (dataLength <= 0)
-        {
-            return false;
-        }
-
-        if (targetTicks > 0 && (packetCount % 10 == 0))
-        {
-            if (TryUpdatePcrTicks(payload.Slice(dataOffset, dataLength), ref firstPcrTicks, ref lastPcrTicks, out var elapsedTicks) &&
-                elapsedTicks >= targetTicks)
-            {
-                shouldStop = true;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryGetRtpHeaderLength(ReadOnlySpan<byte> payload, out int headerLength)
-    {
-        headerLength = 0;
-        if (payload.Length < 12)
-        {
-            return false;
-        }
-
-        var csrcCount = payload[0] & 0x0F;
-        headerLength = 12 + csrcCount * 4;
-        if (payload.Length < headerLength)
-        {
-            return false;
-        }
-
-        if ((payload[0] & 0x10) != 0)
-        {
-            if (payload.Length < headerLength + 4)
-            {
-                return false;
-            }
-
-            var extLength = (payload[headerLength + 2] << 8) | payload[headerLength + 3];
-            headerLength += 4 + extLength * 4;
-            if (payload.Length < headerLength)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
 
     public void Close()
     {
