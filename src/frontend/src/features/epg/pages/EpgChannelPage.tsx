@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useEpgContext } from '../context/useEpgContext'
 import type { EpgProgram } from '../types/epg'
 import Loading from '../../shared/Loading'
+import RecordProgramButton from '../components/RecordProgramButton'
 
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
@@ -209,7 +210,10 @@ export default function EpgChannelPage() {
                                                     <div className={cn("font-medium text-sm", isCurrent && "text-primary")}>
                                                         {program.title}
                                                     </div>
-                                                    {isCurrent && <Badge className="text-[10px] px-1 py-0 h-5">正在播出</Badge>}
+                                                    <div className="flex shrink-0 items-center gap-1.5">
+                                                        <RecordProgramButton program={program} channelName={selectedChannel.name} compact />
+                                                        {isCurrent && <Badge className="text-[10px] px-1 py-0 h-5">正在播出</Badge>}
+                                                    </div>
                                                 </div>
                                                 
                                                 {isCurrent && (

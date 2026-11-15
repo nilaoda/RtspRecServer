@@ -1,6 +1,7 @@
 import { PlayCircle } from 'lucide-react'
 import { useEpgContext } from '../context/useEpgContext'
 import Loading from '../../shared/Loading'
+import RecordProgramButton from '../components/RecordProgramButton'
 
 import {
   Card,
@@ -73,6 +74,9 @@ export default function EpgCurrentPage() {
                     <div className="space-y-1">
                         <Progress value={progress} className="h-1.5" />
                         <div className="text-[10px] text-right text-muted-foreground">{progress}%</div>
+                    </div>
+                    <div className="flex justify-end pt-1">
+                        <RecordProgramButton program={currentProgram.program} channelName={currentProgram.channelName} />
                     </div>
                 </div>
               </CardContent>

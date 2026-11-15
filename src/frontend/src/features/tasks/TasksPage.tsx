@@ -1,8 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import * as z from 'zod'
-import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, Check, ChevronsUpDown, RefreshCw, CalendarClock, ChevronLeft, ChevronRight, FileText } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, RefreshCw, CalendarClock, ChevronLeft, ChevronRight, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -10,6 +7,7 @@ import { getTaskLog } from '../../services/api'
 import type { RecordingStatus, RecordingTaskDto, TsCheckSummary, TsStreamTrack } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
+import TaskFormDialog from './TaskFormDialog'
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -27,29 +25,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
 import {
   Tooltip,
   TooltipContent,
@@ -303,38 +278,19 @@ const tsCodecText = (tsCheck?: TsCheckSummary) => {
   return streams.length > 0 ? streams.join(' + ') : '未识别轨道'
 }
 
-const taskSchema = z.object({
-  channelId: z.string().min(1, "请选择频道"), // Select returns string
-  startTime: z.date({ message: "请选择开始时间" }),
-  endTime: z.date({ message: "请选择结束时间" }),
-  taskName: z.string().optional(),
-}).refine(data => data.endTime > data.startTime, {
-  message: "结束时间必须大于开始时间",
-  path: ["endTime"],
-})
-
-type TaskFormValues = z.infer<typeof taskSchema>
-
 const TasksPage = () => {
-  const { tasks, channels, createTask, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, appConfig, totalBitrateKbps } = useAppContext()
+  const { tasks, channels, createTask, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [infoTaskId, setInfoTaskId] = useState<number | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [logModal, setLogModal] = useState<{ title: string; content: string; truncated: boolean } | null>(null)
   const [logLoading, setLogLoading] = useState(false)
-  const [openCombobox, setOpenCombobox] = useState(false)
-  const comboboxListRef = useRef<HTMLDivElement>(null)
   const [activeTab, setActiveTab] = useState<TaskTab>('active')
   const [page, setPage] = useState(1)
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set())
   const [bulkStopConfirmOpen, setBulkStopConfirmOpen] = useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
-
-  const activeCount = useMemo(
-    () => tasks.filter((task) => normalizeStatus(task.status) === 'Recording').length,
-    [tasks],
-  )
 
   const taskCounts = useMemo(() => {
     const counts: Record<TaskTab, number> = { active: 0, completed: 0 }
@@ -448,44 +404,6 @@ const TasksPage = () => {
     setPage((current) => Math.min(current, totalPages))
   }, [totalPages])
 
-  useEffect(() => {
-    if (!openCombobox) {
-      return
-    }
-
-    let list: HTMLDivElement | null = null
-    const handleWheel = (event: WheelEvent) => {
-      if (!list || event.deltaY === 0) {
-        return
-      }
-
-      const maxScrollTop = list.scrollHeight - list.clientHeight
-      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, list.scrollTop + event.deltaY))
-      if (nextScrollTop === list.scrollTop) {
-        return
-      }
-
-      event.preventDefault()
-      list.scrollTop = nextScrollTop
-    }
-    // Dialog 的滚动锁定会在 document 层拦截弹窗外的 touchmove，阻断冒泡以保留原生触摸滚动
-    const handleTouchMove = (event: TouchEvent) => {
-      event.stopPropagation()
-    }
-
-    const timer = window.setTimeout(() => {
-      list = comboboxListRef.current
-      list?.addEventListener("wheel", handleWheel, { passive: false })
-      list?.addEventListener("touchmove", handleTouchMove, { passive: false })
-    }, 0)
-
-    return () => {
-      window.clearTimeout(timer)
-      list?.removeEventListener("wheel", handleWheel)
-      list?.removeEventListener("touchmove", handleTouchMove)
-    }
-  }, [openCombobox])
-
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [stopConfirmOpen, setStopConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
@@ -493,77 +411,6 @@ const TasksPage = () => {
   const [endTimeEditOpen, setEndTimeEditOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [editingEndTime, setEditingEndTime] = useState<Date | undefined>(undefined)
   const [savingEndTime, setSavingEndTime] = useState(false)
-
-  const form = useForm<TaskFormValues>({
-    resolver: zodResolver(taskSchema),
-    defaultValues: {
-      taskName: '',
-    },
-  })
-
-  const openModal = useCallback(() => {
-    const stored = window.localStorage.getItem('rtsp_task_draft')
-    const draft = stored ? JSON.parse(stored) : null
-    
-    // Default start time: now, end time: now + 30m
-    const defaultStart = new Date()
-    const defaultEnd = new Date(defaultStart.getTime() + 30 * 60 * 1000)
-
-    let startTime = defaultStart
-    let endTime = defaultEnd
-
-    if (draft?.startTime) {
-        const d = new Date(draft.startTime)
-        if (!isNaN(d.getTime())) startTime = d
-    }
-    if (draft?.endTime) {
-        const d = new Date(draft.endTime)
-        if (!isNaN(d.getTime()) && d > startTime) endTime = d
-    }
-
-    const preferredChannelId = draft?.channelId && channels.some((channel) => channel.id === draft.channelId) 
-        ? String(draft.channelId) 
-        : String(channels[0]?.id || '')
-
-    form.reset({
-      channelId: preferredChannelId,
-      startTime,
-      endTime,
-      taskName: draft?.taskName ?? '',
-    })
-    setCreateOpen(true)
-  }, [channels, form])
-
-  const onSubmit = async (values: TaskFormValues) => {
-    if (appConfig && activeCount >= appConfig.maxRecordingTasks) {
-      toast.info('当前并发已达上限，任务将进入等待队列')
-    }
-
-    const channelId = parseInt(values.channelId)
-    
-    // Save draft
-    window.localStorage.setItem(
-      'rtsp_task_draft',
-      JSON.stringify({
-        channelId,
-        startTime: values.startTime.toISOString(),
-        endTime: values.endTime.toISOString(),
-        taskName: values.taskName?.trim() || '',
-      }),
-    )
-
-    try {
-        await createTask({
-            channelId,
-            startTime: values.startTime.toISOString(), // API expects ISO string usually, assuming format compatibility
-            endTime: values.endTime.toISOString(),
-            taskName: values.taskName?.trim() || null,
-        })
-        setCreateOpen(false)
-    } catch {
-        // Error handled in AppContext
-    }
-  }
 
   const onViewInfo = useCallback(
     async (id: number, title: string) => {
@@ -742,7 +589,7 @@ const TasksPage = () => {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <Button onClick={openModal} className="w-full sm:w-auto">
+          <Button onClick={() => setCreateOpen(true)} className="w-full sm:w-auto">
             <Plus className="mr-2 h-4 w-4" />
             新建录制任务
           </Button>
@@ -1435,146 +1282,7 @@ const TasksPage = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-[500px]">
-            <DialogHeader>
-                <DialogTitle>新建录制任务</DialogTitle>
-                <DialogDescription>
-                    请设置录制频道和时间段。时间为本地时区。
-                </DialogDescription>
-            </DialogHeader>
-            <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                    <FormField
-                        control={form.control}
-                        name="channelId"
-                        render={({ field }) => {
-                            const selectedChannel = channels.find(
-                                (channel) => String(channel.id) === field.value
-                            )
-                            return (
-                            <FormItem className="flex flex-col">
-                                <FormLabel>频道</FormLabel>
-                                <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
-                                    <PopoverTrigger asChild>
-                                        <FormControl>
-                                            <Button
-                                                variant="outline"
-                                                role="combobox"
-                                                className={cn(
-                                                    "w-full min-w-0 justify-between",
-                                                    !field.value && "text-muted-foreground"
-                                                )}
-                                            >
-                                                {selectedChannel ? (
-                                                    <span className="flex min-w-0 items-center gap-2">
-                                                        <span className="truncate">{selectedChannel.name}</span>
-                                                        <ChannelProtocolBadge url={selectedChannel.url} />
-                                                    </span>
-                                                ) : (
-                                                    <span className="truncate">选择频道...</span>
-                                                )}
-                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                                            </Button>
-                                        </FormControl>
-                                    </PopoverTrigger>
-                                    <PopoverContent
-                                        className="w-[var(--radix-popover-trigger-width)] p-0"
-                                        align="start"
-                                        sideOffset={4}
-                                        collisionPadding={16}
-                                        onOpenAutoFocus={(event) => {
-                                            // 触屏设备不自动聚焦搜索框，避免每次打开都弹出软键盘
-                                            if (window.matchMedia("(pointer: coarse)").matches) {
-                                                event.preventDefault()
-                                            }
-                                        }}
-                                    >
-                                        <Command>
-                                            <CommandInput placeholder="搜索频道..." />
-                                            <CommandList ref={comboboxListRef}>
-                                                <CommandEmpty>未找到频道</CommandEmpty>
-                                                <CommandGroup>
-                                                    {channels.map((channel) => (
-                                                        <CommandItem
-                                                            value={`${channel.id} ${channel.name}`}
-                                                            key={channel.id}
-                                                            className="gap-2"
-                                                            onSelect={() => {
-                                                                form.setValue("channelId", String(channel.id))
-                                                                setOpenCombobox(false)
-                                                            }}
-                                                        >
-                                                            <Check
-                                                                className={cn(
-                                                                    "mr-2 h-4 w-4 shrink-0",
-                                                                    channel.id.toString() === field.value
-                                                                        ? "opacity-100"
-                                                                        : "opacity-0"
-                                                                )}
-                                                            />
-                                                            <span className="truncate">{channel.id} - {channel.name}</span>
-                                                            <ChannelProtocolBadge url={channel.url} className="ml-auto" />
-                                                        </CommandItem>
-                                                    ))}
-                                                </CommandGroup>
-                                            </CommandList>
-                                        </Command>
-                                    </PopoverContent>
-                                </Popover>
-                                <FormMessage />
-                            </FormItem>
-                            )
-                        }}
-                    />
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <FormField
-                            control={form.control}
-                            name="startTime"
-                            render={({ field }) => (
-                                <FormItem className="flex flex-col">
-                                    <FormLabel>开始时间</FormLabel>
-                                    <DateTimePicker date={field.value} setDate={field.onChange} />
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <FormField
-                            control={form.control}
-                            name="endTime"
-                            render={({ field }) => (
-                                <FormItem className="flex flex-col">
-                                    <FormLabel>结束时间</FormLabel>
-                                    <DateTimePicker date={field.value} setDate={field.onChange} />
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                    </div>
-                    <FormField
-                        control={form.control}
-                        name="taskName"
-                        render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>任务名称 (可选)</FormLabel>
-                                <FormControl>
-                                    <Input placeholder="Playback" {...field} />
-                                </FormControl>
-                                <FormDescription>
-                                    如果不填写，将自动生成默认名称。
-                                </FormDescription>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <DialogFooter className="gap-2 sm:gap-0">
-                        <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>取消</Button>
-                        <Button type="submit">提交任务</Button>
-                    </DialogFooter>
-                </form>
-            </Form>
-        </DialogContent>
-      </Dialog>
+      <TaskFormDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       <Dialog open={endTimeEditOpen.isOpen} onOpenChange={(open) => !open && setEndTimeEditOpen({ isOpen: false, taskId: null })}>
         <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-[420px]">

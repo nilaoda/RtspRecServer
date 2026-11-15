@@ -127,7 +127,10 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }
 
-  const getChannelPrograms = async (channelId: string) => {
+  // 必须保持引用稳定：EpgChannelPage 的数据加载 effect 依赖 getChannelPrograms，
+  // 而 Provider 因 AppContext 的 now 每秒重渲染，内联函数会导致每秒重新拉取节目表，
+  // 进而把节目列表（含打开中的预约弹窗）反复卸载重建。
+  const getChannelPrograms = useCallback(async (channelId: string) => {
     try {
       const data = await api.getEpgChannelPrograms(channelId)
       return (data || []).map(mapBackendProgram)
@@ -135,9 +138,9 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.error(`Failed to fetch programs for channel ${channelId}`, err)
       return []
     }
-  }
+  }, [])
 
-  const getCategoryChannels = async (category: string) => {
+  const getCategoryChannels = useCallback(async (category: string) => {
     try {
       const data = await api.getEpgCategoryChannels(category)
       return data || []
@@ -145,7 +148,7 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       console.error(`Failed to fetch channels for category ${category}`, err)
       return []
     }
-  }
+  }, [])
 
   return (
     <EpgContext.Provider

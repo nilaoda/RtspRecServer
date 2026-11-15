@@ -21,9 +21,11 @@ import {
 export function DateTimePicker({
   date,
   setDate,
+  forcePopover = false,
 }: {
   date?: Date
   setDate: (date: Date | undefined) => void
+  forcePopover?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
   const [isMobile, setIsMobile] = React.useState(false)
@@ -229,7 +231,7 @@ export function DateTimePicker({
     </>
   )
 
-  if (isMobile) {
+  if (isMobile && !forcePopover) {
     return (
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
