@@ -13,6 +13,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     {
         _analyzer.BeginSession(displayName, new TsStreamAnalyzeOptions
         {
+            ProgressIntervalMilliseconds = 500,
             Features = TsStreamAnalyzeFeatures.ContinuityValidation |
                        TsStreamAnalyzeFeatures.TimestampValidation |
                        TsStreamAnalyzeFeatures.AvSyncValidation |

@@ -37,6 +37,16 @@ public class LiveSourceClassifierTests
     }
 
     [Theory]
+    [InlineData("rtp://239.1.1.1:8000", "MP2T/TCP", "RTP/UDP")]
+    [InlineData("udp://@239.1.1.1:8000", "MP2T/TCP", "UDP")]
+    [InlineData("http://host/rtp/239.1.1.1:8000", "MP2T/TCP", "HTTP")]
+    [InlineData("rtsp://host/live", "MP2T/RTP/TCP", "MP2T/RTP/TCP")]
+    public void GetTransportDescription_UsesActualLiveTransport(string url, string fallback, string expected)
+    {
+        Assert.Equal(expected, LiveSourceClassifier.GetTransportDescription(url, fallback));
+    }
+
+    [Theory]
     [InlineData("http://host/rtp/239.1.1.1:8000", true)]
     [InlineData("https://host/udp/239.1.1.1:8000", true)]
     [InlineData("  http://host/rtp/239.1.1.1:8000  ", true)]

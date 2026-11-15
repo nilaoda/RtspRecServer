@@ -41,6 +41,31 @@ public class UdpLiveRecordingServiceTests
         Assert.False(DirectUdpSourceParser.TryParse(url, out _, out _));
     }
 
+    [Fact]
+    public void CreateSocket_AllowsMultipleChannelsOnSamePort()
+    {
+        var port = GetFreeUdpPort();
+        var source = new DirectUdpSource(true, IPAddress.Loopback, port, null);
+
+        using var first = UdpLiveRecordingService.CreateSocket(source);
+        using var second = UdpLiveRecordingService.CreateSocket(source);
+
+        Assert.Equal(port, ((IPEndPoint)first.LocalEndPoint!).Port);
+        Assert.Equal(port, ((IPEndPoint)second.LocalEndPoint!).Port);
+    }
+
+    [Fact]
+    public void IsExpectedMulticastDestination_FiltersOtherGroupsOnSharedPort()
+    {
+        var group = IPAddress.Parse("239.1.1.1");
+
+        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(group, group));
+        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(group, IPAddress.Any));
+        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(group, null));
+        Assert.False(UdpLiveRecordingService.IsExpectedMulticastDestination(group, IPAddress.Parse("239.1.1.2")));
+        Assert.True(UdpLiveRecordingService.IsExpectedMulticastDestination(IPAddress.Loopback, IPAddress.Parse("239.1.1.2")));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

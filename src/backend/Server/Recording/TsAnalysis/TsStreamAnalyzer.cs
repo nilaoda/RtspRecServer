@@ -1513,7 +1513,9 @@ public sealed class TsStreamAnalyzer : IDisposable
             return;
 
         var elapsedTicks = _stopwatch.ElapsedTicks;
-        if (!force && elapsedTicks - _lastProgressTicks < Stopwatch.Frequency / 10)
+        var progressIntervalTicks = Stopwatch.Frequency *
+                                     Math.Max(20, _options.ProgressIntervalMilliseconds) / 1000;
+        if (!force && elapsedTicks - _lastProgressTicks < progressIntervalTicks)
             return;
 
         _lastProgressTicks = elapsedTicks;

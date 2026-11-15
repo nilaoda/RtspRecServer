@@ -383,7 +383,11 @@ public sealed class RecordingManager
             var lastUpdate = DateTimeOffset.UtcNow;
             var lastBytes = 0L;
             using var recordingLog = RecordingLogWriter.Create(outputPath, config.WriteRecordingLog);
-            recordingLog?.WriteStart(started, outputPath, config.RecordingTransport, started.StartedAt ?? DateTimeOffset.Now);
+            recordingLog?.WriteStart(
+                started,
+                outputPath,
+                LiveSourceClassifier.GetTransportDescription(started.Url, config.RecordingTransport),
+                started.StartedAt ?? DateTimeOffset.Now);
             try
             {
                 var result = await _recordingService.RecordAsync(started, outputPath, duration, config.RecordingTransport, (progress) =>

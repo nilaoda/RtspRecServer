@@ -38,6 +38,30 @@ internal static class LiveSourceClassifier
                value.StartsWith("udp://", StringComparison.OrdinalIgnoreCase);
     }
 
+    public static string GetTransportDescription(string url, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return fallback;
+        }
+
+        var value = url.Trim();
+        if (value.StartsWith("rtp://", StringComparison.OrdinalIgnoreCase))
+        {
+            return "RTP/UDP";
+        }
+        if (value.StartsWith("udp://", StringComparison.OrdinalIgnoreCase))
+        {
+            return "UDP";
+        }
+        if (IsHttpLive(value))
+        {
+            return "HTTP";
+        }
+
+        return fallback;
+    }
+
     public static bool IsHttpLive(string url)
     {
         if (string.IsNullOrWhiteSpace(url))

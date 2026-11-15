@@ -270,6 +270,7 @@ public sealed class TsStreamAnalyzeOptions
     public long MinimumBytes { get; init; }
     public long MaxBytes { get; init; } = long.MaxValue;
     public int StablePacketCount { get; init; } = 8_192;
+    public int ProgressIntervalMilliseconds { get; init; } = 100;
     public TsStreamAnalyzeFeatures Features { get; init; } = TsStreamAnalyzeFeatures.Default;
 }
 

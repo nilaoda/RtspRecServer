@@ -101,7 +101,7 @@ internal sealed class RtspStreamRecorder
         var stoppedByPcr = false;
         
         // 性能优化：批量写入和每秒进度上报
-        const int BatchSize = 16 * 1024; // 16KB批处理
+        const int BatchSize = 64 * 1024; // 64KB批处理
         var batchBuffer = ArrayPool<byte>.Shared.Rent(BatchSize);
         var batchOffset = 0;
         var lastProgressTime = DateTime.UtcNow; // 记录上次进度上报时间
@@ -153,8 +153,8 @@ internal sealed class RtspStreamRecorder
         _ = ReceiveHead(stream);
 
         EnsureOutputPath(_outputPath);
-        await using var fileStream = new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 8192, FileOptions.Asynchronous);
-        await using var buffered = new BufferedStream(fileStream, 8192);
+        await using var fileStream = new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+        await using var buffered = new BufferedStream(fileStream, 64 * 1024);
 
         var header = new byte[4];
         while (!cancellationToken.IsCancellationRequested)
