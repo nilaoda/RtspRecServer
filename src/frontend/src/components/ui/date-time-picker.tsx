@@ -65,6 +65,46 @@ export function DateTimePicker({
     }
   }, [open, selectedDate])
 
+  React.useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    const attached: Array<{ list: HTMLUListElement; handler: (event: WheelEvent) => void }> = []
+    const timer = window.setTimeout(() => {
+      const lists = [hourRef.current, minuteRef.current, secondRef.current]
+      const handleWheel = (event: WheelEvent) => {
+        const list = event.currentTarget as HTMLUListElement
+        if (event.deltaY === 0) {
+          return
+        }
+
+        const maxScrollTop = list.scrollHeight - list.clientHeight
+        const nextScrollTop = Math.max(0, Math.min(maxScrollTop, list.scrollTop + event.deltaY))
+        if (nextScrollTop === list.scrollTop) {
+          return
+        }
+
+        event.preventDefault()
+        list.scrollTop = nextScrollTop
+      }
+
+      for (const list of lists) {
+        if (!list) {
+          continue
+        }
+
+        list.addEventListener("wheel", handleWheel, { passive: false })
+        attached.push({ list, handler: handleWheel })
+      }
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timer)
+      attached.forEach(({ list, handler }) => list.removeEventListener("wheel", handler))
+    }
+  }, [isMobile, open])
+
   const handleDateSelect = (d: Date | undefined) => {
     if (!d) return
     const newDate = new Date(d)
