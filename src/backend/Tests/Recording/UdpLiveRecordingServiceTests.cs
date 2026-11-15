@@ -204,6 +204,192 @@ public class UdpLiveRecordingServiceTests
         }
     }
 
+    [Fact]
+    public async Task RecoversAfterStreamInterruptionAndContinuesSameFile()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"rtsp-udp-recover-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(directory, "recording.ts");
+        var port = GetFreeUdpPort();
+        var task = new RecordingTask
+        {
+            Id = 1,
+            ChannelId = 1,
+            ChannelName = "Test",
+            TaskName = "Live_Recover",
+            IsLive = true,
+            Url = $"rtp://127.0.0.1:{port}",
+            StartTime = DateTimeOffset.UtcNow,
+            EndTime = DateTimeOffset.UtcNow.AddMinutes(1)
+        };
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var service = new UdpLiveRecordingService(TimeSpan.FromSeconds(1), maxIdleRecoveries: 3);
+        var recording = service.RecordAsync(
+            task,
+            outputPath,
+            targetDuration: null,
+            recordingTransport: "MP2T/TCP",
+            onProgress: _ => { },
+            cancellationToken: cancellation.Token);
+
+        try
+        {
+            await WaitUntilAsync(() => File.Exists(outputPath), TimeSpan.FromSeconds(3));
+            using var sender = new UdpClient(AddressFamily.InterNetwork);
+            var endpoint = new IPEndPoint(IPAddress.Loopback, port);
+
+            var first = new byte[188];
+            first[0] = 0x47;
+            first[1] = 1;
+            var firstDatagram = CreateRtpPacket(first, sequence: 1);
+            await sender.SendAsync(firstDatagram, firstDatagram.Length, endpoint);
+
+            // 覆盖 1 秒无数据判定 + 2 秒重新加入退避，模拟瞬时断流后恢复
+            await Task.Delay(3500);
+
+            var second = new byte[188];
+            second[0] = 0x47;
+            second[1] = 2;
+            var secondDatagram = CreateRtpPacket(second, sequence: 2);
+            await sender.SendAsync(secondDatagram, secondDatagram.Length, endpoint);
+
+            await Task.Delay(500);
+            cancellation.Cancel();
+            var result = await recording;
+
+            Assert.Equal(376, result.BytesWritten);
+            var written = await File.ReadAllBytesAsync(outputPath);
+            Assert.Equal(376, written.Length);
+            Assert.Equal(1, written[1]);
+            Assert.Equal(2, written[189]);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task FailsAfterExhaustingIdleRecoveries()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"rtsp-udp-budget-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(directory, "recording.ts");
+        var port = GetFreeUdpPort();
+        var task = new RecordingTask
+        {
+            Id = 1,
+            ChannelId = 1,
+            ChannelName = "Test",
+            TaskName = "Live_Budget",
+            IsLive = true,
+            Url = $"udp://127.0.0.1:{port}",
+            StartTime = DateTimeOffset.UtcNow,
+            EndTime = DateTimeOffset.UtcNow.AddMinutes(1)
+        };
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var service = new UdpLiveRecordingService(TimeSpan.FromMilliseconds(200), maxIdleRecoveries: 1);
+        var recording = service.RecordAsync(
+            task,
+            outputPath,
+            targetDuration: null,
+            recordingTransport: "MP2T/TCP",
+            onProgress: _ => { },
+            cancellationToken: cancellation.Token);
+
+        try
+        {
+            var result = await recording;
+
+            Assert.False(result.Success);
+            Assert.Equal("直播流无数据超时", result.ErrorMessage);
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ResetsReorderBufferWhenSsrcChanges()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"rtsp-udp-ssrc-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(directory, "recording.ts");
+        var port = GetFreeUdpPort();
+        var task = new RecordingTask
+        {
+            Id = 1,
+            ChannelId = 1,
+            ChannelName = "Test",
+            TaskName = "Live_Ssrc",
+            IsLive = true,
+            Url = $"rtp://127.0.0.1:{port}",
+            StartTime = DateTimeOffset.UtcNow,
+            EndTime = DateTimeOffset.UtcNow.AddMinutes(1)
+        };
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var service = new UdpLiveRecordingService();
+        var recording = service.RecordAsync(
+            task,
+            outputPath,
+            targetDuration: null,
+            recordingTransport: "MP2T/TCP",
+            onProgress: _ => { },
+            cancellationToken: cancellation.Token);
+
+        try
+        {
+            await WaitUntilAsync(() => File.Exists(outputPath), TimeSpan.FromSeconds(3));
+            using var sender = new UdpClient(AddressFamily.InterNetwork);
+            foreach (var (ssrc, sequence) in new (uint, ushort)[] { (1, 1), (1, 2), (2, 1), (2, 2) })
+            {
+                var payload = new byte[188];
+                payload[0] = 0x47;
+                payload[1] = (byte)sequence;
+                payload[2] = (byte)ssrc;
+                var datagram = CreateRtpPacket(payload, sequence, ssrc);
+                await sender.SendAsync(datagram, datagram.Length, new IPEndPoint(IPAddress.Loopback, port));
+            }
+
+            await Task.Delay(500);
+            cancellation.Cancel();
+            await recording;
+
+            var written = await File.ReadAllBytesAsync(outputPath);
+            Assert.Equal(188 * 4, written.Length);
+            Assert.Equal([1, 2, 1, 2], new[] { written[1], written[189], written[377], written[565] });
+        }
+        finally
+        {
+            if (File.Exists(outputPath))
+            {
+                File.Delete(outputPath);
+            }
+
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
     private static int GetFreeUdpPort()
     {
         using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
@@ -222,13 +408,17 @@ public class UdpLiveRecordingServiceTests
         return payload;
     }
 
-    private static byte[] CreateRtpPacket(byte[] tsPayload, ushort sequence = 0)
+    private static byte[] CreateRtpPacket(byte[] tsPayload, ushort sequence = 0, uint ssrc = 0)
     {
         var packet = new byte[12 + tsPayload.Length];
         packet[0] = 0x80;
         packet[1] = 0x21;
         packet[2] = (byte)(sequence >> 8);
         packet[3] = (byte)sequence;
+        packet[8] = (byte)(ssrc >> 24);
+        packet[9] = (byte)(ssrc >> 16);
+        packet[10] = (byte)(ssrc >> 8);
+        packet[11] = (byte)ssrc;
         tsPayload.CopyTo(packet.AsSpan(12));
         return packet;
     }

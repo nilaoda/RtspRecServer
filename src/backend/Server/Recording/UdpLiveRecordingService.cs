@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Net;
 using System.Threading.Channels;
@@ -126,9 +127,21 @@ internal static class DirectUdpSourceParser
 
 public sealed class UdpLiveRecordingService : IRecordingService
 {
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan InvalidDataTimeout = TimeSpan.FromSeconds(5);
     private readonly UdpReceiveHub _receiverHub = new();
+    private readonly TimeSpan _idleTimeout;
+    private readonly int _maxIdleRecoveries;
+
+    public UdpLiveRecordingService()
+        : this(TimeSpan.FromSeconds(30), maxIdleRecoveries: 5)
+    {
+    }
+
+    internal UdpLiveRecordingService(TimeSpan idleTimeout, int maxIdleRecoveries)
+    {
+        _idleTimeout = idleTimeout;
+        _maxIdleRecoveries = maxIdleRecoveries;
+    }
 
     public async Task<RecordingResult> RecordAsync(
         RecordingTask task,
@@ -167,10 +180,6 @@ public sealed class UdpLiveRecordingService : IRecordingService
             }
 
             var groupAddress = UdpEndpointReceiver.IsMulticast(source.GroupAddress) ? source.GroupAddress : null;
-            await using var subscription = _receiverHub.Subscribe(
-                groupAddress,
-                source.LocalAddress,
-                source.Port);
             await using var ownedFile = output is null
                 ? new FileStream(
                     outputPath,
@@ -182,26 +191,36 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 : null;
             await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 128 * 1024);
             var sink = output ?? buffered!;
-            using var rtpReorder = source.IsRtp ? new RtpReorderBuffer() : null;
 
-            using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var startedAt = DateTime.UtcNow;
-                var lastProgress = startedAt;
-                var validTsSeen = false;
+            var startedAt = DateTime.UtcNow;
+            var lastProgress = startedAt;
+            var validTsSeen = false;
+            var idleRecoveries = 0;
 
-                async Task WritePayloadAsync(ReadOnlyMemory<byte> payload, CancellationToken token)
+            async Task WritePayloadAsync(ReadOnlyMemory<byte> payload, CancellationToken token)
+            {
+                await sink.WriteAsync(payload, token);
+                bytesWritten += payload.Length;
+                analysis.Append(payload.Span);
+
+                var now = DateTime.UtcNow;
+                if ((now - lastProgress).TotalSeconds >= 1.0)
                 {
-                    await sink.WriteAsync(payload, token);
-                    bytesWritten += payload.Length;
-                    analysis.Append(payload.Span);
-
-                    var now = DateTime.UtcNow;
-                    if ((now - lastProgress).TotalSeconds >= 1.0)
-                    {
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                        lastProgress = now;
-                    }
+                    onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                    lastProgress = now;
                 }
+            }
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await using var subscription = _receiverHub.Subscribe(
+                    groupAddress,
+                    source.LocalAddress,
+                    source.Port);
+                using var rtpReorder = source.IsRtp ? new RtpReorderBuffer() : null;
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                uint? lastSsrc = null;
+                var idleTimedOut = false;
 
                 async Task FlushReorderedAsync()
                 {
@@ -225,7 +244,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    idleCts.CancelAfter(IdleTimeout);
+                    idleCts.CancelAfter(_idleTimeout);
 
                     UdpDatagram datagram;
                     try
@@ -234,10 +253,9 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
-                        Log.Warning("UDP 直播流超过 {Seconds} 秒无数据: {Url}", IdleTimeout.TotalSeconds, task.Url);
-                        await FlushReorderedAsync();
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                        return Finish(false, "直播流无数据超时", bytesWritten);
+                        Log.Warning("UDP 直播流超过 {Seconds} 秒无数据: {Url}", _idleTimeout.TotalSeconds, task.Url);
+                        idleTimedOut = true;
+                        break;
                     }
                     catch (OperationCanceledException)
                     {
@@ -258,7 +276,8 @@ public sealed class UdpLiveRecordingService : IRecordingService
                                 source.IsRtp,
                                 out var dataOffset,
                                 out var dataLength,
-                                out var rtpSequence))
+                                out var rtpSequence,
+                                out var ssrc))
                         {
                             if (!validTsSeen && DateTime.UtcNow - startedAt > InvalidDataTimeout)
                             {
@@ -271,6 +290,22 @@ public sealed class UdpLiveRecordingService : IRecordingService
                         }
 
                         validTsSeen = true;
+                        if (ssrc.HasValue)
+                        {
+                            if (lastSsrc.HasValue && ssrc.Value != lastSsrc.Value)
+                            {
+                                Log.Information(
+                                    "RTP SSRC 变化（{Old} -> {New}），重置乱序缓冲: {Url}",
+                                    lastSsrc.Value,
+                                    ssrc.Value,
+                                    task.Url);
+                                await FlushReorderedAsync();
+                                rtpReorder?.Reset();
+                            }
+
+                            lastSsrc = ssrc;
+                        }
+
                         if (rtpSequence.HasValue && rtpReorder is not null)
                         {
                             var ready = rtpReorder.Push(
@@ -297,9 +332,40 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 }
 
                 await FlushReorderedAsync();
-                await sink.FlushAsync(CancellationToken.None);
+
+                if (!idleTimedOut)
+                {
+                    break;
+                }
+
+                idleRecoveries++;
+                if (idleRecoveries > _maxIdleRecoveries)
+                {
+                    onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                    return Finish(false, "直播流无数据超时", bytesWritten);
+                }
+
+                var retryDelay = TimeSpan.FromSeconds(Math.Min(2 * idleRecoveries, 10));
+                Log.Warning(
+                    "UDP 直播流中断，{Delay} 秒后重新加入（第 {Attempt}/{Max} 次）: {Url}",
+                    retryDelay.TotalSeconds,
+                    idleRecoveries,
+                    _maxIdleRecoveries,
+                    task.Url);
                 onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
+                try
+                {
+                    await Task.Delay(retryDelay, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            await sink.FlushAsync(CancellationToken.None);
+            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+            return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -318,11 +384,13 @@ public sealed class UdpLiveRecordingService : IRecordingService
         bool isRtp,
         out int offset,
         out int length,
-        out ushort? rtpSequence)
+        out ushort? rtpSequence,
+        out uint? ssrc)
     {
         offset = 0;
         length = datagram.Length;
         rtpSequence = null;
+        ssrc = null;
         if (length == 0)
         {
             return false;
@@ -338,6 +406,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
             }
 
             rtpSequence = (ushort)((datagram[2] << 8) | datagram[3]);
+            ssrc = BinaryPrimitives.ReadUInt32BigEndian(datagram.Slice(8, 4));
             offset = headerLength;
             length -= headerLength;
 

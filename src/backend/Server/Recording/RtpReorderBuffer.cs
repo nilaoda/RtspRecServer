@@ -20,7 +20,7 @@ internal sealed class BufferedRtpPacket : IDisposable
 internal sealed class RtpReorderBuffer : IDisposable
 {
     private static readonly TimeSpan DefaultDelay = TimeSpan.FromMilliseconds(80);
-    private const int DefaultMaxPackets = 256;
+    private const int DefaultMaxPackets = 512;
 
     private readonly TimeSpan _delay;
     private readonly int _maxPackets;
@@ -145,6 +145,25 @@ internal sealed class RtpReorderBuffer : IDisposable
         }
 
         return _referenceSequence + difference;
+    }
+
+    public void Reset()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        foreach (var packet in _packets.Values)
+        {
+            packet.Dispose();
+        }
+
+        _packets.Clear();
+        _referenceSequence = 0;
+        _nextSequence = 0;
+        _initialized = false;
+        _hasReleased = false;
     }
 
     public void Dispose()

@@ -56,6 +56,32 @@ public class RtpReorderBufferTests
     }
 
     [Fact]
+    public void Reset_DiscardsPendingPacketsAndAcceptsNewBaseline()
+    {
+        using var buffer = new RtpReorderBuffer();
+        var now = DateTime.UtcNow;
+        var payload = new byte[] { 1 };
+
+        buffer.Push(100, payload, now);
+        buffer.Push(101, payload, now);
+        buffer.Reset();
+
+        Assert.Empty(buffer.Push(5, payload, now));
+        var ready = buffer.Flush();
+        try
+        {
+            Assert.Equal([5L], ready.Select(packet => packet.Sequence));
+        }
+        finally
+        {
+            foreach (var packet in ready)
+            {
+                packet.Dispose();
+            }
+        }
+    }
+
+    [Fact]
     public void Flush_HandlesSequenceWrap()
     {
         using var buffer = new RtpReorderBuffer();
