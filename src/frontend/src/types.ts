@@ -1,9 +1,23 @@
 export type PageKey = 'tasks' | 'channels' | 'recordings' | 'settings'
 
+export type EpgConfig = {
+  url: string
+  updateTime: string
+  cacheDurationHours: number
+}
+
 export type AppConfig = {
+  port: number
+  recordPath: string
+  host: string[]
+  useAuth: boolean
+  username: string
+  hasPassword: boolean
   maxRecordingTasks: number
   recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'
   writeRecordingLog: boolean
+  epg: EpgConfig
+  restartRequiredFields: string[]
 }
 
 export type RecordingStatus = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped' | 0 | 1 | 2 | 3 | 4

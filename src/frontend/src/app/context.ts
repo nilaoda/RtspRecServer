@@ -8,6 +8,7 @@ import type {
   SystemStatus,
   TimerUpsertPayload,
 } from '../types'
+import type { UpdateConfigPayload } from '../services/api'
 
 export type AppContextValue = {
   tasks: RecordingTaskDto[]
@@ -42,7 +43,7 @@ export type AppContextValue = {
   createTimer: (payload: TimerUpsertPayload) => Promise<void>
   updateTimer: (id: number, payload: TimerUpsertPayload) => Promise<void>
   deleteTimer: (id: number) => Promise<void>
-  updateConfig: (payload: { maxRecordingTasks: number; recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'; writeRecordingLog: boolean }) => Promise<void>
+  updateConfig: (payload: UpdateConfigPayload) => Promise<void>
   getTaskMediaInfo: (id: number) => Promise<string>
   getRecordingMediaInfo: (filePath: string) => Promise<string>
   totalBitrateKbps: number // 实时总码率

@@ -161,13 +161,20 @@ try
 
     app.MapGet("/api/config", (ConfigurationService service) =>
     {
-        return Results.Ok(service.GetAppConfig());
+        return Results.Ok(service.GetAppConfigView());
     });
 
     app.MapPut("/api/config", (ConfigurationService service, AppConfigUpdateRequest request) =>
     {
-        var updated = service.UpdateAppConfig(request);
-        return Results.Ok(updated);
+        try
+        {
+            service.UpdateAppConfig(request);
+            return Results.Ok(service.GetAppConfigView());
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
     });
 
     app.MapGet("/api/channels", (ConfigurationService service) =>

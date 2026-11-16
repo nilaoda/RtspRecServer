@@ -24,6 +24,7 @@ import {
   updateTimer as updateTimerApi,
   updateTaskEndTime as updateTaskEndTimeApi,
 } from '../services/api'
+import type { UpdateConfigPayload } from '../services/api'
 import { connectWebSocket } from '../services/ws'
 import { AppContext, type AppContextValue } from './context'
 import { useTheme } from '@/components/theme-context'
@@ -406,7 +407,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifySuccess, reloadTimers, reloadTasks],
   )
 
-  const updateConfigAction = useCallback(async (payload: { maxRecordingTasks: number; recordingTransport: AppConfig['recordingTransport']; writeRecordingLog: boolean }) => {
+  const updateConfigAction = useCallback(async (payload: UpdateConfigPayload) => {
     try {
       const data = await updateConfig(payload)
       setAppConfig(data)

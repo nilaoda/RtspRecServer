@@ -21,9 +21,40 @@ public sealed record EpgConfig
     public int CacheDurationHours { get; init; } = 24;
 }
 
+public sealed record EpgConfigUpdate
+{
+    public string? Url { get; init; }
+    public string? UpdateTime { get; init; }
+    public int? CacheDurationHours { get; init; }
+}
+
+/// <summary>全量配置更新请求；字段为 null 表示保持原值（密码为空表示不修改）。</summary>
 public sealed record AppConfigUpdateRequest
 {
-    public int MaxRecordingTasks { get; init; }
+    public int? Port { get; init; }
+    public string? RecordPath { get; init; }
+    public string[]? Host { get; init; }
+    public bool? UseAuth { get; init; }
+    public string? Username { get; init; }
+    public string? Password { get; init; }
+    public int? MaxRecordingTasks { get; init; }
     public string? RecordingTransport { get; init; }
     public bool? WriteRecordingLog { get; init; }
+    public EpgConfigUpdate? Epg { get; init; }
+}
+
+/// <summary>暴露给前端的配置视图；不返回明文密码，并附带需要重启才能生效的字段。</summary>
+public sealed record AppConfigView
+{
+    public int Port { get; init; }
+    public string RecordPath { get; init; } = string.Empty;
+    public string[] Host { get; init; } = [];
+    public bool UseAuth { get; init; }
+    public string Username { get; init; } = string.Empty;
+    public bool HasPassword { get; init; }
+    public int MaxRecordingTasks { get; init; }
+    public string RecordingTransport { get; init; } = string.Empty;
+    public bool WriteRecordingLog { get; init; }
+    public EpgConfig Epg { get; init; } = new();
+    public string[] RestartRequiredFields { get; init; } = [];
 }

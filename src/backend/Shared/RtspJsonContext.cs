@@ -7,6 +7,7 @@ namespace RtspRecServer.Shared;
     PropertyNameCaseInsensitive = true,
     WriteIndented = true)]
 [JsonSerializable(typeof(AppConfig))]
+[JsonSerializable(typeof(AppConfigView))]
 [JsonSerializable(typeof(EpgConfig))]
 [JsonSerializable(typeof(AppConfigUpdateRequest))]
 [JsonSerializable(typeof(ChannelConfig))]

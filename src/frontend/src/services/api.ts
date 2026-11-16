@@ -217,11 +217,24 @@ export const getLogContent = (fileName: string) =>
 
 export const getConfig = () => fetchJson<AppConfig>('/api/config', { silent: true })
 
-export const updateConfig = (payload: {
-  maxRecordingTasks: number
-  recordingTransport: AppConfig['recordingTransport']
-  writeRecordingLog: boolean
-}) =>
+export type UpdateConfigPayload = {
+  port?: number
+  recordPath?: string
+  host?: string[]
+  useAuth?: boolean
+  username?: string
+  password?: string | null
+  maxRecordingTasks?: number
+  recordingTransport?: AppConfig['recordingTransport']
+  writeRecordingLog?: boolean
+  epg?: {
+    url?: string
+    updateTime?: string
+    cacheDurationHours?: number
+  }
+}
+
+export const updateConfig = (payload: UpdateConfigPayload) =>
   fetchJson<AppConfig>('/api/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

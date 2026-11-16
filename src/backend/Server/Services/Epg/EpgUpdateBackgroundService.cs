@@ -45,29 +45,33 @@ namespace RtspRecServer.Server.Services.Epg
             {
                 try
                 {
-                    // 从配置中获取更新时间
-                    var config = _configurationService.GetAppConfig();
-                    var updateTimeStr = config.Epg?.UpdateTime ?? "08:00";
-                    
-                    if (!TimeSpan.TryParse(updateTimeStr, out var updateTime))
+                    // 分段等待到下次更新时间：期间修改更新时间可在约 1 分钟内生效，无需重启
+                    var nextUpdate = GetNextUpdateTime(DateTime.Now);
+                    _logger.LogInformation("下次EPG数据自动更新时间: {NextUpdate:yyyy-MM-dd HH:mm:ss}", nextUpdate);
+
+                    while (!stoppingToken.IsCancellationRequested)
                     {
-                        updateTime = TimeSpan.FromHours(8); // 默认8点
+                        var remaining = nextUpdate - DateTime.Now;
+                        if (remaining <= TimeSpan.Zero)
+                        {
+                            break;
+                        }
+
+                        var chunk = remaining > TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : remaining;
+                        await Task.Delay(chunk, stoppingToken);
+
+                        if (DateTime.Now >= nextUpdate)
+                        {
+                            break;
+                        }
+
+                        var refreshed = GetNextUpdateTime(DateTime.Now);
+                        if (refreshed != nextUpdate)
+                        {
+                            nextUpdate = refreshed;
+                            _logger.LogInformation("EPG更新时间已调整为: {NextUpdate:yyyy-MM-dd HH:mm:ss}", nextUpdate);
+                        }
                     }
-
-                    var now = DateTime.Now;
-                    var nextUpdate = now.Date.Add(updateTime);
-                    
-                    if (now >= nextUpdate)
-                    {
-                        nextUpdate = nextUpdate.AddDays(1);
-                    }
-
-                    var delay = nextUpdate - now;
-                    
-                    _logger.LogInformation($"下次EPG数据自动更新时间: {nextUpdate:yyyy-MM-dd HH:mm:ss}，等待时间: {delay.TotalHours:F1}小时");
-
-                    // 等待到下次更新时间
-                    await Task.Delay(delay, stoppingToken);
 
                     // 执行更新
                     if (!stoppingToken.IsCancellationRequested)
@@ -99,6 +103,19 @@ namespace RtspRecServer.Server.Services.Epg
             }
 
             _logger.LogInformation("EPG更新后台服务停止");
+        }
+
+        private DateTime GetNextUpdateTime(DateTime now)
+        {
+            var config = _configurationService.GetAppConfig();
+            var updateTimeStr = config.Epg?.UpdateTime ?? "08:00";
+            if (!TimeSpan.TryParse(updateTimeStr, out var updateTime))
+            {
+                updateTime = TimeSpan.FromHours(8); // 默认8点
+            }
+
+            var next = now.Date.Add(updateTime);
+            return now >= next ? next.AddDays(1) : next;
         }
 
         private async Task UpdateEpgDataAsync(CancellationToken cancellationToken)

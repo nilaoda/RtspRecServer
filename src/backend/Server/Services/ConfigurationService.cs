@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using RtspRecServer.Shared;
 
@@ -9,6 +10,7 @@ public sealed class ConfigurationService
     private readonly string _basePath;
     private readonly string _appConfigPath;
     private readonly string _channelsPath;
+    private readonly AppConfig _bootConfig;
 
     public ConfigurationService()
         : this(AppContext.BaseDirectory)
@@ -20,6 +22,8 @@ public sealed class ConfigurationService
         _basePath = basePath;
         _appConfigPath = Path.Combine(_basePath, "recsettings.json");
         _channelsPath = Path.Combine(_basePath, "channels.json");
+        // 启动时生效的配置快照，用于提示哪些修改需要重启服务
+        _bootConfig = GetAppConfig();
     }
 
     public AppConfig GetAppConfig()
@@ -58,14 +62,88 @@ public sealed class ConfigurationService
                 ? DeserializeAppConfig(File.ReadAllText(_appConfigPath))
                 : new AppConfig();
 
+            var port = request.Port ?? current.Port;
+            if (port is < 1 or > 65535)
+            {
+                throw new InvalidOperationException("端口必须在 1-65535 之间");
+            }
+
+            var recordPath = request.RecordPath is null ? current.RecordPath : request.RecordPath.Trim();
+            if (string.IsNullOrWhiteSpace(recordPath))
+            {
+                throw new InvalidOperationException("录制目录不能为空");
+            }
+
+            var host = request.Host is null ? current.Host : NormalizeHosts(request.Host);
+            if (host.Length == 0)
+            {
+                throw new InvalidOperationException("监听地址不能为空");
+            }
+
+            var username = request.Username is null ? current.Username : request.Username.Trim();
+            if (string.IsNullOrWhiteSpace(username))
+            {
+                throw new InvalidOperationException("用户名不能为空");
+            }
+
+            // 密码为空表示保持原密码（前端不回显明文密码）
+            var password = string.IsNullOrEmpty(request.Password) ? current.Password : request.Password;
+
+            var maxRecordingTasks = request.MaxRecordingTasks ?? current.MaxRecordingTasks;
+            if (maxRecordingTasks < 1)
+            {
+                throw new InvalidOperationException("最大并发必须大于 0");
+            }
+
             var transport = string.IsNullOrWhiteSpace(request.RecordingTransport)
                 ? current.RecordingTransport
-                : request.RecordingTransport;
+                : request.RecordingTransport.Trim();
+            if (transport is not ("MP2T/TCP" or "MP2T/RTP/TCP"))
+            {
+                throw new InvalidOperationException("不支持的封装方式");
+            }
+
+            var epg = current.Epg;
+            if (request.Epg is { } epgUpdate)
+            {
+                var url = epgUpdate.Url is null ? epg.Url : epgUpdate.Url.Trim();
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    throw new InvalidOperationException("节目表地址不能为空");
+                }
+
+                var updateTime = epgUpdate.UpdateTime is null ? epg.UpdateTime : epgUpdate.UpdateTime.Trim();
+                if (!IsValidClock(updateTime))
+                {
+                    throw new InvalidOperationException("节目表更新时间格式必须为 HH:mm");
+                }
+
+                var cacheHours = epgUpdate.CacheDurationHours ?? epg.CacheDurationHours;
+                if (cacheHours is < 1 or > 24 * 30)
+                {
+                    throw new InvalidOperationException("节目表缓存时长必须在 1-720 小时之间");
+                }
+
+                epg = new EpgConfig
+                {
+                    Url = url,
+                    UpdateTime = updateTime,
+                    CacheDurationHours = cacheHours
+                };
+            }
+
             var updated = current with
             {
-                MaxRecordingTasks = request.MaxRecordingTasks,
+                Port = port,
+                RecordPath = recordPath,
+                Host = host,
+                UseAuth = request.UseAuth ?? current.UseAuth,
+                Username = username,
+                Password = password,
+                MaxRecordingTasks = maxRecordingTasks,
                 RecordingTransport = transport,
-                WriteRecordingLog = request.WriteRecordingLog ?? current.WriteRecordingLog
+                WriteRecordingLog = request.WriteRecordingLog ?? current.WriteRecordingLog,
+                Epg = epg
             };
             WriteJson(_appConfigPath, updated);
             return updated;
@@ -74,6 +152,71 @@ public sealed class ConfigurationService
         {
             _lock.ExitWriteLock();
         }
+    }
+
+    public AppConfigView GetAppConfigView()
+    {
+        return ToView(GetAppConfig());
+    }
+
+    private AppConfigView ToView(AppConfig config)
+    {
+        return new AppConfigView
+        {
+            Port = config.Port,
+            RecordPath = config.RecordPath,
+            Host = config.Host,
+            UseAuth = config.UseAuth,
+            Username = config.Username,
+            HasPassword = !string.IsNullOrEmpty(config.Password),
+            MaxRecordingTasks = config.MaxRecordingTasks,
+            RecordingTransport = config.RecordingTransport,
+            WriteRecordingLog = config.WriteRecordingLog,
+            Epg = config.Epg,
+            RestartRequiredFields = GetRestartRequiredFields(config)
+        };
+    }
+
+    private string[] GetRestartRequiredFields(AppConfig config)
+    {
+        var fields = new List<string>(2);
+        if (config.Port != _bootConfig.Port)
+        {
+            fields.Add("port");
+        }
+        if (!HostsEqual(config.Host, _bootConfig.Host))
+        {
+            fields.Add("host");
+        }
+        return fields.ToArray();
+    }
+
+    private static string[] NormalizeHosts(IEnumerable<string> hosts)
+    {
+        return hosts
+            .Select(host => host?.Trim() ?? string.Empty)
+            .Where(host => host.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static bool HostsEqual(string[] left, string[] right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+        return left
+            .Select(host => host.Trim())
+            .OrderBy(host => host, StringComparer.OrdinalIgnoreCase)
+            .SequenceEqual(
+                right.Select(host => host.Trim()).OrderBy(host => host, StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsValidClock(string value)
+    {
+        return TimeOnly.TryParseExact(value, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
     }
 
     public List<ChannelConfig> GetChannels()
@@ -275,6 +418,59 @@ public sealed class ConfigurationService
         if (!json.Contains("\"writeRecordingLog\"", StringComparison.OrdinalIgnoreCase))
         {
             config = config with { WriteRecordingLog = true };
+        }
+
+        // 兼容旧配置缺失或为空的字段，避免运行期拿到 null/0
+        if (config.Port is < 1 or > 65535)
+        {
+            config = config with { Port = 8080 };
+        }
+        if (string.IsNullOrWhiteSpace(config.RecordPath))
+        {
+            config = config with { RecordPath = "./records" };
+        }
+        var hosts = NormalizeHosts(config.Host ?? []);
+        if (hosts.Length == 0)
+        {
+            hosts = ["0.0.0.0"];
+        }
+        if (config.Host is null || !hosts.SequenceEqual(config.Host, StringComparer.OrdinalIgnoreCase))
+        {
+            config = config with { Host = hosts };
+        }
+        if (string.IsNullOrWhiteSpace(config.Username))
+        {
+            config = config with { Username = "admin" };
+        }
+        if (string.IsNullOrEmpty(config.Password))
+        {
+            config = config with { Password = "admin" };
+        }
+        if (config.MaxRecordingTasks < 1)
+        {
+            config = config with { MaxRecordingTasks = 1 };
+        }
+        if (string.IsNullOrWhiteSpace(config.RecordingTransport))
+        {
+            config = config with { RecordingTransport = "MP2T/TCP" };
+        }
+
+        var defaults = new EpgConfig();
+        var epg = config.Epg ?? defaults;
+        var epgUrl = string.IsNullOrWhiteSpace(epg.Url) ? defaults.Url : epg.Url;
+        var updateTime = IsValidClock(epg.UpdateTime) ? epg.UpdateTime : defaults.UpdateTime;
+        var cacheHours = epg.CacheDurationHours is < 1 or > 720 ? defaults.CacheDurationHours : epg.CacheDurationHours;
+        if (epg.Url != epgUrl || epg.UpdateTime != updateTime || epg.CacheDurationHours != cacheHours)
+        {
+            config = config with
+            {
+                Epg = new EpgConfig
+                {
+                    Url = epgUrl,
+                    UpdateTime = updateTime,
+                    CacheDurationHours = cacheHours
+                }
+            };
         }
 
         return config;

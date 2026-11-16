@@ -34,7 +34,8 @@ namespace RtspRecServer.Server.Services.Epg
                 var inner = provider.GetRequiredService<EpgService>();
                 var cache = provider.GetRequiredService<IMemoryCache>();
                 var logger = provider.GetRequiredService<ILogger<CachedEpgService>>();
-                return new CachedEpgService(inner, cache, logger);
+                var configurationService = provider.GetRequiredService<ConfigurationService>();
+                return new CachedEpgService(inner, cache, logger, configurationService);
             });
             services.AddSingleton<IEpgDataStorage>(provider => provider.GetRequiredService<EpgService>());
 

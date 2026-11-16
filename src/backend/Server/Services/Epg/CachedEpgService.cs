@@ -16,22 +16,33 @@ namespace RtspRecServer.Server.Services.Epg
         private readonly IEpgService _innerService;
         private readonly IMemoryCache _cache;
         private readonly ILogger<CachedEpgService> _logger;
-        private readonly MemoryCacheEntryOptions _cacheOptions;
+        private readonly ConfigurationService _configurationService;
 
-        public CachedEpgService(IEpgService innerService, IMemoryCache cache, ILogger<CachedEpgService> logger)
+        public CachedEpgService(
+            IEpgService innerService,
+            IMemoryCache cache,
+            ILogger<CachedEpgService> logger,
+            ConfigurationService configurationService)
         {
             _innerService = innerService;
             _cache = cache;
             _logger = logger;
-            
-            // 设置缓存选项 - 频道信息缓存15分钟，节目信息缓存5分钟
-            _cacheOptions = new MemoryCacheEntryOptions
-            {
-                SlidingExpiration = TimeSpan.FromMinutes(15),
-                Priority = CacheItemPriority.Normal
-                // 不设置 Size，因为 MemoryCache 没有设置 SizeLimit
-            };
+            _configurationService = configurationService;
         }
+
+        private TimeSpan GetChannelCacheDuration()
+        {
+            // 缓存时长按当前配置读取，修改后对新写入的缓存生效
+            var hours = Math.Clamp(_configurationService.GetAppConfig().Epg.CacheDurationHours, 1, 24 * 30);
+            return TimeSpan.FromHours(hours);
+        }
+
+        private MemoryCacheEntryOptions CreateChannelCacheOptions() => new()
+        {
+            SlidingExpiration = GetChannelCacheDuration(),
+            Priority = CacheItemPriority.Normal
+            // 不设置 Size，因为 MemoryCache 没有设置 SizeLimit
+        };
 
         public async Task<List<EpgChannel>> GetChannelsAsync()
         {
@@ -45,10 +56,10 @@ namespace RtspRecServer.Server.Services.Epg
 
             var channels = await _innerService.GetChannelsAsync();
 
-            // 空结果不缓存（首屏与数据源未就绪的竞态会返回空列表），否则空状态会被缓存 15 分钟
+            // 空结果不缓存（首屏与数据源未就绪的竞态会返回空列表），否则空状态会被缓存
             if (channels.Count > 0)
             {
-                _cache.Set(cacheKey, channels, _cacheOptions);
+                _cache.Set(cacheKey, channels, CreateChannelCacheOptions());
             }
 
             _logger.LogDebug($"缓存频道列表，共{channels.Count}个频道");
@@ -123,7 +134,7 @@ namespace RtspRecServer.Server.Services.Epg
 
             if (categories.Count > 0)
             {
-                _cache.Set(cacheKey, categories, _cacheOptions);
+                _cache.Set(cacheKey, categories, CreateChannelCacheOptions());
             }
             
             _logger.LogDebug($"缓存分类列表，共{categories.Count}个分类");
@@ -144,7 +155,7 @@ namespace RtspRecServer.Server.Services.Epg
 
             if (channels.Count > 0)
             {
-                _cache.Set(cacheKey, channels, _cacheOptions);
+                _cache.Set(cacheKey, channels, CreateChannelCacheOptions());
             }
             
             _logger.LogDebug($"缓存分类频道: {category}，共{channels.Count}个频道");
