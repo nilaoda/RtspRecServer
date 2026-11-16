@@ -220,6 +220,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 using var rtpReorder = source.IsRtp ? new RtpReorderBuffer() : null;
                 using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 uint? lastSsrc = null;
+                IPAddress? lastSourceAddress = null;
                 var idleTimedOut = false;
 
                 async Task FlushReorderedAsync()
@@ -290,6 +291,43 @@ public sealed class UdpLiveRecordingService : IRecordingService
                         }
 
                         validTsSeen = true;
+
+                        var sourceAddress = datagram.SourceAddress;
+                        if (sourceAddress is not null && !sourceAddress.Equals(lastSourceAddress))
+                        {
+                            if (lastSourceAddress is null)
+                            {
+                                if (ssrc.HasValue)
+                                {
+                                    Log.Information(
+                                        "UDP 直播接收: 来源 {Source}:{SourcePort}，RTP SSRC 0x{Ssrc:X8}，初始序列 {Sequence}: {Url}",
+                                        sourceAddress,
+                                        datagram.SourcePort,
+                                        ssrc.Value,
+                                        rtpSequence ?? 0,
+                                        task.Url);
+                                }
+                                else
+                                {
+                                    Log.Information(
+                                        "UDP 直播接收: 来源 {Source}:{SourcePort}: {Url}",
+                                        sourceAddress,
+                                        datagram.SourcePort,
+                                        task.Url);
+                                }
+                            }
+                            else
+                            {
+                                Log.Warning(
+                                    "UDP 直播数据来源变化: {OldSource} -> {NewSource}: {Url}",
+                                    lastSourceAddress,
+                                    sourceAddress,
+                                    task.Url);
+                            }
+
+                            lastSourceAddress = sourceAddress;
+                        }
+
                         if (ssrc.HasValue)
                         {
                             if (lastSsrc.HasValue && ssrc.Value != lastSsrc.Value)

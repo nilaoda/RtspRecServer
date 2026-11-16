@@ -58,6 +58,8 @@ public class UdpLiveRecordingServiceTests
         using var secondDatagram = await second.Reader.ReadAsync(cancellation.Token);
         Assert.Equal(3, firstDatagram.Length);
         Assert.Equal(3, secondDatagram.Length);
+        Assert.Equal(IPAddress.Loopback, firstDatagram.SourceAddress);
+        Assert.True(firstDatagram.SourcePort > 0);
     }
 
     [Fact]

@@ -11,6 +11,8 @@ internal sealed class UdpDatagram : IDisposable
 {
     public required byte[] Buffer { get; init; }
     public required int Length { get; init; }
+    public IPAddress? SourceAddress { get; init; }
+    public int SourcePort { get; init; }
     public ReadOnlyMemory<byte> Payload => Buffer.AsMemory(0, Length);
 
     public void Dispose()
@@ -221,6 +223,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
                 }
 
                 var destination = received.PacketInformation.Address;
+                var source = received.RemoteEndPoint as IPEndPoint;
                 foreach (var target in Volatile.Read(ref _snapshot))
                 {
                     if (!ShouldDeliver(target.GroupAddress, destination))
@@ -233,7 +236,9 @@ internal sealed class UdpEndpointReceiver : IDisposable
                     var datagram = new UdpDatagram
                     {
                         Buffer = copy,
-                        Length = received.ReceivedBytes
+                        Length = received.ReceivedBytes,
+                        SourceAddress = source?.Address,
+                        SourcePort = source?.Port ?? 0
                     };
 
                     if (!target.TryWrite(datagram))
