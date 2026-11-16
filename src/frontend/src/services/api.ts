@@ -179,11 +179,18 @@ export const addChannel = (payload: { name: string; url: string }) =>
 
 export const getChannelProbes = () => fetchJson<ChannelProbeResult[]>('/api/channels/probes', { silent: true })
 
-export const probeChannels = (channelIds: number[]) =>
+export const probeChannels = (
+  channelIds: number[],
+  options?: { concurrency?: number; retries?: number },
+) =>
   fetchJson<ChannelProbeResult[]>('/api/channels/probe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ channelIds }),
+    body: JSON.stringify({
+      channelIds,
+      concurrency: options?.concurrency,
+      retries: options?.retries,
+    }),
   })
 
 export const importChannels = (channels: { name: string; url: string }[]) =>

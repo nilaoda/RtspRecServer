@@ -3,6 +3,10 @@ namespace RtspRecServer.Shared;
 public sealed record ChannelProbeRequest
 {
     public int[] ChannelIds { get; init; } = [];
+    /// <summary>并行检测数量，默认 3，范围 1-10</summary>
+    public int Concurrency { get; init; } = 3;
+    /// <summary>失败后的重试次数，默认 0，范围 0-5</summary>
+    public int Retries { get; init; }
 }
 
 public sealed record ChannelBulkRequest
@@ -32,4 +36,5 @@ public sealed record ChannelProbeResult
     public string? ErrorMessage { get; init; }
     public DateTimeOffset CheckedAt { get; init; }
     public double ElapsedSeconds { get; init; }
+    public int Attempts { get; init; } = 1;
 }

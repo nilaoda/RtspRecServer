@@ -8,7 +8,10 @@ namespace RtspRecServer.Server.Services;
 public sealed class ChannelProbeService
 {
     private static readonly TimeSpan ProbeDuration = TimeSpan.FromSeconds(5);
-    private const int MaxConcurrency = 3;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
+    private const int MinConcurrency = 1;
+    private const int MaxConcurrency = 10;
+    private const int MaxRetries = 5;
 
     private readonly IRecordingService _recordingService;
     private readonly ConfigurationService _configurationService;
@@ -29,6 +32,8 @@ public sealed class ChannelProbeService
 
     public async Task<IReadOnlyList<ChannelProbeResult>> ProbeAsync(
         IReadOnlyCollection<int> channelIds,
+        int concurrency,
+        int retries,
         CancellationToken cancellationToken)
     {
         var channels = _configurationService.GetChannels();
@@ -41,14 +46,16 @@ public sealed class ChannelProbeService
             return [];
         }
 
+        var effectiveConcurrency = Math.Clamp(concurrency, MinConcurrency, MaxConcurrency);
+        var effectiveRetries = Math.Clamp(retries, 0, MaxRetries);
         var results = new ChannelProbeResult[requested.Count];
-        using var semaphore = new SemaphoreSlim(MaxConcurrency);
+        using var semaphore = new SemaphoreSlim(effectiveConcurrency);
         var tasks = requested.Select(async (channel, index) =>
         {
             await semaphore.WaitAsync(cancellationToken);
             try
             {
-                results[index] = await ProbeChannelAsync(channel, cancellationToken);
+                results[index] = await ProbeChannelAsync(channel, effectiveRetries, cancellationToken);
             }
             finally
             {
@@ -61,6 +68,38 @@ public sealed class ChannelProbeService
     }
 
     private async Task<ChannelProbeResult> ProbeChannelAsync(
+        ChannelConfig channel,
+        int retries,
+        CancellationToken cancellationToken)
+    {
+        var startedAt = Stopwatch.StartNew();
+        ChannelProbeResult? result = null;
+        var attempts = 0;
+        for (var attempt = 0; attempt <= retries; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(RetryDelay, cancellationToken);
+            }
+
+            attempts++;
+            result = await ProbeOnceAsync(channel, cancellationToken);
+            if (result.Accessible)
+            {
+                break;
+            }
+        }
+
+        var final = result! with
+        {
+            Attempts = attempts,
+            ElapsedSeconds = Math.Round(startedAt.Elapsed.TotalSeconds, 1)
+        };
+        _results[channel.Id] = final;
+        return final;
+    }
+
+    private async Task<ChannelProbeResult> ProbeOnceAsync(
         ChannelConfig channel,
         CancellationToken cancellationToken)
     {
@@ -85,7 +124,6 @@ public sealed class ChannelProbeService
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(ProbeDuration);
 
-        ChannelProbeResult result;
         try
         {
             var recording = await _recordingService.RecordAsync(
@@ -97,11 +135,11 @@ public sealed class ChannelProbeService
                 cancellationToken: timeout.Token,
                 output: Stream.Null);
 
-            result = MapResult(channel.Id, recording, checkedAt, startedAt.Elapsed);
+            return MapResult(channel.Id, recording, checkedAt, startedAt.Elapsed);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            result = CreateOfflineResult(channel.Id, checkedAt, startedAt.Elapsed, "检测超时");
+            return CreateOfflineResult(channel.Id, checkedAt, startedAt.Elapsed, "检测超时");
         }
         catch (OperationCanceledException)
         {
@@ -109,11 +147,8 @@ public sealed class ChannelProbeService
         }
         catch (Exception ex)
         {
-            result = CreateOfflineResult(channel.Id, checkedAt, startedAt.Elapsed, ex.Message);
+            return CreateOfflineResult(channel.Id, checkedAt, startedAt.Elapsed, ex.Message);
         }
-
-        _results[channel.Id] = result;
-        return result;
     }
 
     private static ChannelProbeResult MapResult(

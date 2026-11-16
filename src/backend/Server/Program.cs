@@ -223,7 +223,11 @@ try
         ChannelProbeRequest request,
         CancellationToken cancellationToken) =>
     {
-        var results = await service.ProbeAsync(request.ChannelIds, cancellationToken);
+        var results = await service.ProbeAsync(
+            request.ChannelIds,
+            request.Concurrency,
+            request.Retries,
+            cancellationToken);
         return Results.Ok(results.ToList());
     });
 

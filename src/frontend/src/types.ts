@@ -119,6 +119,7 @@ export type ChannelProbeResult = {
   errorMessage?: string
   checkedAt: string
   elapsedSeconds: number
+  attempts?: number
 }
 
 export type ChannelBulkResult = {

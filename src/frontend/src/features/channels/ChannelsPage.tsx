@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save, Trash2 } from 'lucide-react'
+import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save, Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -62,6 +62,27 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+
+const PROBE_CONCURRENCY_KEY = 'rtsp_probe_concurrency'
+const PROBE_RETRIES_KEY = 'rtsp_probe_retries'
+
+const clampProbeSetting = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, Math.round(value)))
+
+const readProbeSetting = (key: string, fallback: number, min: number, max: number) => {
+  try {
+    const raw = localStorage.getItem(key)
+    const parsed = raw === null ? Number.NaN : Number(raw)
+    return Number.isFinite(parsed) ? clampProbeSetting(parsed, min, max) : fallback
+  } catch {
+    return fallback
+  }
+}
 
 const channelSchema = z.object({
   name: z.string().min(1, "请输入频道名称"),
@@ -102,6 +123,10 @@ const ChannelsPage = () => {
   const [detailChannelId, setDetailChannelId] = useState<number | null>(null)
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(() => new Set())
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [probeConcurrency, setProbeConcurrency] = useState(() => readProbeSetting(PROBE_CONCURRENCY_KEY, 3, 1, 10))
+  const [probeRetries, setProbeRetries] = useState(() => readProbeSetting(PROBE_RETRIES_KEY, 0, 0, 5))
+  const [probeSettingsOpen, setProbeSettingsOpen] = useState(false)
+  const [removeInvalidOpen, setRemoveInvalidOpen] = useState(false)
 
   const form = useForm<ChannelFormValues>({
     resolver: zodResolver(channelSchema),
@@ -128,6 +153,22 @@ const ChannelsPage = () => {
     }
   }, [])
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROBE_CONCURRENCY_KEY, String(probeConcurrency))
+    } catch {
+      // localStorage 不可用时仅本次会话生效
+    }
+  }, [probeConcurrency])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROBE_RETRIES_KEY, String(probeRetries))
+    } catch {
+      // localStorage 不可用时仅本次会话生效
+    }
+  }, [probeRetries])
+
   const probeSummary = useMemo(() => {
     let accessible = 0
     let offline = 0
@@ -147,6 +188,21 @@ const ChannelsPage = () => {
     }
     return { accessible, offline, idle }
   }, [channels, probes, probingIds])
+
+  const invalidChannels = useMemo(
+    () => channels.filter((channel) => {
+      if (probingIds.has(channel.id)) {
+        return false
+      }
+      const draft = drafts[channel.id]
+      if (draft && (draft.name !== channel.name || draft.url !== channel.url)) {
+        return false
+      }
+      const result = probes[channel.id]
+      return result !== undefined && !result.accessible
+    }),
+    [channels, drafts, probes, probingIds],
+  )
 
   const selectedChannels = useMemo(
     () => channels.filter((channel) => selectedChannelIds.has(channel.id)),
@@ -207,7 +263,10 @@ const ChannelsPage = () => {
     })
 
     try {
-      const results = await probeChannels(ids)
+      const results = await probeChannels(ids, {
+        concurrency: probeConcurrency,
+        retries: probeRetries,
+      })
       setProbes((previous) => {
         const next = { ...previous }
         results.forEach((result) => {
@@ -224,7 +283,7 @@ const ChannelsPage = () => {
         return next
       })
     }
-  }, [])
+  }, [probeConcurrency, probeRetries])
 
   const probeAll = () => {
     if (probingIds.size > 0) {
@@ -240,9 +299,7 @@ const ChannelsPage = () => {
     void runProbe([...selectedChannelIds])
   }
 
-  const onBulkDelete = async () => {
-    const ids = [...selectedChannelIds]
-    setBulkDeleteOpen(false)
+  const removeChannels = useCallback(async (ids: number[]) => {
     if (ids.length === 0) {
       return
     }
@@ -258,7 +315,7 @@ const ChannelsPage = () => {
       }
 
       const succeededSet = new Set(result.succeededIds)
-      setSelectedChannelIds(new Set(result.failedIds))
+      setSelectedChannelIds((previous) => new Set([...previous].filter((id) => !succeededSet.has(id))))
       setProbes((previous) => {
         const next = { ...previous }
         succeededSet.forEach((id) => delete next[id])
@@ -268,6 +325,18 @@ const ChannelsPage = () => {
     } catch {
       toast.error('批量删除失败')
     }
+  }, [reloadChannels])
+
+  const onBulkDelete = async () => {
+    const ids = [...selectedChannelIds]
+    setBulkDeleteOpen(false)
+    await removeChannels(ids)
+  }
+
+  const onRemoveInvalid = async () => {
+    const ids = invalidChannels.map((channel) => channel.id)
+    setRemoveInvalidOpen(false)
+    await removeChannels(ids)
   }
 
   const selectedProbeChannel = channels.find((channel) => channel.id === detailChannelId)
@@ -378,14 +447,70 @@ const ChannelsPage = () => {
                     )}
                 </div>
             </div>
-            <Button
-                size="sm"
-                onClick={probeAll}
-                disabled={channels.length === 0 || probingIds.size > 0}
-            >
-                {probingIds.size > 0 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
-                {probingIds.size > 0 ? '检测中' : '检测全部'}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+                {invalidChannels.length > 0 && (
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => setRemoveInvalidOpen(true)}
+                        disabled={probingIds.size > 0}
+                    >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        移除失效 ({invalidChannels.length})
+                    </Button>
+                )}
+                <Popover open={probeSettingsOpen} onOpenChange={setProbeSettingsOpen}>
+                    <PopoverTrigger asChild>
+                        <Button size="sm" variant="outline">
+                            <Settings2 className="mr-2 h-4 w-4" />
+                            检测设置
+                        </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-64 space-y-3">
+                        <div className="text-sm font-medium">检测设置</div>
+                        <div className="space-y-1.5">
+                            <label htmlFor="probe-concurrency" className="text-xs text-muted-foreground">
+                                并行数量（1-10）
+                            </label>
+                            <Input
+                                id="probe-concurrency"
+                                type="number"
+                                min={1}
+                                max={10}
+                                className="h-8"
+                                value={probeConcurrency}
+                                onChange={(event) => setProbeConcurrency(clampProbeSetting(Number(event.target.value) || 1, 1, 10))}
+                            />
+                        </div>
+                        <div className="space-y-1.5">
+                            <label htmlFor="probe-retries" className="text-xs text-muted-foreground">
+                                失败重试次数（0-5）
+                            </label>
+                            <Input
+                                id="probe-retries"
+                                type="number"
+                                min={0}
+                                max={5}
+                                className="h-8"
+                                value={probeRetries}
+                                onChange={(event) => setProbeRetries(clampProbeSetting(Number(event.target.value) || 0, 0, 5))}
+                            />
+                        </div>
+                        <p className="text-[11px] leading-relaxed text-muted-foreground">
+                            仅对不可访问的频道重试，每次采样约 5 秒。设置保存在当前浏览器。
+                        </p>
+                    </PopoverContent>
+                </Popover>
+                <Button
+                    size="sm"
+                    onClick={probeAll}
+                    disabled={channels.length === 0 || probingIds.size > 0}
+                >
+                    {probingIds.size > 0 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
+                    {probingIds.size > 0 ? '检测中' : '检测全部'}
+                </Button>
+            </div>
         </CardHeader>
         <CardContent className="p-0">
             {selectedCount > 0 && (
@@ -499,7 +624,7 @@ const ChannelsPage = () => {
                                                     <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                                                     <div>
                                                         <div className="font-medium text-foreground">检测中…</div>
-                                                        <div>正在采样约 5 秒</div>
+                                                        <div>每次采样约 5 秒</div>
                                                     </div>
                                                 </div>
                                             ) : probe ? (
@@ -541,6 +666,7 @@ const ChannelsPage = () => {
                                                     )}
                                                     <div className="text-[10px] text-muted-foreground">
                                                         {formatDateTime(new Date(probe.checkedAt))} · {probe.elapsedSeconds.toFixed(1)}s
+                                                        {probe.attempts && probe.attempts > 1 ? ` · 尝试 ${probe.attempts} 次` : ''}
                                                     </div>
                                                 </div>
                                             ) : (
@@ -655,7 +781,7 @@ const ChannelsPage = () => {
           <DialogHeader>
             <DialogTitle>检测详情</DialogTitle>
             <DialogDescription>
-              {selectedProbeChannel ? `${selectedProbeChannel.name} · 采样约 5 秒` : '暂无内容'}
+              {selectedProbeChannel ? `${selectedProbeChannel.name} · 每次采样约 5 秒` : '暂无内容'}
             </DialogDescription>
           </DialogHeader>
 
@@ -741,6 +867,7 @@ const ChannelsPage = () => {
 
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>上次检测：{selectedProbe ? formatDateTime(new Date(selectedProbe.checkedAt)) : '尚未检测'}</span>
+                {selectedProbe && <span>尝试次数：{selectedProbe.attempts ?? 1}</span>}
                 {selectedProbe?.checkedAt && selectedProbe.tsVerdict === 'warning' && <span>TS 存在警告，但流本身可访问</span>}
               </div>
             </div>
@@ -759,6 +886,36 @@ const ChannelsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={removeInvalidOpen} onOpenChange={setRemoveInvalidOpen}>
+        <AlertDialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[480px]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>移除失效频道？</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                <p>将删除 {invalidChannels.length} 个检测为不可访问的频道，可能会影响引用这些频道的任务。此操作无法撤销。</p>
+                <div className="max-h-40 overflow-y-auto rounded-md border bg-muted/30 p-2 text-xs">
+                  {invalidChannels.map((channel) => (
+                    <div key={channel.id} className="truncate py-0.5">
+                      <span className="mr-1 font-mono text-muted-foreground">#{channel.id}</span>
+                      {channel.name}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void onRemoveInvalid()}
+              className="bg-destructive hover:bg-destructive/90"
+            >
+              移除 {invalidChannels.length} 个频道
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <AlertDialogContent>
