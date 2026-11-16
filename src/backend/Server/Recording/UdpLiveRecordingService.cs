@@ -128,19 +128,22 @@ internal static class DirectUdpSourceParser
 public sealed class UdpLiveRecordingService : IRecordingService
 {
     private static readonly TimeSpan InvalidDataTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultRetryDelayBase = TimeSpan.FromSeconds(2);
     private readonly UdpReceiveHub _receiverHub = new();
     private readonly TimeSpan _idleTimeout;
     private readonly int _maxIdleRecoveries;
+    private readonly TimeSpan _retryDelayBase;
 
     public UdpLiveRecordingService()
         : this(TimeSpan.FromSeconds(30), maxIdleRecoveries: 5)
     {
     }
 
-    internal UdpLiveRecordingService(TimeSpan idleTimeout, int maxIdleRecoveries)
+    internal UdpLiveRecordingService(TimeSpan idleTimeout, int maxIdleRecoveries, TimeSpan? retryDelayBase = null)
     {
         _idleTimeout = idleTimeout;
         _maxIdleRecoveries = maxIdleRecoveries;
+        _retryDelayBase = retryDelayBase ?? DefaultRetryDelayBase;
     }
 
     public async Task<RecordingResult> RecordAsync(
@@ -383,7 +386,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     return Finish(false, "直播流无数据超时", bytesWritten);
                 }
 
-                var retryDelay = TimeSpan.FromSeconds(Math.Min(2 * idleRecoveries, 10));
+                var retryDelay = TimeSpan.FromSeconds(Math.Min(_retryDelayBase.TotalSeconds * idleRecoveries, 10));
                 Log.Warning(
                     "UDP 直播流中断，{Delay} 秒后重新加入（第 {Attempt}/{Max} 次）: {Url}",
                     retryDelay.TotalSeconds,

@@ -225,7 +225,10 @@ public class UdpLiveRecordingServiceTests
         };
 
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        var service = new UdpLiveRecordingService(TimeSpan.FromSeconds(1), maxIdleRecoveries: 3);
+        var service = new UdpLiveRecordingService(
+            TimeSpan.FromSeconds(1),
+            maxIdleRecoveries: 3,
+            retryDelayBase: TimeSpan.FromMilliseconds(300));
         var recording = service.RecordAsync(
             task,
             outputPath,
@@ -246,8 +249,8 @@ public class UdpLiveRecordingServiceTests
             var firstDatagram = CreateRtpPacket(first, sequence: 1);
             await sender.SendAsync(firstDatagram, firstDatagram.Length, endpoint);
 
-            // 覆盖 1 秒无数据判定 + 2 秒重新加入退避，模拟瞬时断流后恢复
-            await Task.Delay(3500);
+            // 覆盖无数据判定与重新加入退避，模拟瞬时断流后恢复
+            await Task.Delay(1900);
 
             var second = new byte[188];
             second[0] = 0x47;
@@ -298,7 +301,10 @@ public class UdpLiveRecordingServiceTests
         };
 
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var service = new UdpLiveRecordingService(TimeSpan.FromMilliseconds(200), maxIdleRecoveries: 1);
+        var service = new UdpLiveRecordingService(
+            TimeSpan.FromMilliseconds(200),
+            maxIdleRecoveries: 1,
+            retryDelayBase: TimeSpan.FromMilliseconds(100));
         var recording = service.RecordAsync(
             task,
             outputPath,
