@@ -436,7 +436,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   )
 
   const addChannelAction = useCallback(
-    async (payload: { name: string; url: string }) => {
+    async (payload: { name: string; url: string; group?: string | null }) => {
       try {
         await addChannel(payload)
         notifySuccess('已添加频道')

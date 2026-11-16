@@ -104,6 +104,7 @@ export type ChannelConfig = {
   id: number
   name: string
   url: string
+  group?: string | null
 }
 
 export type ChannelProbeResult = {

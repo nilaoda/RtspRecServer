@@ -263,7 +263,11 @@ const M3uImportPage = () => {
 
     try {
       const response = await importChannels(
-        targets.map((item) => ({ name: item.name, url: item.url })),
+        targets.map((item) => ({
+          name: item.name,
+          url: item.url,
+          group: item.group === '未分组' ? null : item.group,
+        })),
       )
       const failed = Math.max(0, targets.length - response.addedCount)
       setResult({ success: response.addedCount, failed })
@@ -703,7 +707,7 @@ const M3uImportPage = () => {
                     已选 <span className="font-medium text-foreground">{selectedCount}</span> 个频道
                   </div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
-                    只写入频道名称和地址；分组、Logo 不会保存。
+                    只写入频道名称、地址和分组；Logo 不会保存。
                   </div>
                 </div>
                 <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">

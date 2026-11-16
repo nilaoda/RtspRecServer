@@ -5,12 +5,14 @@ public sealed record ChannelConfig
     public int Id { get; init; }
     public string Name { get; init; } = string.Empty;
     public string Url { get; init; } = string.Empty;
+    public string? Group { get; init; }
 }
 
 public sealed record ChannelImportItem
 {
     public string Name { get; init; } = string.Empty;
     public string Url { get; init; } = string.Empty;
+    public string? Group { get; init; }
 }
 
 public sealed record ChannelImportRequest

@@ -20,7 +20,7 @@ public class ConfigurationServiceTests
 
             var result = service.AddChannels(new List<ChannelImportItem>
             {
-                new() { Name = " CCTV-2 ", Url = " http://udpxy.example.com:5140/rtp/239.1.1.2:8000 " },
+                new() { Name = " CCTV-2 ", Url = " http://udpxy.example.com:5140/rtp/239.1.1.2:8000 ", Group = " 央视 " },
                 new() { Name = "CCTV-3", Url = "http://udpxy.example.com:5140/rtp/239.1.1.3:8000" }
             });
 
@@ -29,10 +29,42 @@ public class ConfigurationServiceTests
             Assert.Equal(first.Id + 1, result.Channels[0].Id);
             Assert.Equal(first.Id + 2, result.Channels[1].Id);
             Assert.Equal("CCTV-2", result.Channels[0].Name);
+            Assert.Equal("央视", result.Channels[0].Group);
+            Assert.Null(result.Channels[1].Group);
             Assert.Equal("http://udpxy.example.com:5140/rtp/239.1.1.2:8000", result.Channels[0].Url);
 
             var reloaded = new ConfigurationService(directory).GetChannels();
             Assert.Equal(3, reloaded.Count);
+            Assert.Equal("央视", reloaded[1].Group);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void AddAndUpdateChannel_NormalizesGroup()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var service = new ConfigurationService(directory);
+            var channel = service.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1",
+                Group = "  央视  "
+            });
+
+            Assert.Equal("央视", channel.Group);
+            Assert.Equal("央视", new ConfigurationService(directory).GetChannels().Single().Group);
+
+            var updated = service.UpdateChannel(channel.Id, channel with { Group = "   " });
+
+            Assert.NotNull(updated);
+            Assert.Null(updated!.Group);
+            Assert.Null(new ConfigurationService(directory).GetChannels().Single().Group);
         }
         finally
         {

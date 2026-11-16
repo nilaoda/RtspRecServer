@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -90,6 +90,23 @@ export default function TimerFormDialog({
   editing?: import('../../types').RecordingTimer | null
 }) {
   const { channels, channelProfiles, createTimer, updateTimer } = useAppContext()
+  const channelGroups = useMemo(() => {
+    const groups = new Map<string, typeof channels>()
+    for (const channel of channels) {
+      const group = channel.group?.trim() || '未分组'
+      const items = groups.get(group)
+      if (items) {
+        items.push(channel)
+      } else {
+        groups.set(group, [channel])
+      }
+    }
+    return [...groups.entries()].sort(([left], [right]) => {
+      if (left === '未分组') return 1
+      if (right === '未分组') return -1
+      return left.localeCompare(right, 'zh-CN')
+    })
+  }, [channels])
   const [openCombobox, setOpenCombobox] = useState(false)
   const comboboxListRef = useRef<HTMLDivElement>(null)
   const isEditing = editing != null
@@ -270,16 +287,16 @@ export default function TimerFormDialog({
                           <Button
                             variant="outline"
                             role="combobox"
-                            className={cn('w-full min-w-0 justify-between', !field.value && 'text-muted-foreground')}
+                            className={cn('h-auto min-h-10 w-full min-w-0 justify-between py-1.5', !field.value && 'text-muted-foreground')}
                           >
                             {selectedChannel ? (
-                              <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-                                <span className="flex min-w-0 items-center gap-2">
+                              <span className="flex w-full min-w-0 flex-col items-start gap-0.5 text-left">
+                                <span className="flex w-full min-w-0 items-center gap-2">
                                   <span className="truncate">{selectedChannel.name}</span>
-                                  <ChannelProtocolBadge url={selectedChannel.url} />
+                                  <ChannelProtocolBadge url={selectedChannel.url} className="shrink-0" />
                                 </span>
                                 {selectedCodec && (
-                                  <span className="max-w-full truncate text-[11px] font-normal text-muted-foreground">
+                                  <span className="w-full max-w-full truncate text-left text-[11px] font-normal leading-tight text-muted-foreground">
                                     {selectedCodec}
                                   </span>
                                 )}
@@ -307,38 +324,40 @@ export default function TimerFormDialog({
                           <CommandInput placeholder="搜索频道..." />
                           <CommandList ref={comboboxListRef}>
                             <CommandEmpty>未找到频道</CommandEmpty>
-                            <CommandGroup>
-                              {channels.map((channel) => {
-                                const codec = formatChannelCodecSummary(channelProfiles[channel.id])
-                                return (
-                                  <CommandItem
-                                    value={`${channel.id} ${channel.name} ${codec ?? ''}`}
-                                    key={channel.id}
-                                    className="gap-2"
-                                    onSelect={() => {
-                                      form.setValue('channelId', String(channel.id))
-                                      setOpenCombobox(false)
-                                    }}
-                                  >
-                                    <Check
-                                      className={cn(
-                                        'mr-2 h-4 w-4 shrink-0',
-                                        channel.id.toString() === field.value ? 'opacity-100' : 'opacity-0',
-                                      )}
-                                    />
-                                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                      <span className="truncate">
-                                        {channel.id} - {channel.name}
-                                      </span>
-                                      <span className="truncate text-[11px] text-muted-foreground">
-                                        {codec ?? '未检测编码'}
-                                      </span>
-                                    </div>
-                                    <ChannelProtocolBadge url={channel.url} className="ml-auto shrink-0" />
-                                  </CommandItem>
-                                )
-                              })}
-                            </CommandGroup>
+                            {channelGroups.map(([group, groupChannels]) => (
+                              <CommandGroup key={group} heading={group}>
+                                {groupChannels.map((channel) => {
+                                  const codec = formatChannelCodecSummary(channelProfiles[channel.id])
+                                  return (
+                                    <CommandItem
+                                      value={`${channel.id} ${channel.name} ${group} ${codec ?? ''}`}
+                                      key={channel.id}
+                                      className="gap-2"
+                                      onSelect={() => {
+                                        form.setValue('channelId', String(channel.id))
+                                        setOpenCombobox(false)
+                                      }}
+                                    >
+                                      <Check
+                                        className={cn(
+                                          'mr-2 h-4 w-4 shrink-0',
+                                          channel.id.toString() === field.value ? 'opacity-100' : 'opacity-0',
+                                        )}
+                                      />
+                                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                        <span className="truncate">
+                                          {channel.id} - {channel.name}
+                                        </span>
+                                        <span className="truncate text-[11px] text-muted-foreground">
+                                          {codec ?? '未检测编码'}
+                                        </span>
+                                      </div>
+                                      <ChannelProtocolBadge url={channel.url} className="ml-auto shrink-0" />
+                                    </CommandItem>
+                                  )
+                                })}
+                              </CommandGroup>
+                            ))}
                           </CommandList>
                         </Command>
                       </PopoverContent>

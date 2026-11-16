@@ -210,6 +210,12 @@ public sealed class ConfigurationService
             .ToArray();
     }
 
+    private static string? NormalizeGroup(string? group)
+    {
+        var trimmed = group?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
     private static bool HostsEqual(string[] left, string[] right)
     {
         if (left.Length != right.Length)
@@ -266,7 +272,7 @@ public sealed class ConfigurationService
                 : new List<ChannelConfig>();
 
             var nextId = channels.Count == 0 ? 0 : channels.Max(c => c.Id) + 1;
-            var created = channel with { Id = nextId };
+            var created = channel with { Id = nextId, Group = NormalizeGroup(channel.Group) };
             channels.Add(created);
             WriteJson(_channelsPath, channels);
             return created;
@@ -311,7 +317,8 @@ public sealed class ConfigurationService
                 {
                     Id = nextId++,
                     Name = name,
-                    Url = url
+                    Url = url,
+                    Group = NormalizeGroup(item.Group)
                 };
                 channels.Add(channel);
                 created.Add(channel);
@@ -345,7 +352,7 @@ public sealed class ConfigurationService
                 return null;
             }
 
-            var updated = channel with { Id = id };
+            var updated = channel with { Id = id, Group = NormalizeGroup(channel.Group) };
             channels[index] = updated;
             WriteJson(_channelsPath, channels);
             return updated;

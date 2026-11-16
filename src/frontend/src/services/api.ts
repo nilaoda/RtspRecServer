@@ -170,7 +170,7 @@ export const deleteTimer = (id: number) =>
 
 export const getChannels = () => fetchJson<ChannelConfig[]>('/api/channels', { silent: true })
 
-export const addChannel = (payload: { name: string; url: string }) =>
+export const addChannel = (payload: { name: string; url: string; group?: string | null }) =>
   fetchJson<ChannelConfig>('/api/channels', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -195,7 +195,7 @@ export const probeChannels = (
     }),
   })
 
-export const importChannels = (channels: { name: string; url: string }[]) =>
+export const importChannels = (channels: { name: string; url: string; group?: string | null }[]) =>
   fetchJson<{ addedCount: number; channels: ChannelConfig[] }>('/api/channels/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

@@ -68,9 +68,19 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 const PROBE_CONCURRENCY_KEY = 'rtsp_probe_concurrency'
 const PROBE_RETRIES_KEY = 'rtsp_probe_retries'
+const ALL_GROUPS = '__all_groups__'
+const UNGROUPED = '__ungrouped__'
+const GROUP_OPTIONS_ID = 'channel-group-options'
 
 const clampProbeSetting = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, Math.round(value)))
@@ -88,9 +98,12 @@ const readProbeSetting = (key: string, fallback: number, min: number, max: numbe
 const channelSchema = z.object({
   name: z.string().min(1, "请输入频道名称"),
   url: z.string().min(1, "请输入频道地址"),
+  group: z.string().optional(),
 })
 
 type ChannelFormValues = z.infer<typeof channelSchema>
+
+type ChannelDraft = { name: string; url: string; group: string }
 
 const trackLabels = (tracks: ChannelProbeResult['videoTracks']) => {
   const labels = tracks.map((track) => track.label).filter(Boolean)
@@ -111,11 +124,12 @@ const probeErrorHint = (url: string) => {
 
 const ChannelsPage = () => {
   const { channels, addChannel, updateChannel, deleteChannel, reloadChannels, reloadChannelProfiles } = useAppContext()
-  const [drafts, setDrafts] = useState<Record<number, { name: string; url: string }>>({})
+  const [drafts, setDrafts] = useState<Record<number, ChannelDraft>>({})
   const [probes, setProbes] = useState<Record<number, ChannelProbeResult>>({})
   const [probingIds, setProbingIds] = useState<Set<number>>(() => new Set())
   const [detailChannelId, setDetailChannelId] = useState<number | null>(null)
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(() => new Set())
+  const [groupFilter, setGroupFilter] = useState(ALL_GROUPS)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [probeConcurrency, setProbeConcurrency] = useState(() => readProbeSetting(PROBE_CONCURRENCY_KEY, 3, 1, 10))
   const [probeRetries, setProbeRetries] = useState(() => readProbeSetting(PROBE_RETRIES_KEY, 0, 0, 5))
@@ -127,6 +141,7 @@ const ChannelsPage = () => {
     defaultValues: {
       name: '',
       url: '',
+      group: '',
     },
   })
   const urlValue = form.watch('url')
@@ -183,13 +198,44 @@ const ChannelsPage = () => {
     return { accessible, offline, idle }
   }, [channels, probes, probingIds])
 
+  const groupOptions = useMemo(() => {
+    const groups = new Set<string>()
+    for (const channel of channels) {
+      const group = channel.group?.trim()
+      if (group) {
+        groups.add(group)
+      }
+    }
+    return [...groups].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+  }, [channels])
+
+  const filteredChannels = useMemo(() => {
+    if (groupFilter === ALL_GROUPS) {
+      return channels
+    }
+    if (groupFilter === UNGROUPED) {
+      return channels.filter((channel) => !channel.group?.trim())
+    }
+    return channels.filter((channel) => (channel.group?.trim() || '') === groupFilter)
+  }, [channels, groupFilter])
+
+  useEffect(() => {
+    if (groupFilter === ALL_GROUPS || groupFilter === UNGROUPED) {
+      return
+    }
+    if (!groupOptions.includes(groupFilter)) {
+      setGroupFilter(ALL_GROUPS)
+      setSelectedChannelIds(new Set())
+    }
+  }, [groupFilter, groupOptions])
+
   const invalidChannels = useMemo(
     () => channels.filter((channel) => {
       if (probingIds.has(channel.id)) {
         return false
       }
       const draft = drafts[channel.id]
-      if (draft && (draft.name !== channel.name || draft.url !== channel.url)) {
+      if (draft && (draft.name !== channel.name || draft.url !== channel.url || draft.group !== (channel.group ?? ''))) {
         return false
       }
       const result = probes[channel.id]
@@ -199,12 +245,17 @@ const ChannelsPage = () => {
   )
 
   const selectedChannels = useMemo(
-    () => channels.filter((channel) => selectedChannelIds.has(channel.id)),
-    [channels, selectedChannelIds],
+    () => filteredChannels.filter((channel) => selectedChannelIds.has(channel.id)),
+    [filteredChannels, selectedChannelIds],
   )
   const selectedCount = selectedChannels.length
-  const allSelected = channels.length > 0 && selectedCount === channels.length
-  const someSelected = selectedCount > 0 && !allSelected
+  const allSelected = filteredChannels.length > 0 && filteredChannels.every((channel) => selectedChannelIds.has(channel.id))
+  const someSelected = !allSelected && filteredChannels.some((channel) => selectedChannelIds.has(channel.id))
+
+  const onGroupFilterChange = (value: string) => {
+    setGroupFilter(value)
+    setSelectedChannelIds(new Set())
+  }
 
   const toggleChannelSelection = (id: number) => {
     setSelectedChannelIds((previous) => {
@@ -220,11 +271,12 @@ const ChannelsPage = () => {
 
   const toggleAllChannels = () => {
     setSelectedChannelIds((previous) => {
-      if (allSelected) {
-        return new Set()
-      }
       const next = new Set(previous)
-      channels.forEach((channel) => next.add(channel.id))
+      if (allSelected) {
+        filteredChannels.forEach((channel) => next.delete(channel.id))
+      } else {
+        filteredChannels.forEach((channel) => next.add(channel.id))
+      }
       return next
     })
   }
@@ -244,6 +296,25 @@ const ChannelsPage = () => {
       return changed ? next : previous
     })
   }, [channels])
+
+  useEffect(() => {
+    if (groupFilter === ALL_GROUPS) {
+      return
+    }
+    const visibleIds = new Set(filteredChannels.map((channel) => channel.id))
+    setSelectedChannelIds((previous) => {
+      let changed = false
+      const next = new Set<number>()
+      for (const id of previous) {
+        if (visibleIds.has(id)) {
+          next.add(id)
+        } else {
+          changed = true
+        }
+      }
+      return changed ? next : previous
+    })
+  }, [filteredChannels, groupFilter])
 
   const runProbe = useCallback(async (ids: number[]) => {
     if (ids.length === 0) {
@@ -291,7 +362,7 @@ const ChannelsPage = () => {
     if (selectedCount === 0 || probingIds.size > 0) {
       return
     }
-    void runProbe([...selectedChannelIds])
+    void runProbe(selectedChannels.map((channel) => channel.id))
   }
 
   const removeChannels = useCallback(async (ids: number[]) => {
@@ -324,7 +395,7 @@ const ChannelsPage = () => {
   }, [reloadChannels, reloadChannelProfiles])
 
   const onBulkDelete = async () => {
-    const ids = [...selectedChannelIds]
+    const ids = selectedChannels.map((channel) => channel.id)
     setBulkDeleteOpen(false)
     await removeChannels(ids)
   }
@@ -341,7 +412,11 @@ const ChannelsPage = () => {
 
   const onAdd = async (values: ChannelFormValues) => {
     try {
-        await addChannel({ name: values.name.trim(), url: values.url.trim() })
+        await addChannel({
+          name: values.name.trim(),
+          url: values.url.trim(),
+          group: values.group?.trim() || null,
+        })
         form.reset()
     } catch {
         // Handled in context
@@ -355,27 +430,46 @@ const ChannelsPage = () => {
         toast.error('频道名称与地址不能为空')
         return
       }
+      const original = channels.find((channel) => channel.id === id)
+      const nextGroup = draft.group.trim() || null
       try {
-        await updateChannel({ id, name: draft.name.trim(), url: draft.url.trim() })
+        await updateChannel({ id, name: draft.name.trim(), url: draft.url.trim(), group: nextGroup })
         setDrafts((prev) => {
           const next = { ...prev }
           delete next[id]
           return next
         })
-        setProbes((prev) => {
-          const next = { ...prev }
-          delete next[id]
-          return next
-        })
+        if (original && original.url !== draft.url) {
+          setProbes((prev) => {
+            const next = { ...prev }
+            delete next[id]
+            return next
+          })
+        }
+        if (groupFilter !== ALL_GROUPS) {
+          const stillVisible = groupFilter === UNGROUPED ? !nextGroup : nextGroup === groupFilter
+          if (!stillVisible) {
+            setSelectedChannelIds((prev) => {
+              const next = new Set(prev)
+              next.delete(id)
+              return next
+            })
+          }
+        }
       } catch {
           // Handled in context
       }
     },
-    [drafts, updateChannel],
+    [channels, drafts, groupFilter, updateChannel],
   )
 
   return (
     <div className="space-y-6">
+      <datalist id={GROUP_OPTIONS_ID}>
+        {groupOptions.map((group) => (
+          <option key={group} value={group} />
+        ))}
+      </datalist>
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-lg font-medium">添加频道</CardTitle>
@@ -397,6 +491,19 @@ const ChannelsPage = () => {
                                 <FormLabel>频道名称</FormLabel>
                                 <FormControl>
                                     <Input placeholder="输入频道名称" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )}
+                    />
+                    <FormField
+                        control={form.control}
+                        name="group"
+                        render={({ field }) => (
+                            <FormItem className="w-full md:w-[160px]">
+                                <FormLabel>分组（可选）</FormLabel>
+                                <FormControl>
+                                    <Input placeholder="如：央视" list={GROUP_OPTIONS_ID} {...field} />
                                 </FormControl>
                                 <FormMessage />
                             </FormItem>
@@ -444,6 +551,21 @@ const ChannelsPage = () => {
                 </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+                <Select value={groupFilter} onValueChange={onGroupFilterChange}>
+                    <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="按分组筛选">
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={ALL_GROUPS}>全部分组</SelectItem>
+                        {groupOptions.map((group) => (
+                            <SelectItem key={group} value={group}>{group}</SelectItem>
+                        ))}
+                        <SelectItem value={UNGROUPED}>未分组</SelectItem>
+                    </SelectContent>
+                </Select>
+                {groupFilter !== ALL_GROUPS && (
+                    <span className="text-xs text-muted-foreground">显示 {filteredChannels.length}</span>
+                )}
                 {invalidChannels.length > 0 && (
                     <Button
                         size="sm"
@@ -553,11 +675,12 @@ const ChannelsPage = () => {
                                         if (input) input.indeterminate = someSelected
                                     }}
                                     onChange={toggleAllChannels}
-                                    aria-label="全选频道"
+                                    aria-label="全选当前列表频道"
                                 />
                             </TableHead>
                             <TableHead className="w-[64px]">ID</TableHead>
                             <TableHead className="w-[230px]">名称</TableHead>
+                            <TableHead className="w-[110px]">分组</TableHead>
                             <TableHead className="w-[72px]">协议</TableHead>
                             <TableHead className="min-w-[260px]">地址</TableHead>
                             <TableHead className="min-w-[230px]">检测</TableHead>
@@ -565,16 +688,22 @@ const ChannelsPage = () => {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {channels.length === 0 ? (
+                        {filteredChannels.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={7} className="h-24 text-center">
-                                    暂无频道
+                                <TableCell colSpan={8} className="h-24 text-center">
+                                    {channels.length === 0 ? '暂无频道' : '该分组暂无频道'}
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            channels.map((channel) => {
-                                const draft = drafts[channel.id] ?? channel
-                                const hasChanged = draft.name !== channel.name || draft.url !== channel.url
+                            filteredChannels.map((channel) => {
+                                const draft = drafts[channel.id] ?? {
+                                    name: channel.name,
+                                    url: channel.url,
+                                    group: channel.group ?? '',
+                                }
+                                const hasChanged = draft.name !== channel.name
+                                    || draft.url !== channel.url
+                                    || draft.group !== (channel.group ?? '')
                                 const probe = probes[channel.id]
                                 const checking = probingIds.has(channel.id)
                                 const selected = selectedChannelIds.has(channel.id)
@@ -597,6 +726,18 @@ const ChannelsPage = () => {
                                                 onChange={(e) => setDrafts(prev => ({
                                                     ...prev,
                                                     [channel.id]: { ...draft, name: e.target.value }
+                                                }))}
+                                                className="h-8"
+                                            />
+                                        </TableCell>
+                                        <TableCell className="py-2">
+                                            <Input
+                                                value={draft.group}
+                                                list={GROUP_OPTIONS_ID}
+                                                placeholder="未分组"
+                                                onChange={(e) => setDrafts(prev => ({
+                                                    ...prev,
+                                                    [channel.id]: { ...draft, group: e.target.value }
                                                 }))}
                                                 className="h-8"
                                             />
