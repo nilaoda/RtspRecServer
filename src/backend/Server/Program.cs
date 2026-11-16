@@ -60,6 +60,7 @@ try
     builder.Services.AddSingleton<WebSocketConnectionManager>();
     builder.Services.AddSingleton<IRecordingNotifier, WebSocketRecordingNotifier>();
     builder.Services.AddSingleton<RecordingManager>();
+    builder.Services.AddSingleton<TaskErrorLogService>();
     builder.Services.AddSingleton<ChannelProbeService>();
     builder.Services.AddSingleton<RecordingTimerStore>();
     builder.Services.AddSingleton<RecordingTimerService>();
@@ -172,6 +173,17 @@ try
         {
             return Results.BadRequest(ApiResponse.Create(ex.Message));
         }
+    });
+
+    app.MapGet("/api/task-errors", (TaskErrorLogService service) =>
+    {
+        return Results.Ok(service.GetSnapshot());
+    });
+
+    app.MapDelete("/api/task-errors", (TaskErrorLogService service) =>
+    {
+        service.Clear();
+        return Results.Ok(ApiResponse.Create("已清空任务错误日志"));
     });
 
     app.MapGet("/api/channels", (ConfigurationService service) =>

@@ -1,13 +1,14 @@
 import { toast } from 'sonner'
-import type { RecordingTaskDto, SystemStatus, WebSocketMessage } from '../types'
+import type { RecordingTaskDto, SystemStatus, TaskErrorLogMessage, WebSocketMessage } from '../types'
 
 type WebSocketHandlers = {
   onTaskUpdate: (task: RecordingTaskDto) => void
   onSystemStatus: (status: SystemStatus) => void
+  onTaskErrorLog?: (message: TaskErrorLogMessage) => void
   onConnectionStatus?: (status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected') => void
 }
 
-export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onConnectionStatus }: WebSocketHandlers) => {
+export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onTaskErrorLog, onConnectionStatus }: WebSocketHandlers) => {
   let cancelled = false
   let socket: WebSocket | null = null
   let reconnectAttempts = 0
@@ -33,6 +34,10 @@ export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onConnectionSta
         }
         if (message.type === 'systemStatus') {
           onSystemStatus(message.status)
+          return
+        }
+        if (message.type === 'taskErrorLog') {
+          onTaskErrorLog?.(message)
         }
       } catch {
         return

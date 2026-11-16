@@ -95,6 +95,12 @@ public sealed class ConfigurationService
                 throw new InvalidOperationException("最大并发必须大于 0");
             }
 
+            var taskErrorLogMaxEntries = request.TaskErrorLogMaxEntries ?? current.TaskErrorLogMaxEntries;
+            if (taskErrorLogMaxEntries is < 100 or > 50_000)
+            {
+                throw new InvalidOperationException("实时错误日志上限必须在 100-50000 条之间");
+            }
+
             var transport = string.IsNullOrWhiteSpace(request.RecordingTransport)
                 ? current.RecordingTransport
                 : request.RecordingTransport.Trim();
@@ -143,6 +149,7 @@ public sealed class ConfigurationService
                 MaxRecordingTasks = maxRecordingTasks,
                 RecordingTransport = transport,
                 WriteRecordingLog = request.WriteRecordingLog ?? current.WriteRecordingLog,
+                TaskErrorLogMaxEntries = taskErrorLogMaxEntries,
                 Epg = epg
             };
             WriteJson(_appConfigPath, updated);
@@ -172,6 +179,7 @@ public sealed class ConfigurationService
             MaxRecordingTasks = config.MaxRecordingTasks,
             RecordingTransport = config.RecordingTransport,
             WriteRecordingLog = config.WriteRecordingLog,
+            TaskErrorLogMaxEntries = config.TaskErrorLogMaxEntries,
             Epg = config.Epg,
             RestartRequiredFields = GetRestartRequiredFields(config)
         };
@@ -449,6 +457,10 @@ public sealed class ConfigurationService
         if (config.MaxRecordingTasks < 1)
         {
             config = config with { MaxRecordingTasks = 1 };
+        }
+        if (config.TaskErrorLogMaxEntries is < 100 or > 50_000)
+        {
+            config = config with { TaskErrorLogMaxEntries = 10_000 };
         }
         if (string.IsNullOrWhiteSpace(config.RecordingTransport))
         {

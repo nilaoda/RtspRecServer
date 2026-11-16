@@ -11,6 +11,8 @@ public sealed record AppConfig
     public int MaxRecordingTasks { get; init; } = 1;
     public string RecordingTransport { get; init; } = "MP2T/TCP";
     public bool WriteRecordingLog { get; init; } = true;
+    /// <summary>实时错误日志的内存环形缓冲上限（条）</summary>
+    public int TaskErrorLogMaxEntries { get; init; } = 10_000;
     public EpgConfig Epg { get; init; } = new();
 }
 
@@ -40,6 +42,7 @@ public sealed record AppConfigUpdateRequest
     public int? MaxRecordingTasks { get; init; }
     public string? RecordingTransport { get; init; }
     public bool? WriteRecordingLog { get; init; }
+    public int? TaskErrorLogMaxEntries { get; init; }
     public EpgConfigUpdate? Epg { get; init; }
 }
 
@@ -55,6 +58,7 @@ public sealed record AppConfigView
     public int MaxRecordingTasks { get; init; }
     public string RecordingTransport { get; init; } = string.Empty;
     public bool WriteRecordingLog { get; init; }
+    public int TaskErrorLogMaxEntries { get; init; }
     public EpgConfig Epg { get; init; } = new();
     public string[] RestartRequiredFields { get; init; } = [];
 }

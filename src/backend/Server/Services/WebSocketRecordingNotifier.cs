@@ -15,4 +15,9 @@ public sealed class WebSocketRecordingNotifier : IRecordingNotifier
     {
         return _connections.BroadcastTaskAsync(task, cancellationToken);
     }
+
+    public Task NotifyTaskErrorLogAsync(TaskErrorLogMessage message, CancellationToken cancellationToken)
+    {
+        return _connections.BroadcastTaskErrorLogAsync(message, cancellationToken);
+    }
 }

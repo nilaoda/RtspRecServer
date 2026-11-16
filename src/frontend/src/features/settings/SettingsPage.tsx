@@ -49,6 +49,11 @@ const settingsSchema = z
     maxRecordingTasks: z.coerce.number().int('必须是整数').min(1, '最大并发必须大于 0'),
     recordingTransport: z.enum(['MP2T/TCP', 'MP2T/RTP/TCP']),
     writeRecordingLog: z.boolean(),
+    taskErrorLogMaxEntries: z.coerce
+      .number()
+      .int('必须是整数')
+      .min(100, '范围 100-50000')
+      .max(50_000, '范围 100-50000'),
     epgUrl: z
       .string()
       .min(1, '节目表地址不能为空')
@@ -89,6 +94,7 @@ const SettingsPage = () => {
     maxRecordingTasks: appConfig?.maxRecordingTasks ?? 1,
     recordingTransport: appConfig?.recordingTransport ?? 'MP2T/TCP',
     writeRecordingLog: appConfig?.writeRecordingLog ?? true,
+    taskErrorLogMaxEntries: appConfig?.taskErrorLogMaxEntries ?? 10_000,
     epgUrl: appConfig?.epg?.url ?? '',
     epgUpdateTime: appConfig?.epg?.updateTime ?? '08:00',
     epgCacheDurationHours: appConfig?.epg?.cacheDurationHours ?? 24,
@@ -122,6 +128,7 @@ const SettingsPage = () => {
         maxRecordingTasks: values.maxRecordingTasks,
         recordingTransport: values.recordingTransport,
         writeRecordingLog: values.writeRecordingLog,
+        taskErrorLogMaxEntries: values.taskErrorLogMaxEntries,
         epg: {
           url: values.epgUrl.trim(),
           updateTime: values.epgUpdateTime,
@@ -328,6 +335,31 @@ const SettingsPage = () => {
                     <FormControl>
                       <Switch checked={field.value} onCheckedChange={field.onChange} />
                     </FormControl>
+                  </FormItem>
+                )}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>日志</CardTitle>
+              <CardDescription>底部实时错误日志面板的内存缓冲设置。</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FormField
+                control={form.control}
+                name="taskErrorLogMaxEntries"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>实时错误日志上限（条）</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={100} max={50000} {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      内存环形缓冲条数，超出后丢弃最旧记录；修改后立即生效（约 5 秒内），服务重启会清空。
+                    </FormDescription>
+                    <FormMessage />
                   </FormItem>
                 )}
               />

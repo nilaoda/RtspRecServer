@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { AppConfig, ChannelConfig, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TimerUpsertPayload } from '../types'
+import type { AppConfig, ChannelConfig, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TaskErrorLogEntry, TaskErrorLogMessage, TimerUpsertPayload } from '../types'
 import {
   addChannel,
+  clearTaskErrorLog as clearTaskErrorLogApi,
   createTask,
   createTimer as createTimerApi,
   deleteTask,
@@ -14,6 +15,7 @@ import {
   getRecordings,
   getRecordingMediaInfo,
   getSystemStatus,
+  getTaskErrorLog,
   getTaskMediaInfo,
   getTasks,
   getTimers,
@@ -34,6 +36,19 @@ type RecordingStatusKey = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'St
 
 const statusKeys: RecordingStatusKey[] = ['Pending', 'Recording', 'Completed', 'Failed', 'Stopped']
 
+const CLIENT_ERROR_LOG_LIMIT = 50_000
+
+const mergeTaskErrorEntries = (previous: TaskErrorLogEntry[], incoming: TaskErrorLogEntry[]) => {
+  const byId = new Map(previous.map((entry) => [entry.id, entry]))
+  for (const entry of incoming) {
+    const existing = byId.get(entry.id)
+    if (!existing || entry.revision >= existing.revision) {
+      byId.set(entry.id, entry)
+    }
+  }
+  return Array.from(byId.values()).sort((left, right) => left.id - right.id).slice(-CLIENT_ERROR_LOG_LIMIT)
+}
+
 const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
   if (typeof value === 'number') {
     return statusKeys[value] ?? 'Pending'
@@ -51,6 +66,8 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [timers, setTimers] = useState<RecordingTimer[]>([])
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null)
+  const [taskErrorLog, setTaskErrorLog] = useState<TaskErrorLogEntry[]>([])
+  const taskErrorLogGenerationRef = useRef(0)
   const [now, setNow] = useState(new Date())
   const [wsConnectionStatus, setWsConnectionStatus] = useState<'connecting' | 'connected' | 'reconnecting' | 'disconnected'>('connecting')
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine)
@@ -121,6 +138,52 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     }
   }, [notifyError])
 
+  const reloadTaskErrorLog = useCallback(async () => {
+    try {
+      const data = await getTaskErrorLog()
+      const previousGeneration = taskErrorLogGenerationRef.current
+      taskErrorLogGenerationRef.current = data.generation
+      setTaskErrorLog((previous) => {
+        // 同代次下合并快照，避免拉取期间到达的增量被覆盖；代次变化（清空）则整体替换
+        if (data.generation !== previousGeneration) {
+          return data.entries.slice(-CLIENT_ERROR_LOG_LIMIT)
+        }
+        return mergeTaskErrorEntries(previous, data.entries)
+      })
+    } catch {
+      // 错误日志加载失败不打断主流程
+    }
+  }, [])
+
+  const applyTaskErrorLogMessage = useCallback((message: TaskErrorLogMessage) => {
+    if (message.reset) {
+      taskErrorLogGenerationRef.current = message.generation
+      setTaskErrorLog(message.entries.slice(-50_000))
+      return
+    }
+
+    if (message.generation !== taskErrorLogGenerationRef.current) {
+      // 代次变化说明中间可能错过清空，重新拉全量快照
+      void reloadTaskErrorLog()
+      return
+    }
+
+    if (message.entries.length === 0) {
+      return
+    }
+
+    setTaskErrorLog((previous) => mergeTaskErrorEntries(previous, message.entries))
+  }, [reloadTaskErrorLog])
+
+  const clearTaskErrorLogAction = useCallback(async () => {
+    try {
+      await clearTaskErrorLogApi()
+      setTaskErrorLog([])
+    } catch {
+      // 错误提示由 api 层统一处理
+    }
+  }, [])
+
   const refreshSystemStatus = useCallback(async () => {
     try {
       const status = await getSystemStatus()
@@ -140,9 +203,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       reloadRecordings()
       reloadTimers()
       reloadConfig()
+      reloadTaskErrorLog()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadTimers, reloadConfig])
+  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadTimers, reloadConfig, reloadTaskErrorLog])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -224,10 +288,18 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         serverOffsetMsRef.current = new Date(status.systemTime).getTime() - Date.now()
         setSystemStatus(status)
       },
+      onTaskErrorLog: applyTaskErrorLogMessage,
       onConnectionStatus: setWsConnectionStatus,
     })
     return () => disconnect()
-  }, [])
+  }, [applyTaskErrorLogMessage])
+
+  useEffect(() => {
+    if (wsConnectionStatus === 'connected') {
+      // 重连后补齐断线期间可能错过的错误日志
+      void reloadTaskErrorLog()
+    }
+  }, [wsConnectionStatus, reloadTaskErrorLog])
 
   const createTaskAction = useCallback(
     async (payload: { channelId: number; startTime: string; endTime: string; taskName: string | null }) => {
@@ -488,6 +560,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       timers,
       systemStatus,
       appConfig,
+      taskErrorLog,
       now,
       connectionStatus: (() => {
         if (!browserOnline) return 'disconnected'
@@ -512,6 +585,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       deleteTask: deleteTaskAction,
       deleteTasks: deleteTasksAction,
       deleteRecordings: deleteRecordingsAction,
+      clearTaskErrorLog: clearTaskErrorLogAction,
       addChannel: addChannelAction,
       updateChannel: updateChannelAction,
       deleteChannel: deleteChannelAction,
@@ -530,6 +604,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       timers,
       systemStatus,
       appConfig,
+      taskErrorLog,
       now,
       wsConnectionStatus,
       browserOnline,
@@ -548,6 +623,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       deleteTaskAction,
       deleteTasksAction,
       deleteRecordingsAction,
+      clearTaskErrorLogAction,
       addChannelAction,
       updateChannelAction,
       deleteChannelAction,

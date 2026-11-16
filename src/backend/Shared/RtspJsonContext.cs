@@ -57,6 +57,9 @@ namespace RtspRecServer.Shared;
 [JsonSerializable(typeof(List<RecordingTimer>))]
 [JsonSerializable(typeof(TaskUpdateMessage))]
 [JsonSerializable(typeof(SystemStatusMessage))]
+[JsonSerializable(typeof(TaskErrorLogMessage))]
+[JsonSerializable(typeof(TaskErrorLogEntry))]
+[JsonSerializable(typeof(TaskErrorLogSnapshot))]
 [JsonSerializable(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails))]
 public sealed partial class RtspJsonContext : JsonSerializerContext
 {

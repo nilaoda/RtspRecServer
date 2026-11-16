@@ -12,6 +12,7 @@ import type {
   RecordingTaskDto,
   RecordingTimer,
   SystemStatus,
+  TaskErrorLogSnapshot,
   TimerUpsertPayload,
 } from '../types'
 import type {
@@ -93,6 +94,11 @@ const fetchJson = async <T>(url: string, options?: FetchOptions) => {
 export const getSystemStatus = () => fetchJson<SystemStatus>('/api/system/status', { silent: true })
 
 export const getTasks = () => fetchJson<RecordingTaskDto[]>('/api/tasks', { silent: true })
+
+export const getTaskErrorLog = () => fetchJson<TaskErrorLogSnapshot>('/api/task-errors', { silent: true })
+
+export const clearTaskErrorLog = () =>
+  fetchJson<{ message: string }>('/api/task-errors', { method: 'DELETE' })
 
 export const createTask = (payload: {
   channelId: number
@@ -235,6 +241,7 @@ export type UpdateConfigPayload = {
   maxRecordingTasks?: number
   recordingTransport?: AppConfig['recordingTransport']
   writeRecordingLog?: boolean
+  taskErrorLogMaxEntries?: number
   epg?: {
     url?: string
     updateTime?: string

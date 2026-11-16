@@ -21,6 +21,7 @@ public class RecordingManagerTests : IDisposable
             new ConfigurationService(),
             new NoopRecordingService(),
             _notifier,
+            new TaskErrorLogService(_notifier),
             NullLogger<RecordingManager>.Instance);
     }
 
@@ -161,6 +162,7 @@ public class RecordingManagerTests : IDisposable
             new ConfigurationService(),
             service,
             _notifier,
+            new TaskErrorLogService(_notifier),
             NullLogger<RecordingManager>.Instance);
         var start = DateTimeOffset.UtcNow.AddHours(-1);
         var task = store.Add(new RecordingTask
@@ -228,10 +230,17 @@ public class RecordingManagerTests : IDisposable
     private sealed class RecordingNotifierFake : IRecordingNotifier
     {
         public List<RecordingTaskDto> Tasks { get; } = new();
+        public List<TaskErrorLogMessage> ErrorLogMessages { get; } = new();
 
         public Task NotifyTaskUpdateAsync(RecordingTaskDto task, CancellationToken cancellationToken)
         {
             Tasks.Add(task);
+            return Task.CompletedTask;
+        }
+
+        public Task NotifyTaskErrorLogAsync(TaskErrorLogMessage message, CancellationToken cancellationToken)
+        {
+            ErrorLogMessages.Add(message);
             return Task.CompletedTask;
         }
     }

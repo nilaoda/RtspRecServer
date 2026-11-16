@@ -7,6 +7,7 @@ import type {
   RecordingTaskDto,
   RecordingTimer,
   SystemStatus,
+  TaskErrorLogEntry,
   TimerUpsertPayload,
 } from '../types'
 import type { UpdateConfigPayload } from '../services/api'
@@ -18,6 +19,7 @@ export type AppContextValue = {
   timers: RecordingTimer[]
   systemStatus: SystemStatus | null
   appConfig: AppConfig | null
+  taskErrorLog: TaskErrorLogEntry[]
   now: Date
   connectionStatus: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
   themeMode: 'dark' | 'light'
@@ -39,6 +41,7 @@ export type AppContextValue = {
   deleteTask: (id: number) => Promise<void>
   deleteTasks: (ids: number[]) => Promise<void>
   deleteRecordings: (fileNames: string[]) => Promise<RecordingFileDeleteResult | null>
+  clearTaskErrorLog: () => Promise<void>
   addChannel: (payload: { name: string; url: string }) => Promise<void>
   updateChannel: (payload: ChannelConfig) => Promise<void>
   deleteChannel: (id: number) => Promise<void>

@@ -16,6 +16,7 @@ export type AppConfig = {
   maxRecordingTasks: number
   recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'
   writeRecordingLog: boolean
+  taskErrorLogMaxEntries: number
   epg: EpgConfig
   restartRequiredFields: string[]
 }
@@ -187,4 +188,29 @@ export type SystemStatusMessage = {
   status: SystemStatus
 }
 
-export type WebSocketMessage = TaskUpdateMessage | SystemStatusMessage
+export type TaskErrorLogEntry = {
+  id: number
+  revision: number
+  taskId: number
+  taskName: string
+  channelName: string
+  fileName?: string
+  severity: 'error' | 'warning'
+  message: string
+  identity: string
+  timestamp: string
+}
+
+export type TaskErrorLogSnapshot = {
+  generation: number
+  entries: TaskErrorLogEntry[]
+}
+
+export type TaskErrorLogMessage = {
+  type: 'taskErrorLog'
+  generation: number
+  reset: boolean
+  entries: TaskErrorLogEntry[]
+}
+
+export type WebSocketMessage = TaskUpdateMessage | SystemStatusMessage | TaskErrorLogMessage

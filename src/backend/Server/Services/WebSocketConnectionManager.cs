@@ -9,12 +9,18 @@ namespace RtspRecServer.Server.Services;
 
 public sealed class WebSocketConnectionManager
 {
-    private readonly ConcurrentDictionary<Guid, WebSocket> _connections = new();
+    private sealed class Connection
+    {
+        public required WebSocket Socket { get; init; }
+        public SemaphoreSlim SendLock { get; } = new(1, 1);
+    }
+
+    private readonly ConcurrentDictionary<Guid, Connection> _connections = new();
 
     public Guid Register(WebSocket socket)
     {
         var id = Guid.NewGuid();
-        _connections.TryAdd(id, socket);
+        _connections.TryAdd(id, new Connection { Socket = socket });
         return id;
     }
 
@@ -58,6 +64,11 @@ public sealed class WebSocketConnectionManager
         return BroadcastAsync(message, RtspJsonContext.Default.SystemStatusMessage, cancellationToken);
     }
 
+    public Task BroadcastTaskErrorLogAsync(TaskErrorLogMessage message, CancellationToken cancellationToken)
+    {
+        return BroadcastAsync(message, RtspJsonContext.Default.TaskErrorLogMessage, cancellationToken);
+    }
+
     private async Task BroadcastAsync<T>(T message, JsonTypeInfo<T> typeInfo, CancellationToken cancellationToken)
     {
         if (_connections.IsEmpty)
@@ -71,20 +82,38 @@ public sealed class WebSocketConnectionManager
 
         foreach (var item in _connections)
         {
-            var socket = item.Value;
+            var connection = item.Value;
+            var socket = connection.Socket;
             if (socket.State != WebSocketState.Open)
             {
                 _connections.TryRemove(item.Key, out _);
                 continue;
             }
 
+            // 同一连接的多次广播可能并发（任务更新、错误日志等），必须串行发送避免帧交错
+            var lockTaken = false;
             try
             {
+                await connection.SendLock.WaitAsync(cancellationToken);
+                lockTaken = true;
+                if (socket.State != WebSocketState.Open)
+                {
+                    _connections.TryRemove(item.Key, out _);
+                    continue;
+                }
+
                 await socket.SendAsync(segment, WebSocketMessageType.Text, true, cancellationToken);
             }
             catch
             {
                 _connections.TryRemove(item.Key, out _);
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    connection.SendLock.Release();
+                }
             }
         }
     }

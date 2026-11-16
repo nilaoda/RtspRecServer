@@ -15,6 +15,7 @@ import {
 import { useAppContext } from '../../app/context'
 import { formatBytes, formatDateTime } from '../shared/format'
 import AppRoutes from '../routes.tsx'
+import TaskErrorLogPanel from '../error-log/TaskErrorLogPanel'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { ModeToggle } from '@/components/mode-toggle'
@@ -143,6 +144,7 @@ const LayoutShell = () => {
               <AppRoutes />
             </div>
         </div>
+        <TaskErrorLogPanel />
       </main>
     </div>
   )

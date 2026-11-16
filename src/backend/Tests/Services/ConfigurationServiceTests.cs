@@ -174,6 +174,7 @@ public class ConfigurationServiceTests
                 MaxRecordingTasks = 4,
                 RecordingTransport = "MP2T/RTP/TCP",
                 WriteRecordingLog = false,
+                TaskErrorLogMaxEntries = 5000,
                 Epg = new EpgConfigUpdate
                 {
                     Url = " http://epg.example.com/e.xml.gz ",
@@ -191,6 +192,7 @@ public class ConfigurationServiceTests
             Assert.Equal(4, updated.MaxRecordingTasks);
             Assert.Equal("MP2T/RTP/TCP", updated.RecordingTransport);
             Assert.False(updated.WriteRecordingLog);
+            Assert.Equal(5000, updated.TaskErrorLogMaxEntries);
             Assert.Equal("http://epg.example.com/e.xml.gz", updated.Epg.Url);
             Assert.Equal("06:30", updated.Epg.UpdateTime);
             Assert.Equal(6, updated.Epg.CacheDurationHours);
@@ -274,6 +276,8 @@ public class ConfigurationServiceTests
                 {
                     Epg = new EpgConfigUpdate { CacheDurationHours = 0 }
                 }));
+            Assert.Throws<InvalidOperationException>(
+                () => service.UpdateAppConfig(new AppConfigUpdateRequest { TaskErrorLogMaxEntries = 10 }));
         }
         finally
         {
@@ -304,6 +308,7 @@ public class ConfigurationServiceTests
 
             Assert.Equal("MP2T/TCP", config.RecordingTransport);
             Assert.True(config.WriteRecordingLog);
+            Assert.Equal(10_000, config.TaskErrorLogMaxEntries);
             Assert.Equal("08:00", config.Epg.UpdateTime);
             Assert.Equal(24, config.Epg.CacheDurationHours);
         }

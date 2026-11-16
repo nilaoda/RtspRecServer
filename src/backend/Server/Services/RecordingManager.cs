@@ -11,6 +11,7 @@ public sealed class RecordingManager
     private readonly ConfigurationService _configurationService;
     private readonly IRecordingService _recordingService;
     private readonly IRecordingNotifier _notifier;
+    private readonly TaskErrorLogService _errorLog;
     private readonly ILogger<RecordingManager> _logger;
     private readonly ConcurrentDictionary<long, RecordingSession> _activeSessions = new();
     private readonly object _taskTransitionLock = new();
@@ -20,12 +21,14 @@ public sealed class RecordingManager
         ConfigurationService configurationService,
         IRecordingService recordingService,
         IRecordingNotifier notifier,
+        TaskErrorLogService errorLog,
         ILogger<RecordingManager> logger)
     {
         _taskStore = taskStore;
         _configurationService = configurationService;
         _recordingService = recordingService;
         _notifier = notifier;
+        _errorLog = errorLog;
         _logger = logger;
     }
 
@@ -329,21 +332,26 @@ public sealed class RecordingManager
     public async Task FailMissedTaskAsync(RecordingTask task, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
+        RecordingTask? previousTask = null;
         var failed = _taskStore.TryUpdate(task.Id, current =>
-            current.Status == RecordingStatus.Pending && current.EndTime <= now
+        {
+            previousTask = current;
+            return current.Status == RecordingStatus.Pending && current.EndTime <= now
                 ? current with
                 {
                     Status = RecordingStatus.Failed,
                     ErrorMessage = "已超过计划结束时间，未启动",
                     FinishedAt = now
                 }
-                : null);
+                : null;
+        });
 
         if (failed is null)
         {
             return;
         }
 
+        _errorLog.RecordTaskChange(previousTask, failed);
         _logger.LogWarning("直播任务已错过结束时间，标记失败，任务ID: {TaskId}", task.Id);
         await _notifier.NotifyTaskUpdateAsync(ToDto(failed), cancellationToken);
     }
@@ -376,21 +384,26 @@ public sealed class RecordingManager
                 continue;
             }
 
+            RecordingTask? previousTask = null;
             var failed = _taskStore.TryUpdate(task.Id, current =>
-                current.Status == RecordingStatus.Recording
+            {
+                previousTask = current;
+                return current.Status == RecordingStatus.Recording
                     ? current with
                     {
                         Status = RecordingStatus.Failed,
                         ErrorMessage = "服务重启中断",
                         FinishedAt = now
                     }
-                    : null);
+                    : null;
+            });
 
             if (failed is null)
             {
                 continue;
             }
 
+            _errorLog.RecordTaskChange(previousTask, failed);
             _logger.LogWarning("录制任务因服务重启中断，任务ID: {TaskId}", failed.Id);
             await _notifier.NotifyTaskUpdateAsync(ToDto(failed), cancellationToken);
         }
@@ -452,12 +465,21 @@ public sealed class RecordingManager
             session.Completion = sessionCompletion.Task;
             if (!_activeSessions.TryAdd(started.Id, session))
             {
-                _taskStore.TryUpdate(started.Id, current => current with
+                RecordingTask? previousTask = null;
+                var conflict = _taskStore.TryUpdate(started.Id, current =>
                 {
-                    Status = RecordingStatus.Failed,
-                    ErrorMessage = "任务已在运行中",
-                    FinishedAt = DateTimeOffset.UtcNow
+                    previousTask = current;
+                    return current with
+                    {
+                        Status = RecordingStatus.Failed,
+                        ErrorMessage = "任务已在运行中",
+                        FinishedAt = DateTimeOffset.UtcNow
+                    };
                 });
+                if (conflict is not null)
+                {
+                    _errorLog.RecordTaskChange(previousTask, conflict);
+                }
                 _logger.LogWarning("录制任务启动失败：任务已在运行中，任务ID: {TaskId}", task.Id);
                 return false;
             }
@@ -502,14 +524,20 @@ public sealed class RecordingManager
                         lastBytes = progress.BytesWritten;
                         var currentBitrate = session.GetCurrentBitrateKbps();
                         var pcrElapsed = session.GetPcrElapsedSeconds();
-                        var update = _taskStore.TryUpdate(started.Id, current => current with
+                        RecordingTask? previousTask = null;
+                        var update = _taskStore.TryUpdate(started.Id, current =>
                         {
-                            BytesWritten = progress.BytesWritten,
-                            TsCheck = progress.TsCheck ?? current.TsCheck
+                            previousTask = current;
+                            return current with
+                            {
+                                BytesWritten = progress.BytesWritten,
+                                TsCheck = progress.TsCheck ?? current.TsCheck
+                            };
                         });
 
                         if (update is not null)
                         {
+                            _errorLog.RecordTaskChange(previousTask, update);
                             _ = _notifier.NotifyTaskUpdateAsync(
                                 ToDto(update) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = pcrElapsed },
                                 CancellationToken.None);
@@ -559,18 +587,24 @@ public sealed class RecordingManager
                 }
 
                 var currentBitrate = session.GetCurrentBitrateKbps();
-                var completed = _taskStore.TryUpdate(started.Id, current => current with
+                RecordingTask? previousForFinal = null;
+                var completed = _taskStore.TryUpdate(started.Id, current =>
                 {
-                    Status = finalStatus,
-                    BytesWritten = finalBytesWritten,
-                    ErrorMessage = finalErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
-                    FinishedAt = DateTimeOffset.UtcNow,
-                    PcrElapsedSeconds = result.PcrElapsedSeconds,
-                    TsCheck = result.TsCheck ?? current.TsCheck
+                    previousForFinal = current;
+                    return current with
+                    {
+                        Status = finalStatus,
+                        BytesWritten = finalBytesWritten,
+                        ErrorMessage = finalErrorMessage ?? (finalStatus == RecordingStatus.Failed ? "录制异常停止" : null),
+                        FinishedAt = DateTimeOffset.UtcNow,
+                        PcrElapsedSeconds = result.PcrElapsedSeconds,
+                        TsCheck = result.TsCheck ?? current.TsCheck
+                    };
                 });
 
                 if (completed is not null)
                 {
+                    _errorLog.RecordTaskChange(previousForFinal, completed);
                     await _notifier.NotifyTaskUpdateAsync(
                         ToDto(completed) with { CurrentBitrateKbps = currentBitrate, PcrElapsedSeconds = result.PcrElapsedSeconds },
                         CancellationToken.None);
@@ -589,11 +623,16 @@ public sealed class RecordingManager
                 _logger.LogError(ex, "录制任务发生严重异常 {TaskId}。频道: {ChannelName}, URL: {Url}, 错误堆栈: {StackTrace}", 
                     started.Id, started.ChannelName, started.Url, ex.StackTrace);
                 var currentBitrate = session.GetCurrentBitrateKbps();
-                var failed = _taskStore.TryUpdate(started.Id, current => current with
+                RecordingTask? previousForFailure = null;
+                var failed = _taskStore.TryUpdate(started.Id, current =>
                 {
-                    Status = RecordingStatus.Failed,
-                    ErrorMessage = $"{ex.Message} (Stack: {ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim()})",
-                    FinishedAt = DateTimeOffset.UtcNow
+                    previousForFailure = current;
+                    return current with
+                    {
+                        Status = RecordingStatus.Failed,
+                        ErrorMessage = $"{ex.Message} (Stack: {ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim()})",
+                        FinishedAt = DateTimeOffset.UtcNow
+                    };
                 });
 
                 var failedFileBytes = File.Exists(outputPath) ? new FileInfo(outputPath).Length : session.BytesWritten;
@@ -601,6 +640,7 @@ public sealed class RecordingManager
 
                 if (failed is not null)
                 {
+                    _errorLog.RecordTaskChange(previousForFailure, failed);
                     await _notifier.NotifyTaskUpdateAsync(ToDto(failed) with { CurrentBitrateKbps = currentBitrate }, CancellationToken.None);
                 }
             }
