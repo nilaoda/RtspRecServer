@@ -4,10 +4,12 @@ import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
 import { getTaskLog } from '../../services/api'
-import type { RecordingStatus, RecordingTaskDto, TsCheckSummary, TsStreamTrack } from '../../types'
+import type { RecordingStatus, RecordingTaskDto } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import TaskFormDialog from './TaskFormDialog'
+import TsCheckDialog from './TsCheckDialog'
+import { tsCodecText, tsTrackText, tsVerdictClass, tsVerdictLabel } from './ts-display'
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -72,6 +74,10 @@ const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
   }
   return 'Pending'
 }
+
+// 录制中即使还没有检测数据也可打开详情，弹窗会随 WebSocket 推送实时刷新
+const canOpenTsCheck = (task: RecordingTaskDto, status: RecordingStatusKey) =>
+  Boolean(task.tsCheck) || status === 'Recording'
 
 const formatDuration = (milliseconds: number) => {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) {
@@ -248,39 +254,12 @@ const TaskProgress = ({
   </div>
 )
 
-const tsVerdictLabel: Record<string, string> = {
-  pass: '正常',
-  warning: '警告',
-  error: '异常',
-  incomplete: '未完成',
-  unknown: '未知',
-}
-
-const tsVerdictClass = (verdict?: string) => {
-  if (verdict === 'pass') return 'border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400'
-  if (verdict === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
-  if (verdict === 'error') return 'border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400'
-  return 'border-border bg-muted text-muted-foreground'
-}
-
-const tsTrackText = (tracks?: TsStreamTrack[], fallback?: string) => {
-  const labels = tracks?.map((track) => track.label).filter(Boolean) ?? []
-  const unique = [...new Set(labels)]
-  return unique.length > 0 ? unique.join(' / ') : fallback || '未识别'
-}
-
-const tsCodecText = (tsCheck?: TsCheckSummary) => {
-  if (!tsCheck) return '--'
-  const streams = [
-    tsTrackText(tsCheck.videoTracks, tsCheck.video),
-    tsTrackText(tsCheck.audioTracks, tsCheck.audio),
-  ].filter((value) => value !== '未识别')
-  return streams.length > 0 ? streams.join(' + ') : '未识别轨道'
-}
-
 const TasksPage = () => {
   const { tasks, channels, createTask, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
+  const [tsDialogTaskId, setTsDialogTaskId] = useState<number | null>(null)
+  const tsDialogTask =
+    tsDialogTaskId == null ? null : (tasks.find((task) => task.id === tsDialogTaskId) ?? null)
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [infoTaskId, setInfoTaskId] = useState<number | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
@@ -812,9 +791,25 @@ const TasksPage = () => {
                                             <Tooltip>
                                                 <TooltipTrigger asChild>
                                                     <div
-                                                        className="flex w-full cursor-help flex-col gap-1 text-xs"
+                                                        className={cn(
+                                                            'flex w-full flex-col gap-1 text-xs',
+                                                            canOpenTsCheck(task, normalizedStatus) ? 'cursor-pointer' : 'cursor-default',
+                                                        )}
                                                         tabIndex={0}
+                                                        role={canOpenTsCheck(task, normalizedStatus) ? 'button' : undefined}
+                                                        aria-haspopup={canOpenTsCheck(task, normalizedStatus) ? 'dialog' : undefined}
                                                         aria-label="TS 检测详情"
+                                                        onClick={() => {
+                                                            if (canOpenTsCheck(task, normalizedStatus)) {
+                                                                setTsDialogTaskId(task.id)
+                                                            }
+                                                        }}
+                                                        onKeyDown={(event) => {
+                                                            if (canOpenTsCheck(task, normalizedStatus) && (event.key === 'Enter' || event.key === ' ')) {
+                                                                event.preventDefault()
+                                                                setTsDialogTaskId(task.id)
+                                                            }
+                                                        }}
                                                     >
                                                         <div className="flex min-w-0 items-center gap-1.5">
                                                             <Badge
@@ -846,14 +841,13 @@ const TasksPage = () => {
                                                     </div>
                                                 </TooltipTrigger>
                                                 {task.tsCheck && (
-                                                    <TooltipContent side="top" align="start" className="max-w-[280px] space-y-1 text-xs">
+                                                    <TooltipContent side="top" align="start" className="max-w-[260px] space-y-1 text-xs">
                                                         <div className="font-medium">
-                                                            TS 检测：{tsVerdictLabel[task.tsCheck.verdict] ?? '未知'}
+                                                            TS 检测：{tsVerdictLabel[task.tsCheck.verdict] ?? '未知'} · 错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}
                                                         </div>
-                                                        <div>错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}</div>
                                                         <div>视频：{tsTrackText(task.tsCheck.videoTracks, task.tsCheck.video)} · 音频：{tsTrackText(task.tsCheck.audioTracks, task.tsCheck.audio)}</div>
                                                         <div>码率 {task.tsCheck.bitrateKbps.toFixed(0)} Kb/s</div>
-                                                        {task.tsCheck.lastEvent && <div>最近事件：{task.tsCheck.lastEvent}</div>}
+                                                        <div className="text-muted-foreground">点击查看完整扫描结果</div>
                                                     </TooltipContent>
                                                 )}
                                             </Tooltip>
@@ -1063,7 +1057,23 @@ const TasksPage = () => {
                       />
 
                       <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 space-y-1">
+                        <div
+                          className={cn('min-w-0 space-y-1', canOpenTsCheck(task, normalizedStatus) && 'cursor-pointer')}
+                          role={canOpenTsCheck(task, normalizedStatus) ? 'button' : undefined}
+                          tabIndex={canOpenTsCheck(task, normalizedStatus) ? 0 : undefined}
+                          aria-haspopup={canOpenTsCheck(task, normalizedStatus) ? 'dialog' : undefined}
+                          onClick={() => {
+                            if (canOpenTsCheck(task, normalizedStatus)) {
+                              setTsDialogTaskId(task.id)
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (canOpenTsCheck(task, normalizedStatus) && (event.key === 'Enter' || event.key === ' ')) {
+                              event.preventDefault()
+                              setTsDialogTaskId(task.id)
+                            }
+                          }}
+                        >
                           <div className="flex min-w-0 items-center gap-1.5">
                             <Badge
                               variant="outline"
@@ -1091,6 +1101,12 @@ const TasksPage = () => {
                           {task.tsCheck?.lastEvent && (
                             <div className="truncate text-[10px] text-muted-foreground" title={task.tsCheck.lastEvent}>
                               最近事件：{task.tsCheck.lastEvent}
+                            </div>
+                          )}
+                          {canOpenTsCheck(task, normalizedStatus) && (
+                            <div className="flex items-center gap-1 text-[10px] text-primary/80">
+                              <Info className="h-3 w-3" />
+                              {normalizedStatus === 'Recording' ? '点击实时查看检测' : '点击查看完整检测'}
                             </div>
                           )}
                         </div>
@@ -1289,6 +1305,14 @@ const TasksPage = () => {
       </AlertDialog>
 
       <TaskFormDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <TsCheckDialog
+        task={tsDialogTask}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTsDialogTaskId(null)
+          }
+        }}
+      />
 
       <Dialog open={endTimeEditOpen.isOpen} onOpenChange={(open) => !open && setEndTimeEditOpen({ isOpen: false, taskId: null })}>
         <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-[420px]">

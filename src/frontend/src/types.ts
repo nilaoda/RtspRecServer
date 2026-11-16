@@ -26,6 +26,7 @@ export type TsCheckSummary = {
   audioTracks?: TsStreamTrack[]
   pidCount: number
   lastEvent?: string
+  anomalyEvents?: string[]
 }
 
 export type RecordingTaskDto = {

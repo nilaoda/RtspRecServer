@@ -20,4 +20,6 @@ public sealed record TsCheckSummary
     public TsStreamTrack[] AudioTracks { get; init; } = [];
     public int PidCount { get; init; }
     public string? LastEvent { get; init; }
+    /// <summary>最早的若干异常事件（含相对录制开始的 0-based 时刻），便于定位几分几秒出错。</summary>
+    public string[] AnomalyEvents { get; init; } = [];
 }

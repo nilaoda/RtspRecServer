@@ -44,7 +44,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     public TsCheckSummary? GetSummary()
     {
         var progress = _progressSink.Latest;
-        return progress is null ? null : TsCheckSummaryMapper.FromProgress(progress.Value);
+        return progress is null ? null : TsCheckSummaryMapper.FromProgress(progress.Value, _progressSink.AnomalyEvents);
     }
 
     public TsCheckSummary? Complete()
@@ -86,6 +86,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     {
         private readonly object _lock = new();
         private TsCheckProgress? _latest;
+        private readonly List<string> _anomalyEvents = [];
 
         public TsCheckProgress? Latest
         {
@@ -98,11 +99,28 @@ internal sealed class TsLiveAnalysisSession : IDisposable
             }
         }
 
+        public string[] AnomalyEvents
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _anomalyEvents.ToArray();
+                }
+            }
+        }
+
         public void Report(TsCheckProgress value)
         {
             lock (_lock)
             {
                 _latest = value;
+                if (value.NewEvent is { } newEvent &&
+                    newEvent.Severity != TsCheckSeverity.Info &&
+                    _anomalyEvents.Count < TsCheckSummaryMapper.MaxAnomalyEvents)
+                {
+                    _anomalyEvents.Add(TsCheckSummaryMapper.FormatEvent(newEvent));
+                }
             }
         }
     }
@@ -110,7 +128,9 @@ internal sealed class TsLiveAnalysisSession : IDisposable
 
 internal static class TsCheckSummaryMapper
 {
-    public static TsCheckSummary FromProgress(TsCheckProgress progress)
+    public const int MaxAnomalyEvents = 5;
+
+    public static TsCheckSummary FromProgress(TsCheckProgress progress, IReadOnlyList<string>? anomalyEvents = null)
     {
         var videoTracks = FindTracks(
             progress.Pids,
@@ -144,7 +164,8 @@ internal static class TsCheckSummaryMapper
             VideoTracks = videoTracks,
             AudioTracks = audioTracks,
             PidCount = progress.Pids.Count(static pid => pid.Pid >= 0),
-            LastEvent = FormatEvent(progress.NewEvent),
+            LastEvent = progress.NewEvent is null ? null : FormatEvent(progress.NewEvent),
+            AnomalyEvents = anomalyEvents is { Count: > 0 } ? anomalyEvents.ToArray() : [],
         };
     }
 
@@ -187,8 +208,28 @@ internal static class TsCheckSummaryMapper
             VideoTracks = videoTracks,
             AudioTracks = audioTracks,
             PidCount = result.Pids.Count,
-            LastEvent = FormatEvent(lastEvent),
+            LastEvent = lastEvent is null ? null : FormatEvent(lastEvent),
+            AnomalyEvents = BuildAnomalyEvents(result.Events),
         };
+    }
+
+    private static string[] BuildAnomalyEvents(IEnumerable<TsCheckEvent> events)
+    {
+        var lines = new List<string>(MaxAnomalyEvents);
+        foreach (var item in events)
+        {
+            if (item.Severity == TsCheckSeverity.Info)
+            {
+                continue;
+            }
+
+            lines.Add(FormatEvent(item));
+            if (lines.Count >= MaxAnomalyEvents)
+            {
+                break;
+            }
+        }
+        return lines.ToArray();
     }
 
     private static TsStreamTrack[] FindTracks<T>(
@@ -288,13 +329,8 @@ internal static class TsCheckSummaryMapper
         return string.IsNullOrEmpty(language) ? name : $"{name} ({language})";
     }
 
-    private static string? FormatEvent(TsCheckEvent? item)
+    public static string FormatEvent(TsCheckEvent item)
     {
-        if (item is null)
-        {
-            return null;
-        }
-
         var label = item.Type switch
         {
             TsCheckEventType.SyncLoss => "TS 同步丢失",
@@ -322,6 +358,9 @@ internal static class TsCheckSummaryMapper
             _ => item.Type.ToString(),
         };
 
-        return item.Pid >= 0 ? $"{label} (PID 0x{item.Pid:X4})" : label;
+        var text = item.Pid >= 0 ? $"{label} (PID 0x{item.Pid:X4})" : label;
+        return item.TimeSeconds is { } seconds
+            ? $"{TsCheckEvent.FormatTime(seconds)}{(item.IsEstimatedTime ? "*" : string.Empty)} {text}"
+            : text;
     }
 }

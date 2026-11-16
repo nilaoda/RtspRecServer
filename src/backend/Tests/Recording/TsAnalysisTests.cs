@@ -103,8 +103,8 @@ public class TsAnalysisTests
         {
             CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
             CreatePsiPacket(0x0100, 0, BuildPmtSection(0x0101, (TsStreamTypes.H264, 0x0101))),
-            CreatePacket(0x0101, 0),
-            CreatePacket(0x0101, 1),
+            CreatePacket(0x0101, 0, pcrBase: 0),
+            CreatePacket(0x0101, 1, pcrBase: 90_000),
             CreatePacket(0x0101, 3),
             CreatePacket(0x0101, 4),
         };
@@ -120,7 +120,11 @@ public class TsAnalysisTests
         Assert.NotNull(summary);
         Assert.True(summary!.ErrorCount > 0);
         Assert.Equal("error", summary.Verdict);
-        Assert.Contains("连续计数缺口", summary.LastEvent);
+        // 事件带相对录制开始的 0-based 时刻（此处最后已知 PCR 为 1 秒）
+        var gapLine = Assert.Single(summary.AnomalyEvents, line => line.Contains("连续计数缺口"));
+        Assert.StartsWith("00:00:01", gapLine);
+        Assert.NotNull(summary.LastEvent);
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2}\.\d{3}\*? ", summary.LastEvent);
     }
 
     private static byte[] CreatePacket(
