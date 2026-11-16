@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 import type {
   AppConfig,
   ChannelConfig,
+  RecordingFileDeleteResult,
   RecordingFileInfo,
   RecordingTaskDto,
   RecordingTimer,
@@ -37,6 +38,7 @@ export type AppContextValue = {
   updateTaskEndTime: (id: number, endTime: string) => Promise<boolean>
   deleteTask: (id: number) => Promise<void>
   deleteTasks: (ids: number[]) => Promise<void>
+  deleteRecordings: (fileNames: string[]) => Promise<RecordingFileDeleteResult | null>
   addChannel: (payload: { name: string; url: string }) => Promise<void>
   updateChannel: (payload: ChannelConfig) => Promise<void>
   deleteChannel: (id: number) => Promise<void>

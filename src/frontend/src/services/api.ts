@@ -8,6 +8,7 @@ import type {
   LogFileContent,
   LogFileInfo,
   RecordingFileInfo,
+  RecordingFileDeleteResult,
   RecordingTaskDto,
   RecordingTimer,
   SystemStatus,
@@ -205,6 +206,13 @@ export const deleteChannels = (channelIds: number[]) =>
   })
 
 export const getRecordings = () => fetchJson<RecordingFileInfo[]>('/api/recordings', { silent: true })
+
+export const deleteRecordings = (fileNames: string[]) =>
+  fetchJson<RecordingFileDeleteResult>('/api/recordings/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fileNames }),
+  })
 
 export const getRecordingMediaInfo = (filePath: string) =>
   fetchJson<{ content?: string }>(`/api/recordings/mediainfo?filePath=${encodeURIComponent(filePath)}`)

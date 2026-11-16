@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { AppConfig, ChannelConfig, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TimerUpsertPayload } from '../types'
+import type { AppConfig, ChannelConfig, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TimerUpsertPayload } from '../types'
 import {
   addChannel,
   createTask,
   createTimer as createTimerApi,
   deleteTask,
   deleteTasks as deleteTasksApi,
+  deleteRecordings as deleteRecordingsApi,
   deleteTimer as deleteTimerApi,
   getChannels,
   getConfig,
@@ -326,6 +327,29 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [notifyError, notifySuccess, reloadTasks],
   )
 
+  const deleteRecordingsAction = useCallback(
+    async (fileNames: string[]): Promise<RecordingFileDeleteResult | null> => {
+      if (fileNames.length === 0) return null
+
+      try {
+        const result = await deleteRecordingsApi(fileNames)
+        if (result.failed === 0) {
+          notifySuccess(`已删除 ${result.succeeded} 个录像文件`)
+        } else if (result.succeeded > 0) {
+          notifyError(`已删除 ${result.succeeded} 个，${result.failed} 个失败`)
+        } else {
+          notifyError(result.failedItems[0]?.reason ? `删除失败：${result.failedItems[0].reason}` : '删除失败')
+        }
+        return result
+      } catch {
+        return null
+      } finally {
+        reloadRecordings()
+      }
+    },
+    [notifyError, notifySuccess, reloadRecordings],
+  )
+
   const addChannelAction = useCallback(
     async (payload: { name: string; url: string }) => {
       try {
@@ -487,6 +511,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       updateTaskEndTime: updateTaskEndTimeAction,
       deleteTask: deleteTaskAction,
       deleteTasks: deleteTasksAction,
+      deleteRecordings: deleteRecordingsAction,
       addChannel: addChannelAction,
       updateChannel: updateChannelAction,
       deleteChannel: deleteChannelAction,
@@ -522,6 +547,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       updateTaskEndTimeAction,
       deleteTaskAction,
       deleteTasksAction,
+      deleteRecordingsAction,
       addChannelAction,
       updateChannelAction,
       deleteChannelAction,

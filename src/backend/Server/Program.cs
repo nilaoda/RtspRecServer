@@ -510,6 +510,19 @@ try
         return Results.Ok(files);
     });
 
+    app.MapPost("/api/recordings/bulk-delete", (
+        ConfigurationService configurationService,
+        RecordingManager manager,
+        RecordingFileDeleteRequest request,
+        HttpContext context) =>
+    {
+        var config = configurationService.GetAppConfig();
+        var recordPath = ResolveRecordPath(config.RecordPath);
+        var clientIp = context.Connection.RemoteIpAddress?.ToString();
+        var result = RecordingFileDeletion.Delete(recordPath, request.FileNames, manager.GetActiveOutputPaths(), clientIp);
+        return Results.Ok(result);
+    });
+
     app.MapGet("/api/recordings/mediainfo", async (ConfigurationService configurationService, string filePath) =>
     {
         var config = configurationService.GetAppConfig();
@@ -744,11 +757,7 @@ static string ResolveRecordPath(string recordPath)
 }
 
 static bool IsPathUnderRoot(string rootPath, string targetPath)
-{
-    var fullRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-    var fullTarget = Path.GetFullPath(targetPath);
-    return fullTarget.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
-}
+    => RecordingFileDeletion.IsPathUnderRoot(rootPath, targetPath);
 
 static AppConfig LoadAppConfig()
 {

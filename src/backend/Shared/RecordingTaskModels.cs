@@ -103,6 +103,25 @@ public sealed record RecordingFileInfo
     public DateTimeOffset RecordedAt { get; init; }
 }
 
+public sealed record RecordingFileDeleteRequest
+{
+    public string[] FileNames { get; init; } = [];
+}
+
+public sealed record RecordingFileDeleteFailure
+{
+    public string FileName { get; init; } = string.Empty;
+    public string Reason { get; init; } = string.Empty;
+}
+
+public sealed record RecordingFileDeleteResult
+{
+    public int Succeeded { get; init; }
+    public int Failed { get; init; }
+    public string[] SucceededFiles { get; init; } = [];
+    public RecordingFileDeleteFailure[] FailedItems { get; init; } = [];
+}
+
 public sealed record MediaInfoResponse
 {
     public string Content { get; init; } = string.Empty;

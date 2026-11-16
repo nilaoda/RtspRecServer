@@ -154,6 +154,18 @@ export type RecordingFileInfo = {
   recordedAt: string
 }
 
+export type RecordingFileDeleteFailure = {
+  fileName: string
+  reason: string
+}
+
+export type RecordingFileDeleteResult = {
+  succeeded: number
+  failed: number
+  succeededFiles: string[]
+  failedItems: RecordingFileDeleteFailure[]
+}
+
 export type DiskStatus = {
   totalBytes: number
   freeBytes: number
