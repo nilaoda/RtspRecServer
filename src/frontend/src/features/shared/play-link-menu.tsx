@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import copy from 'copy-to-clipboard'
 import { Copy, ExternalLink, ListVideo, Play, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -115,31 +116,6 @@ const readCustomTemplate = () => {
   }
 }
 
-const copyText = async (text: string) => {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch {
-    // 非安全上下文（如局域网 http）可能不可用，回退到 execCommand
-  }
-
-  try {
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    const ok = document.execCommand('copy')
-    textarea.remove()
-    return ok
-  } catch {
-    return false
-  }
-}
-
 const toAbsoluteUrl = (path: string) => new URL(path, window.location.origin).href
 
 const openScheme = (schemeUrl: string) => {
@@ -194,6 +170,7 @@ export default function PlayLinkMenu({
   const [recentPlayerIds, setRecentPlayerIds] = useState<PlayerId[]>(readRecentPlayerIds)
   const [customOpen, setCustomOpen] = useState(false)
   const [templateDraft, setTemplateDraft] = useState('')
+  const [copyFallback, setCopyFallback] = useState<string | null>(null)
 
   const recentPlayers = recentPlayerIds
     .map((id) => PLAYER_BY_ID.get(id))
@@ -219,11 +196,27 @@ export default function PlayLinkMenu({
   }
 
   const handleCopy = async () => {
-    const ok = await copyText(toAbsoluteUrl(path))
+    const url = toAbsoluteUrl(path)
+    const ok = await copy(url)
     if (ok) {
       toast.success('播放链接已复制')
+      return
+    }
+
+    setCopyFallback(url)
+    toast.error('自动复制失败，请手动复制链接')
+  }
+
+  const retryCopy = async () => {
+    if (!copyFallback) {
+      return
+    }
+    const ok = await copy(copyFallback)
+    if (ok) {
+      toast.success('播放链接已复制')
+      setCopyFallback(null)
     } else {
-      toast.error('复制失败，请手动复制链接')
+      toast.error('仍无法自动复制，请长按或全选链接复制')
     }
   }
 
@@ -348,6 +341,33 @@ export default function PlayLinkMenu({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Dialog open={copyFallback !== null} onOpenChange={(open) => { if (!open) setCopyFallback(null) }}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>复制播放链接</DialogTitle>
+            <DialogDescription>
+              长按或全选下面的链接可手动复制；也可以点击“复制”按钮再试一次。
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            readOnly
+            rows={3}
+            value={copyFallback ?? ''}
+            onFocus={(event) => event.currentTarget.select()}
+            onClick={(event) => event.currentTarget.select()}
+            className="flex min-h-[76px] w-full resize-none rounded-md border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          />
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setCopyFallback(null)}>
+              关闭
+            </Button>
+            <Button type="button" onClick={() => void retryCopy()}>
+              复制
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={customOpen} onOpenChange={setCustomOpen}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[440px]">
