@@ -87,7 +87,7 @@ export default function TsCheckDialog({
             </div>
 
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Stat label="码率" value={`${tsCheck.bitrateKbps.toFixed(0)} Kb/s`} />
+              <Stat label="码率" value={`${tsCheck.bitrateKbps.toFixed(0)} kbps`} />
               <Stat label="数据包" value={tsCheck.packetCount.toLocaleString()} />
               <Stat label="扫描大小" value={formatBytes(tsCheck.bytesScanned)} />
               <Stat label="PID 数" value={String(tsCheck.pidCount)} />

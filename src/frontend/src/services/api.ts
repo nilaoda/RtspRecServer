@@ -179,6 +179,8 @@ export const addChannel = (payload: { name: string; url: string }) =>
 
 export const getChannelProbes = () => fetchJson<ChannelProbeResult[]>('/api/channels/probes', { silent: true })
 
+export const getChannelProfiles = () => fetchJson<ChannelProbeResult[]>('/api/channels/profiles', { silent: true })
+
 export const probeChannels = (
   channelIds: number[],
   options?: { concurrency?: number; retries?: number },

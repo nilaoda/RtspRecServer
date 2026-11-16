@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { AppConfig, ChannelConfig, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TaskErrorLogEntry, TaskErrorLogMessage, TimerUpsertPayload } from '../types'
+import type { AppConfig, ChannelConfig, ChannelProbeResult, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TaskErrorLogEntry, TaskErrorLogMessage, TimerUpsertPayload } from '../types'
 import {
   addChannel,
   clearTaskErrorLog as clearTaskErrorLogApi,
@@ -11,6 +11,7 @@ import {
   deleteRecordings as deleteRecordingsApi,
   deleteTimer as deleteTimerApi,
   getChannels,
+  getChannelProfiles,
   getConfig,
   getRecordings,
   getRecordingMediaInfo,
@@ -62,6 +63,7 @@ const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [tasks, setTasks] = useState<RecordingTaskDto[]>([])
   const [channels, setChannels] = useState<ChannelConfig[]>([])
+  const [channelProfiles, setChannelProfiles] = useState<Record<number, ChannelProbeResult>>({})
   const [recordings, setRecordings] = useState<RecordingFileInfo[]>([])
   const [timers, setTimers] = useState<RecordingTimer[]>([])
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
@@ -110,6 +112,15 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       notifyError('加载频道失败')
     }
   }, [notifyError])
+
+  const reloadChannelProfiles = useCallback(async () => {
+    try {
+      const data = await getChannelProfiles()
+      setChannelProfiles(Object.fromEntries(data.map((result) => [result.channelId, result])))
+    } catch {
+      // 检测档案加载失败不阻塞主流程
+    }
+  }, [])
 
   const reloadRecordings = useCallback(async () => {
     try {
@@ -200,13 +211,14 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       refreshSystemStatus()
       reloadTasks()
       reloadChannels()
+      reloadChannelProfiles()
       reloadRecordings()
       reloadTimers()
       reloadConfig()
       reloadTaskErrorLog()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadTimers, reloadConfig, reloadTaskErrorLog])
+  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadChannelProfiles, reloadRecordings, reloadTimers, reloadConfig, reloadTaskErrorLog])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -231,6 +243,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       refreshSystemStatus()
       reloadTasks()
       reloadChannels()
+      reloadChannelProfiles()
       reloadRecordings()
       reloadTimers()
       reloadConfig()
@@ -246,7 +259,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', sync)
     }
-  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadRecordings, reloadTimers, reloadConfig])
+  }, [refreshSystemStatus, reloadTasks, reloadChannels, reloadChannelProfiles, reloadRecordings, reloadTimers, reloadConfig])
 
   useEffect(() => {
     let cancelled = false
@@ -441,11 +454,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         await updateChannel(payload.id, payload)
         notifySuccess('已保存')
         reloadChannels()
+        reloadChannelProfiles()
       } catch {
         return
       }
     },
-    [notifySuccess, reloadChannels],
+    [notifySuccess, reloadChannels, reloadChannelProfiles],
   )
 
   const deleteChannelAction = useCallback(
@@ -454,11 +468,12 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         await removeChannel(id)
         notifySuccess('已删除频道')
         reloadChannels()
+        reloadChannelProfiles()
       } catch {
         return
       }
     },
-    [notifySuccess, reloadChannels],
+    [notifySuccess, reloadChannels, reloadChannelProfiles],
   )
 
   const createTimerAction = useCallback(
@@ -530,7 +545,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
         }
         
         const durationSeconds = Math.max(1, (now.getTime() - startedAt) / 1000)
-        const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
+        const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1000)
         return total + bitrateKbps
       }, 0)
   }, [tasks, now])
@@ -556,6 +571,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     () => ({
       tasks,
       channels,
+      channelProfiles,
       recordings,
       timers,
       systemStatus,
@@ -575,6 +591,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       setThemeMode,
       reloadTasks,
       reloadChannels,
+      reloadChannelProfiles,
       reloadRecordings,
       reloadTimers,
       reloadConfig,
@@ -600,6 +617,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
     [
       tasks,
       channels,
+      channelProfiles,
       recordings,
       timers,
       systemStatus,
@@ -613,6 +631,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       setThemeMode,
       reloadTasks,
       reloadChannels,
+      reloadChannelProfiles,
       reloadRecordings,
       reloadTimers,
       reloadConfig,

@@ -28,6 +28,7 @@ logs/
 **/logs/
 recsettings.json
 channels.json
+channel-profiles.json
 *.log
 
 src/backend/Server/wwwroot/

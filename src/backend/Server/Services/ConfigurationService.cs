@@ -26,6 +26,8 @@ public sealed class ConfigurationService
         _bootConfig = GetAppConfig();
     }
 
+    internal string BasePath => _basePath;
+
     public AppConfig GetAppConfig()
     {
         _lock.EnterUpgradeableReadLock();

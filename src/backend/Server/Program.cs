@@ -218,6 +218,11 @@ try
         return Results.Ok(service.GetResults().ToList());
     });
 
+    app.MapGet("/api/channels/profiles", (ChannelProbeService service) =>
+    {
+        return Results.Ok(service.GetProfiles().ToList());
+    });
+
     app.MapPost("/api/channels/probe", async (
         ChannelProbeService service,
         ChannelProbeRequest request,
@@ -231,24 +236,50 @@ try
         return Results.Ok(results.ToList());
     });
 
-    app.MapPut("/api/channels/{id:int}", (ConfigurationService service, int id, ChannelConfig channel) =>
+    app.MapPut("/api/channels/{id:int}", (
+        ConfigurationService service,
+        ChannelProbeService probeService,
+        int id,
+        ChannelConfig channel) =>
     {
+        var existing = service.GetChannels().FirstOrDefault(item => item.Id == id);
         var updated = service.UpdateChannel(id, channel);
-        return updated is null ? Results.NotFound(ApiResponse.Create("频道不存在")) : Results.Ok(updated);
+        if (updated is null)
+        {
+            return Results.NotFound(ApiResponse.Create("频道不存在"));
+        }
+
+        if (existing is null || existing.Url != updated.Url)
+        {
+            probeService.InvalidateChannel(id);
+        }
+        return Results.Ok(updated);
     });
 
-    app.MapDelete("/api/channels/{id:int}", (ConfigurationService service, int id) =>
+    app.MapDelete("/api/channels/{id:int}", (
+        ConfigurationService service,
+        ChannelProbeService probeService,
+        int id) =>
     {
-        return service.DeleteChannel(id)
-            ? Results.Ok(ApiResponse.Create("频道已删除"))
-            : Results.NotFound(ApiResponse.Create("频道不存在"));
+        if (!service.DeleteChannel(id))
+        {
+            return Results.NotFound(ApiResponse.Create("频道不存在"));
+        }
+
+        probeService.InvalidateChannel(id);
+        return Results.Ok(ApiResponse.Create("频道已删除"));
     });
 
     app.MapPost("/api/channels/bulk-delete", (
         ConfigurationService service,
+        ChannelProbeService probeService,
         ChannelBulkRequest request) =>
     {
         var result = service.DeleteChannels(request.ChannelIds);
+        if (result.SucceededIds.Length > 0)
+        {
+            probeService.InvalidateChannels(result.SucceededIds);
+        }
         return Results.Ok(result);
     });
 

@@ -10,6 +10,7 @@ import { useAppContext } from '../../app/context'
 import { deleteChannels, getChannelProbes, probeChannels } from '../../services/api'
 import type { ChannelProbeResult } from '../../types'
 import { formatDateTime } from '../shared/format'
+import { formatProbeBitrate } from '../shared/channel-probe'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 
 import { Button } from "@/components/ui/button"
@@ -91,13 +92,6 @@ const channelSchema = z.object({
 
 type ChannelFormValues = z.infer<typeof channelSchema>
 
-const formatProbeBitrate = (kbps?: number) => {
-  if (!kbps || kbps <= 0) {
-    return '码率未识别'
-  }
-  return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} Kb/s`
-}
-
 const trackLabels = (tracks: ChannelProbeResult['videoTracks']) => {
   const labels = tracks.map((track) => track.label).filter(Boolean)
   return labels.length > 0 ? labels.join(' / ') : '未识别'
@@ -116,7 +110,7 @@ const probeErrorHint = (url: string) => {
 }
 
 const ChannelsPage = () => {
-  const { channels, addChannel, updateChannel, deleteChannel, reloadChannels } = useAppContext()
+  const { channels, addChannel, updateChannel, deleteChannel, reloadChannels, reloadChannelProfiles } = useAppContext()
   const [drafts, setDrafts] = useState<Record<number, { name: string; url: string }>>({})
   const [probes, setProbes] = useState<Record<number, ChannelProbeResult>>({})
   const [probingIds, setProbingIds] = useState<Set<number>>(() => new Set())
@@ -274,6 +268,7 @@ const ChannelsPage = () => {
         })
         return next
       })
+      void reloadChannelProfiles()
     } catch {
       toast.error('频道检测失败，请检查服务端状态')
     } finally {
@@ -283,7 +278,7 @@ const ChannelsPage = () => {
         return next
       })
     }
-  }, [probeConcurrency, probeRetries])
+  }, [probeConcurrency, probeRetries, reloadChannelProfiles])
 
   const probeAll = () => {
     if (probingIds.size > 0) {
@@ -322,10 +317,11 @@ const ChannelsPage = () => {
         return next
       })
       await reloadChannels()
+      void reloadChannelProfiles()
     } catch {
       toast.error('批量删除失败')
     }
-  }, [reloadChannels])
+  }, [reloadChannels, reloadChannelProfiles])
 
   const onBulkDelete = async () => {
     const ids = [...selectedChannelIds]

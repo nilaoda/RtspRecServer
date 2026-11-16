@@ -800,7 +800,7 @@ public sealed class RecordingManager
                 if (timeDiff >= 1.0 && _lastBytesWritten > 0) // 每秒更新一次
                 {
                     var bytesDiff = currentBytes - _lastBytesWritten;
-                    _currentBitrateKbps = (bytesDiff * 8.0) / (timeDiff * 1024.0); // Kb/s
+                    _currentBitrateKbps = (bytesDiff * 8.0) / (timeDiff * 1000.0); // kbps（1 kbps = 1000 bit/s）
                     _lastBytesWritten = currentBytes;
                     _lastBitrateUpdate = now;
                 }

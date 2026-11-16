@@ -182,12 +182,12 @@ const getTaskDisplay = (task: RecordingTaskDto, nowMs: number): TaskDisplay => {
 
   let bitrateDisplay = '--'
   if (task.currentBitrateKbps !== undefined && task.currentBitrateKbps > 0) {
-    bitrateDisplay = `${task.currentBitrateKbps.toFixed(1)} Kb/s`
+    bitrateDisplay = `${task.currentBitrateKbps.toFixed(1)} kbps`
   } else if (Number.isFinite(startedAt) && task.bytesWritten > 0) {
     const endTime = Number.isFinite(finishedAt) ? finishedAt : nowMs
     const durationSeconds = Math.max(1, (endTime - startedAt) / 1000)
-    const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1024)
-    bitrateDisplay = `${bitrateKbps.toFixed(1)} Kb/s`
+    const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1000)
+    bitrateDisplay = `${bitrateKbps.toFixed(1)} kbps`
   }
 
   return {
@@ -581,7 +581,7 @@ const TasksPage = () => {
           <div className="flex items-center gap-2 text-sm bg-card p-2 px-4 rounded-full border shadow-sm">
             <span className="text-muted-foreground">实时码率</span>
             <span className={cn("font-mono font-bold", totalBitrateKbps > 0 ? "text-green-500" : "text-muted-foreground")}>
-                {totalBitrateKbps > 0 ? `${totalBitrateKbps.toFixed(1)} Kb/s` : '无录制任务'}
+                {totalBitrateKbps > 0 ? `${totalBitrateKbps.toFixed(1)} kbps` : '无录制任务'}
             </span>
           </div>
       </div>
@@ -851,7 +851,7 @@ const TasksPage = () => {
                                                             TS 检测：{tsVerdictLabel[task.tsCheck.verdict] ?? '未知'} · 错误 {task.tsCheck.errorCount} · 警告 {task.tsCheck.warningCount}
                                                         </div>
                                                         <div>视频：{tsTrackText(task.tsCheck.videoTracks, task.tsCheck.video)} · 音频：{tsTrackText(task.tsCheck.audioTracks, task.tsCheck.audio)}</div>
-                                                        <div>码率 {task.tsCheck.bitrateKbps.toFixed(0)} Kb/s</div>
+                                                        <div>码率 {task.tsCheck.bitrateKbps.toFixed(0)} kbps</div>
                                                         <div className="text-muted-foreground">点击查看完整扫描结果</div>
                                                     </TooltipContent>
                                                 )}

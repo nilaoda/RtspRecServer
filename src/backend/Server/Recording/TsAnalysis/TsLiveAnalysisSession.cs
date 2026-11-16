@@ -131,6 +131,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     }
 }
 
+// 码率按 SI 换算：1 kbps = 1000 bit/s，与 ffmpeg/MediaInfo 一致；文件大小仍按 1024 进制。
 internal static class TsCheckSummaryMapper
 {
     public const int MaxAnomalyEvents = 5;
@@ -168,7 +169,7 @@ internal static class TsCheckSummaryMapper
             WarningCount = progress.WarningCount,
             PacketCount = progress.PacketCount,
             BytesScanned = progress.BytesScanned,
-            BitrateKbps = progress.BytesPerSecond * 8 / 1024,
+            BitrateKbps = progress.BytesPerSecond * 8 / 1000,
             Video = videoTracks.FirstOrDefault()?.Label,
             Audio = audioTracks.FirstOrDefault()?.Label,
             VideoTracks = videoTracks,
@@ -216,7 +217,7 @@ internal static class TsCheckSummaryMapper
             PacketCount = result.PacketCount,
             BytesScanned = result.BytesScanned,
             BitrateKbps = result.Elapsed.TotalSeconds > 0
-                ? result.BytesScanned * 8 / result.Elapsed.TotalSeconds / 1024
+                ? result.BytesScanned * 8 / result.Elapsed.TotalSeconds / 1000
                 : 0,
             Video = videoTracks.FirstOrDefault()?.Label,
             Audio = audioTracks.FirstOrDefault()?.Label,

@@ -5,6 +5,7 @@ import * as z from 'zod'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAppContext } from '../../app/context'
+import { formatChannelCodecSummary } from '../shared/channel-probe'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -78,7 +79,7 @@ export default function TaskFormDialog({
   onOpenChange: (open: boolean) => void
   initialValues?: TaskFormInitialValues
 }) {
-  const { tasks, channels, createTask, appConfig } = useAppContext()
+  const { tasks, channels, channelProfiles, createTask, appConfig } = useAppContext()
   const [openCombobox, setOpenCombobox] = useState(false)
   const comboboxListRef = useRef<HTMLDivElement>(null)
   const fromEpg = initialValues != null
@@ -241,6 +242,9 @@ export default function TaskFormDialog({
               name="channelId"
               render={({ field }) => {
                 const selectedChannel = channels.find((channel) => String(channel.id) === field.value)
+                const selectedCodec = selectedChannel
+                  ? formatChannelCodecSummary(channelProfiles[selectedChannel.id])
+                  : null
                 return (
                   <FormItem className="flex flex-col">
                     <FormLabel>频道</FormLabel>
@@ -253,9 +257,16 @@ export default function TaskFormDialog({
                             className={cn('w-full min-w-0 justify-between', !field.value && 'text-muted-foreground')}
                           >
                             {selectedChannel ? (
-                              <span className="flex min-w-0 items-center gap-2">
-                                <span className="truncate">{selectedChannel.name}</span>
-                                <ChannelProtocolBadge url={selectedChannel.url} />
+                              <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <span className="truncate">{selectedChannel.name}</span>
+                                  <ChannelProtocolBadge url={selectedChannel.url} />
+                                </span>
+                                {selectedCodec && (
+                                  <span className="max-w-full truncate text-[11px] font-normal text-muted-foreground">
+                                    {selectedCodec}
+                                  </span>
+                                )}
                               </span>
                             ) : (
                               <span className="truncate">选择频道...</span>
@@ -281,28 +292,36 @@ export default function TaskFormDialog({
                           <CommandList ref={comboboxListRef}>
                             <CommandEmpty>未找到频道</CommandEmpty>
                             <CommandGroup>
-                              {channels.map((channel) => (
-                                <CommandItem
-                                  value={`${channel.id} ${channel.name}`}
-                                  key={channel.id}
-                                  className="gap-2"
-                                  onSelect={() => {
-                                    form.setValue('channelId', String(channel.id))
-                                    setOpenCombobox(false)
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      'mr-2 h-4 w-4 shrink-0',
-                                      channel.id.toString() === field.value ? 'opacity-100' : 'opacity-0',
-                                    )}
-                                  />
-                                  <span className="truncate">
-                                    {channel.id} - {channel.name}
-                                  </span>
-                                  <ChannelProtocolBadge url={channel.url} className="ml-auto" />
-                                </CommandItem>
-                              ))}
+                              {channels.map((channel) => {
+                                const codec = formatChannelCodecSummary(channelProfiles[channel.id])
+                                return (
+                                  <CommandItem
+                                    value={`${channel.id} ${channel.name} ${codec ?? ''}`}
+                                    key={channel.id}
+                                    className="gap-2"
+                                    onSelect={() => {
+                                      form.setValue('channelId', String(channel.id))
+                                      setOpenCombobox(false)
+                                    }}
+                                  >
+                                    <Check
+                                      className={cn(
+                                        'mr-2 h-4 w-4 shrink-0',
+                                        channel.id.toString() === field.value ? 'opacity-100' : 'opacity-0',
+                                      )}
+                                    />
+                                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                      <span className="truncate">
+                                        {channel.id} - {channel.name}
+                                      </span>
+                                      <span className="truncate text-[11px] text-muted-foreground">
+                                        {codec ?? '未检测编码'}
+                                      </span>
+                                    </div>
+                                    <ChannelProtocolBadge url={channel.url} className="ml-auto shrink-0" />
+                                  </CommandItem>
+                                )
+                              })}
                             </CommandGroup>
                           </CommandList>
                         </Command>

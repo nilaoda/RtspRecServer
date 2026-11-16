@@ -38,3 +38,16 @@ public sealed record ChannelProbeResult
     public double ElapsedSeconds { get; init; }
     public int Attempts { get; init; } = 1;
 }
+
+/// <summary>最近一次成功检测的档案，用于重启后仍能识别频道编码。</summary>
+public sealed record ChannelProbeProfile
+{
+    public string Url { get; init; } = string.Empty;
+    public ChannelProbeResult Result { get; init; } = new();
+}
+
+public sealed record ChannelProbeProfileCache
+{
+    public int Version { get; init; } = 1;
+    public ChannelProbeProfile[] Entries { get; init; } = [];
+}

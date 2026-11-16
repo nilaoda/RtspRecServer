@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using RtspRecServer.Server.Recording;
 using RtspRecServer.Server.Services;
 using RtspRecServer.Shared;
@@ -19,7 +20,7 @@ public class ChannelProbeServiceTests
                 Url = "rtsp://example.com/1"
             });
             var recording = new FlakyRecordingService(failuresBeforeSuccess: 2);
-            var service = new ChannelProbeService(recording, configuration);
+            var service = CreateService(recording, configuration);
 
             var results = await service.ProbeAsync([channel.Id], concurrency: 2, retries: 3, CancellationToken.None);
 
@@ -47,7 +48,7 @@ public class ChannelProbeServiceTests
                 Url = "rtsp://example.com/1"
             });
             var recording = new FlakyRecordingService(failuresBeforeSuccess: 0);
-            var service = new ChannelProbeService(recording, configuration);
+            var service = CreateService(recording, configuration);
 
             var results = await service.ProbeAsync([channel.Id], concurrency: 3, retries: 5, CancellationToken.None);
 
@@ -75,7 +76,7 @@ public class ChannelProbeServiceTests
                 Url = "rtsp://example.com/1"
             });
             var recording = new FlakyRecordingService(failuresBeforeSuccess: 10);
-            var service = new ChannelProbeService(recording, configuration);
+            var service = CreateService(recording, configuration);
 
             var results = await service.ProbeAsync([channel.Id], concurrency: 1, retries: 1, CancellationToken.None);
 
@@ -89,6 +90,128 @@ public class ChannelProbeServiceTests
         {
             Directory.Delete(directory, true);
         }
+    }
+
+    [Fact]
+    public async Task ProbeAsync_PersistsProfileAcrossRestart()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var configuration = new ConfigurationService(directory);
+            var channel = configuration.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1"
+            });
+            var service = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 0), configuration);
+
+            await service.ProbeAsync([channel.Id], concurrency: 1, retries: 0, CancellationToken.None);
+
+            Assert.True(File.Exists(Path.Combine(directory, "channel-profiles.json")));
+
+            var reloaded = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 10), new ConfigurationService(directory));
+            var profile = Assert.Single(reloaded.GetProfiles());
+            Assert.Equal(channel.Id, profile.ChannelId);
+            Assert.True(profile.Accessible);
+            Assert.Equal("H.264", Assert.Single(profile.VideoTracks).Label);
+            Assert.Contains(reloaded.GetResults(), result => result.ChannelId == channel.Id && result.Accessible);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task ProbeFailure_KeepsLastSuccessfulProfile()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var configuration = new ConfigurationService(directory);
+            var channel = configuration.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1"
+            });
+            var service = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 0), configuration);
+            await service.ProbeAsync([channel.Id], concurrency: 1, retries: 0, CancellationToken.None);
+
+            var failing = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 10), new ConfigurationService(directory));
+            var results = await failing.ProbeAsync([channel.Id], concurrency: 1, retries: 0, CancellationToken.None);
+
+            Assert.False(Assert.Single(results).Accessible);
+            var profile = Assert.Single(failing.GetProfiles());
+            Assert.True(profile.Accessible);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidateChannel_RemovesPersistedProfile()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var configuration = new ConfigurationService(directory);
+            var channel = configuration.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1"
+            });
+            var service = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 0), configuration);
+            await service.ProbeAsync([channel.Id], concurrency: 1, retries: 0, CancellationToken.None);
+
+            service.InvalidateChannel(channel.Id);
+
+            Assert.Empty(service.GetProfiles());
+            var reloaded = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 0), new ConfigurationService(directory));
+            Assert.Empty(reloaded.GetProfiles());
+            Assert.Empty(reloaded.GetResults());
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task GetProfiles_DropsProfileAfterUrlChange()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var configuration = new ConfigurationService(directory);
+            var channel = configuration.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1"
+            });
+            var service = CreateService(new FlakyRecordingService(failuresBeforeSuccess: 0), configuration);
+            await service.ProbeAsync([channel.Id], concurrency: 1, retries: 0, CancellationToken.None);
+
+            new ConfigurationService(directory).UpdateChannel(channel.Id, channel with
+            {
+                Url = "rtsp://example.com/2"
+            });
+
+            Assert.Empty(service.GetProfiles());
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    private static ChannelProbeService CreateService(
+        IRecordingService recording,
+        ConfigurationService configuration)
+    {
+        return new ChannelProbeService(recording, configuration, NullLogger<ChannelProbeService>.Instance);
     }
 
     private static string CreateTempDirectory()
@@ -132,7 +255,9 @@ public class ChannelProbeServiceTests
                         Verdict = "pass",
                         PacketCount = 10,
                         BytesScanned = 1880,
-                        BitrateKbps = 1000
+                        BitrateKbps = 1000,
+                        VideoTracks = [new TsStreamTrack { Pid = 256, Label = "H.264" }],
+                        AudioTracks = [new TsStreamTrack { Pid = 257, Label = "AAC" }]
                     }
                     : null
             });

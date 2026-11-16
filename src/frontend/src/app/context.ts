@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react'
 import type {
   AppConfig,
   ChannelConfig,
+  ChannelProbeResult,
   RecordingFileDeleteResult,
   RecordingFileInfo,
   RecordingTaskDto,
@@ -15,6 +16,7 @@ import type { UpdateConfigPayload } from '../services/api'
 export type AppContextValue = {
   tasks: RecordingTaskDto[]
   channels: ChannelConfig[]
+  channelProfiles: Record<number, ChannelProbeResult>
   recordings: RecordingFileInfo[]
   timers: RecordingTimer[]
   systemStatus: SystemStatus | null
@@ -26,6 +28,7 @@ export type AppContextValue = {
   setThemeMode: (mode: 'dark' | 'light') => void
   reloadTasks: () => Promise<void>
   reloadChannels: () => Promise<void>
+  reloadChannelProfiles: () => Promise<void>
   reloadRecordings: () => Promise<void>
   reloadTimers: () => Promise<void>
   reloadConfig: () => Promise<void>
