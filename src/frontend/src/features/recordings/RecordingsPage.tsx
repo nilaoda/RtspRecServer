@@ -3,6 +3,7 @@ import { Info, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 
 import { useAppContext } from '../../app/context'
 import { formatBytes, formatDateTime } from '../shared/format'
+import PlayLinkMenu from '../shared/play-link-menu'
 
 import { Button } from "@/components/ui/button"
 import {
@@ -44,6 +45,8 @@ import {
 import { cn } from "@/lib/utils"
 
 type DeleteTarget = { fileNames: string[]; totalBytes: number }
+
+const getRecordingPlayPath = (fileName: string) => `/api/recordings/play/${encodeURIComponent(fileName)}`
 
 const RecordingsPage = () => {
   const { recordings, reloadRecordings, getRecordingMediaInfo, tasks, deleteRecordings } = useAppContext()
@@ -250,6 +253,7 @@ const RecordingsPage = () => {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
+                          <PlayLinkMenu path={getRecordingPlayPath(record.fileName)} name={record.fileName} className="h-8 w-8" />
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -327,6 +331,7 @@ const RecordingsPage = () => {
                       </div>
                     </div>
                     <div className="flex justify-end gap-1">
+                      <PlayLinkMenu path={getRecordingPlayPath(record.fileName)} name={record.fileName} withLabel />
                       <Button variant="ghost" size="sm" onClick={() => onViewInfo(record.filePath, record.fileName)}>
                         <Info className="mr-1.5 h-4 w-4" />
                         信息

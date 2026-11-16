@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Encodings.Web;
-using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using RtspRecServer.Server.Recording;
@@ -49,10 +48,8 @@ try
         options.ShutdownTimeout = TimeSpan.FromSeconds(2);
     });
 
-    builder.Services.AddResponseCompression(options =>
-    {
-        options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(["application/octet-stream"]);
-    });
+    // 默认压缩文本资源；不压缩 application/octet-stream（录像下载/播放）以免破坏 Range 语义
+    builder.Services.AddResponseCompression();
 
     builder.Services.AddSingleton<ConfigurationService>();
     builder.Services.AddSingleton<RecordingTaskStore>();
@@ -382,7 +379,7 @@ try
         }
 
         var fileName = Path.GetFileName(task.FilePath);
-        return Results.File(task.FilePath, "application/octet-stream", fileName);
+        return Results.File(task.FilePath, "application/octet-stream", fileName, enableRangeProcessing: true);
     });
 
     app.MapGet("/api/tasks/{id:long}/download/{fileName}", (RecordingManager manager, long id, string fileName) =>
@@ -394,7 +391,18 @@ try
         }
 
         var actualFileName = Path.GetFileName(task.FilePath);
-        return Results.File(task.FilePath, "application/octet-stream", actualFileName);
+        return Results.File(task.FilePath, "application/octet-stream", actualFileName, enableRangeProcessing: true);
+    });
+
+    app.MapGet("/api/tasks/{id:long}/play/{fileName}", (RecordingManager manager, long id, string fileName) =>
+    {
+        var task = manager.GetTask(id);
+        if (task?.FilePath is null || !File.Exists(task.FilePath))
+        {
+            return Results.NotFound(ApiResponse.Create("录制文件不存在"));
+        }
+
+        return Results.File(task.FilePath, GetPlaybackContentType(task.FilePath), enableRangeProcessing: true);
     });
 
     app.MapGet("/api/tasks/{id:long}/mediainfo", async (RecordingManager manager, long id) =>
@@ -521,6 +529,19 @@ try
         var clientIp = context.Connection.RemoteIpAddress?.ToString();
         var result = RecordingFileDeletion.Delete(recordPath, request.FileNames, manager.GetActiveOutputPaths(), clientIp);
         return Results.Ok(result);
+    });
+
+    app.MapGet("/api/recordings/play/{fileName}", (ConfigurationService configurationService, string fileName) =>
+    {
+        var config = configurationService.GetAppConfig();
+        var recordPath = ResolveRecordPath(config.RecordPath);
+        var resolve = RecordingFileResolver.Resolve(recordPath, fileName, out var fullPath);
+        return resolve switch
+        {
+            RecordingFileResolveResult.Ok => Results.File(fullPath, GetPlaybackContentType(fullPath), enableRangeProcessing: true),
+            RecordingFileResolveResult.NotFound => Results.NotFound(ApiResponse.Create("录制文件不存在")),
+            _ => Results.BadRequest(ApiResponse.Create("非法路径"))
+        };
     });
 
     app.MapGet("/api/recordings/mediainfo", async (ConfigurationService configurationService, string filePath) =>
@@ -757,7 +778,16 @@ static string ResolveRecordPath(string recordPath)
 }
 
 static bool IsPathUnderRoot(string rootPath, string targetPath)
-    => RecordingFileDeletion.IsPathUnderRoot(rootPath, targetPath);
+    => RecordingFileResolver.IsPathUnderRoot(rootPath, targetPath);
+
+static string GetPlaybackContentType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+{
+    ".ts" => "video/mp2t",
+    ".mp4" => "video/mp4",
+    ".mkv" => "video/x-matroska",
+    ".m4v" => "video/mp4",
+    _ => "application/octet-stream"
+};
 
 static AppConfig LoadAppConfig()
 {

@@ -45,43 +45,25 @@ internal static class RecordingFileDeletion
 
     private static string? TryDelete(string fullRoot, string fileName, IReadOnlySet<string> activePaths, string? clientIp)
     {
-        // 只接受纯文件名：拒绝路径分隔符、盘符/数据流冒号、超长名与控制字符，防止目录穿越与日志注入
-        if (fileName.Length > 255 ||
-            fileName.Any(char.IsControl) ||
-            fileName is "." or ".." ||
-            fileName.IndexOf('/') >= 0 ||
-            fileName.IndexOf('\\') >= 0 ||
-            fileName.IndexOf(':') >= 0 ||
-            fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        var error = RecordingFileResolver.Resolve(fullRoot, fileName, out var fullPath) switch
         {
-            return "文件名不合法";
+            RecordingFileResolveResult.Ok => null,
+            RecordingFileResolveResult.NotTs => "仅支持删除 .ts 录像文件",
+            RecordingFileResolveResult.NotFound => "文件不存在",
+            RecordingFileResolveResult.Symlink => "不允许删除符号链接",
+            _ => "文件名不合法"
+        };
+        if (error is not null)
+        {
+            return error;
         }
 
-        if (!string.Equals(Path.GetExtension(fileName), ".ts", StringComparison.OrdinalIgnoreCase))
-        {
-            return "仅支持删除 .ts 录像文件";
-        }
-
-        var fullPath = Path.GetFullPath(Path.Combine(fullRoot, fileName));
-        if (!IsPathUnderRoot(fullRoot, fullPath))
-        {
-            return "非法路径";
-        }
-
-        var info = new FileInfo(fullPath);
-        if (!info.Exists)
-        {
-            return "文件不存在";
-        }
-        if (info.LinkTarget is not null)
-        {
-            return "不允许删除符号链接";
-        }
         if (activePaths.Contains(fullPath))
         {
             return "文件正在录制中";
         }
 
+        var info = new FileInfo(fullPath);
         var size = info.Length;
         try
         {
@@ -109,7 +91,7 @@ internal static class RecordingFileDeletion
     private static void DeleteSidecarLog(string fullPath, string fullRoot)
     {
         var logPath = Path.ChangeExtension(fullPath, ".log");
-        if (!IsPathUnderRoot(fullRoot, logPath))
+        if (!RecordingFileResolver.IsPathUnderRoot(fullRoot, logPath))
         {
             return;
         }
@@ -128,12 +110,5 @@ internal static class RecordingFileDeletion
         {
             Log.Warning(ex, "删除录像日志失败: {LogPath}", logPath);
         }
-    }
-
-    internal static bool IsPathUnderRoot(string rootPath, string targetPath)
-    {
-        var fullRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var fullTarget = Path.GetFullPath(targetPath);
-        return fullTarget.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
     }
 }

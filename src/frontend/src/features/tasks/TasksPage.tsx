@@ -9,6 +9,7 @@ import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import TaskFormDialog from './TaskFormDialog'
 import TsCheckDialog from './TsCheckDialog'
+import PlayLinkMenu from '../shared/play-link-menu'
 import { tsCodecText, tsTrackText, tsVerdictClass, tsVerdictLabel } from './ts-display'
 
 import { cn } from "@/lib/utils"
@@ -216,6 +217,9 @@ const getTaskDownloadFileName = (task: RecordingTaskDto) => {
 
 const getTaskDownloadUrl = (task: RecordingTaskDto) =>
   `/api/tasks/${task.id}/download/${encodeURIComponent(getTaskDownloadFileName(task))}`
+
+const getTaskPlayPath = (task: RecordingTaskDto) =>
+  `/api/tasks/${task.id}/play/${encodeURIComponent(getTaskDownloadFileName(task))}`
 
 const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
   <Badge variant={statusVariant[status]} className={cn(
@@ -544,6 +548,7 @@ const TasksPage = () => {
             >
               <Info className="h-4 w-4" />
             </Button>
+            <PlayLinkMenu path={getTaskPlayPath(task)} name={getTaskDownloadFileName(task)} />
             <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
               <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer" aria-label="下载文件" title="下载文件">
                 <Download className="h-4 w-4" />
@@ -946,6 +951,8 @@ const TasksPage = () => {
                                                         </Tooltip>
                                                     </TooltipProvider>
                                                     
+                                                    <PlayLinkMenu path={getTaskPlayPath(task)} name={getTaskDownloadFileName(task)} />
+
                                                     <TooltipProvider>
                                                         <Tooltip>
                                                             <TooltipTrigger asChild>
