@@ -7,6 +7,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     private readonly TsStreamAnalyzer _analyzer = new();
     private readonly TsProgressSink _progressSink = new();
     private long _appendedBytes;
+    private DateTimeOffset? _wallClockStart;
     private bool _completed;
 
     public TsLiveAnalysisSession(string displayName)
@@ -29,6 +30,8 @@ internal sealed class TsLiveAnalysisSession : IDisposable
             return;
         }
 
+        // 首个数据到达的墙钟时间，用于把 0-based 事件时间换算成本地时间
+        _wallClockStart ??= DateTimeOffset.Now;
         try
         {
             _analyzer.AppendOutput(data);
@@ -44,7 +47,9 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     public TsCheckSummary? GetSummary()
     {
         var progress = _progressSink.Latest;
-        return progress is null ? null : TsCheckSummaryMapper.FromProgress(progress.Value, _progressSink.AnomalyEvents);
+        return progress is null
+            ? null
+            : TsCheckSummaryMapper.FromProgress(progress.Value, _progressSink.AnomalyEvents, _wallClockStart);
     }
 
     public TsCheckSummary? Complete()
@@ -62,7 +67,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
 
         try
         {
-            return TsCheckSummaryMapper.FromResult(_analyzer.CompleteSession());
+            return TsCheckSummaryMapper.FromResult(_analyzer.CompleteSession(), _wallClockStart);
         }
         catch
         {
@@ -86,7 +91,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     {
         private readonly object _lock = new();
         private TsCheckProgress? _latest;
-        private readonly List<string> _anomalyEvents = [];
+        private readonly List<TsCheckEvent> _anomalyEvents = [];
 
         public TsCheckProgress? Latest
         {
@@ -99,7 +104,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
             }
         }
 
-        public string[] AnomalyEvents
+        public IReadOnlyList<TsCheckEvent> AnomalyEvents
         {
             get
             {
@@ -117,9 +122,9 @@ internal sealed class TsLiveAnalysisSession : IDisposable
                 _latest = value;
                 if (value.NewEvent is { } newEvent &&
                     newEvent.Severity != TsCheckSeverity.Info &&
-                    _anomalyEvents.Count < TsCheckSummaryMapper.MaxAnomalyEvents)
+                    _anomalyEvents.Count < TsCheckSummaryMapper.MaxTrackedAnomalyEvents)
                 {
-                    _anomalyEvents.Add(TsCheckSummaryMapper.FormatEvent(newEvent));
+                    _anomalyEvents.Add(newEvent);
                 }
             }
         }
@@ -129,8 +134,13 @@ internal sealed class TsLiveAnalysisSession : IDisposable
 internal static class TsCheckSummaryMapper
 {
     public const int MaxAnomalyEvents = 5;
+    public const int MaxTrackedAnomalyEvents = 50;
+    private const double AnomalyGroupWindowSeconds = 3.0;
 
-    public static TsCheckSummary FromProgress(TsCheckProgress progress, IReadOnlyList<string>? anomalyEvents = null)
+    public static TsCheckSummary FromProgress(
+        TsCheckProgress progress,
+        IReadOnlyList<TsCheckEvent>? anomalyEvents = null,
+        DateTimeOffset? wallClockStart = null)
     {
         var videoTracks = FindTracks(
             progress.Pids,
@@ -164,12 +174,17 @@ internal static class TsCheckSummaryMapper
             VideoTracks = videoTracks,
             AudioTracks = audioTracks,
             PidCount = progress.Pids.Count(static pid => pid.Pid >= 0),
-            LastEvent = progress.NewEvent is null ? null : FormatEvent(progress.NewEvent),
-            AnomalyEvents = anomalyEvents is { Count: > 0 } ? anomalyEvents.ToArray() : [],
+            // 没有新事件的进度也会保留最近一条异常，避免“最近事件”在两帧之间消失
+            LastEvent = progress.NewEvent is { } newEvent
+                ? FormatEvent(newEvent, wallClockStart, newEvent.Occurrences)
+                : anomalyEvents is { Count: > 0 } tracked
+                    ? FormatEvent(tracked[tracked.Count - 1], wallClockStart, tracked[tracked.Count - 1].Occurrences)
+                    : null,
+            AnomalyEvents = BuildAnomalyEvents(anomalyEvents ?? [], wallClockStart),
         };
     }
 
-    public static TsCheckSummary FromResult(TsCheckResult result)
+    public static TsCheckSummary FromResult(TsCheckResult result, DateTimeOffset? wallClockStart = null)
     {
         var videoTracks = FindTracks(
             result.Pids.Values,
@@ -208,14 +223,16 @@ internal static class TsCheckSummaryMapper
             VideoTracks = videoTracks,
             AudioTracks = audioTracks,
             PidCount = result.Pids.Count,
-            LastEvent = lastEvent is null ? null : FormatEvent(lastEvent),
-            AnomalyEvents = BuildAnomalyEvents(result.Events),
+            LastEvent = lastEvent is null ? null : FormatEvent(lastEvent, wallClockStart, lastEvent.Occurrences),
+            AnomalyEvents = BuildAnomalyEvents(result.Events, wallClockStart),
         };
     }
 
-    private static string[] BuildAnomalyEvents(IEnumerable<TsCheckEvent> events)
+    private static string[] BuildAnomalyEvents(IEnumerable<TsCheckEvent> events, DateTimeOffset? wallClockStart)
     {
-        var lines = new List<string>(MaxAnomalyEvents);
+        // 同级别、同类型且在短时间内的异常合并为一条（跨 PID 也合并），避免短时间大量异常刷屏
+        var groups = new List<AnomalyGroup>(MaxAnomalyEvents);
+        var lastGroupByKey = new Dictionary<(TsCheckSeverity, TsCheckEventType), AnomalyGroup>();
         foreach (var item in events)
         {
             if (item.Severity == TsCheckSeverity.Info)
@@ -223,13 +240,54 @@ internal static class TsCheckSummaryMapper
                 continue;
             }
 
-            lines.Add(FormatEvent(item));
-            if (lines.Count >= MaxAnomalyEvents)
+            var key = (item.Severity, item.Type);
+            AnomalyGroup? group = null;
+            if (lastGroupByKey.TryGetValue(key, out var candidate))
             {
-                break;
+                var withinWindow = item.TimeSeconds is not { } time ||
+                                   candidate.LastTime is not { } lastTime ||
+                                   time - lastTime <= AnomalyGroupWindowSeconds;
+                if (withinWindow)
+                {
+                    group = candidate;
+                }
             }
+
+            if (group is null)
+            {
+                group = new AnomalyGroup
+                {
+                    Severity = item.Severity,
+                    Type = item.Type,
+                    First = item
+                };
+                groups.Add(group);
+            }
+
+            group.Occurrences += item.Occurrences;
+            group.Pids.Add(item.Pid);
+            if (item.TimeSeconds is { } eventTime)
+            {
+                group.LastTime = eventTime;
+            }
+
+            lastGroupByKey[key] = group;
         }
-        return lines.ToArray();
+
+        return groups
+            .Take(MaxAnomalyEvents)
+            .Select(group => FormatEvent(group.First, wallClockStart, group.Occurrences, group.Pids.Count))
+            .ToArray();
+    }
+
+    private sealed class AnomalyGroup
+    {
+        public required TsCheckSeverity Severity { get; init; }
+        public required TsCheckEventType Type { get; init; }
+        public required TsCheckEvent First { get; init; }
+        public double? LastTime { get; set; }
+        public long Occurrences { get; set; }
+        public HashSet<int> Pids { get; } = [];
     }
 
     private static TsStreamTrack[] FindTracks<T>(
@@ -329,7 +387,11 @@ internal static class TsCheckSummaryMapper
         return string.IsNullOrEmpty(language) ? name : $"{name} ({language})";
     }
 
-    public static string FormatEvent(TsCheckEvent item)
+    public static string FormatEvent(
+        TsCheckEvent item,
+        DateTimeOffset? wallClockStart = null,
+        long occurrences = 1,
+        int pidCount = 1)
     {
         var label = item.Type switch
         {
@@ -358,9 +420,23 @@ internal static class TsCheckSummaryMapper
             _ => item.Type.ToString(),
         };
 
-        var text = item.Pid >= 0 ? $"{label} (PID 0x{item.Pid:X4})" : label;
-        return item.TimeSeconds is { } seconds
-            ? $"{TsCheckEvent.FormatTime(seconds)}{(item.IsEstimatedTime ? "*" : string.Empty)} {text}"
-            : text;
+        var pidText = pidCount > 1
+            ? $"({pidCount} 个 PID)"
+            : item.Pid >= 0
+                ? $"(PID 0x{item.Pid:X4})"
+                : string.Empty;
+        var text = pidText.Length > 0 ? $"{label} {pidText}" : label;
+
+        string? timeText = null;
+        if (item.TimeSeconds is { } seconds)
+        {
+            var relative = $"{TsCheckEvent.FormatTime(seconds)}{(item.IsEstimatedTime ? "*" : string.Empty)}";
+            timeText = wallClockStart is { } start
+                ? $"{start.ToLocalTime().AddSeconds(seconds):HH:mm:ss} / {relative}"
+                : relative;
+        }
+
+        var countText = occurrences > 1 ? $"×{occurrences}" : null;
+        return string.Join(' ', new[] { timeText, countText, text }.Where(part => !string.IsNullOrEmpty(part)));
     }
 }

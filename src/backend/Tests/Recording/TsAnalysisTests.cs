@@ -120,11 +120,77 @@ public class TsAnalysisTests
         Assert.NotNull(summary);
         Assert.True(summary!.ErrorCount > 0);
         Assert.Equal("error", summary.Verdict);
-        // 事件带相对录制开始的 0-based 时刻（此处最后已知 PCR 为 1 秒）
+        // 事件同时带本地时间和相对录制开始的 0-based 时刻（此处最后已知 PCR 为 1 秒）
         var gapLine = Assert.Single(summary.AnomalyEvents, line => line.Contains("连续计数缺口"));
-        Assert.StartsWith("00:00:01", gapLine);
+        Assert.Contains("00:00:01", gapLine);
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2} / \d{2}:\d{2}:\d{2}\.\d{3}\*? ", gapLine);
         Assert.NotNull(summary.LastEvent);
-        Assert.Matches(@"^\d{2}:\d{2}:\d{2}\.\d{3}\*? ", summary.LastEvent);
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2} / \d{2}:\d{2}:\d{2}\.\d{3}\*? ", summary.LastEvent);
+    }
+
+    [Fact]
+    public void LiveSession_ShowsOccurrenceCountForMergedSamePidAnomalies()
+    {
+        var packets = new List<byte[]>
+        {
+            CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
+            CreatePsiPacket(0x0100, 0, BuildPmtSection(0x0101, (TsStreamTypes.H264, 0x0101))),
+            CreatePacket(0x0101, 0, pcrBase: 0),
+            CreatePacket(0x0101, 1),
+            CreatePacket(0x0101, 3),
+            CreatePacket(0x0101, 4),
+            CreatePacket(0x0101, 6),
+        };
+
+        using var session = new TsLiveAnalysisSession("test");
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        // 同一 PID 的两次缺口在合并窗口内应显示发生次数
+        var gapLine = Assert.Single(summary!.AnomalyEvents, line => line.Contains("连续计数缺口"));
+        Assert.Contains("×2", gapLine);
+        Assert.Contains("(PID 0x0101)", gapLine);
+        Assert.DoesNotContain("个 PID", gapLine);
+    }
+
+    [Fact]
+    public void LiveSession_MergesShortBurstAnomaliesAcrossPids()
+    {
+        var packets = new List<byte[]>
+        {
+            CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
+            CreatePsiPacket(0x0100, 0, BuildPmtSection(
+                0x0101,
+                (TsStreamTypes.H264, 0x0101),
+                (TsStreamTypes.Aac, 0x0102))),
+            CreatePacket(0x0101, 0, pcrBase: 0),
+            CreatePesPacket(0x0101, 0, 90_000),
+            CreatePesPacket(0x0102, 0, 90_000, 0xC0),
+            CreatePesPacket(0x0101, 1, 90_000),
+            CreatePesPacket(0x0102, 1, 90_000, 0xC0),
+            CreatePesPacket(0x0101, 3, 180_000),
+            CreatePesPacket(0x0102, 3, 180_000, 0xC0),
+        };
+
+        using var session = new TsLiveAnalysisSession("test");
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        // 两个 PID 在相近时刻的同类异常应合并为一条并显示次数
+        var gapLine = Assert.Single(summary!.AnomalyEvents, line => line.Contains("连续计数缺口"));
+        Assert.Contains("×2", gapLine);
+        Assert.Contains("2 个 PID", gapLine);
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2} / \d{2}:\d{2}:\d{2}\.\d{3}\*? ", gapLine);
     }
 
     private static byte[] CreatePacket(
