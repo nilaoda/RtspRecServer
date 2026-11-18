@@ -135,6 +135,7 @@ const ChannelsPage = () => {
   const [probeRetries, setProbeRetries] = useState(() => readProbeSetting(PROBE_RETRIES_KEY, 0, 0, 5))
   const [probeSettingsOpen, setProbeSettingsOpen] = useState(false)
   const [removeInvalidOpen, setRemoveInvalidOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
   const [probeProgress, setProbeProgress] = useState<{ done: number; total: number } | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const scanningRef = useRef(false)
@@ -481,6 +482,7 @@ const ChannelsPage = () => {
           group: values.group?.trim() || null,
         })
         form.reset()
+        setAddOpen(false)
     } catch {
         // Handled in context
     }
@@ -533,69 +535,6 @@ const ChannelsPage = () => {
           <option key={group} value={group} />
         ))}
       </datalist>
-      <Card className="shrink-0">
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-            <CardTitle className="text-lg font-medium">添加频道</CardTitle>
-            <Button asChild variant="outline" size="sm">
-                <Link to="/channels/import">
-                    <FileUp className="mr-2 h-4 w-4" />
-                    导入 M3U
-                </Link>
-            </Button>
-        </CardHeader>
-        <CardContent>
-            <Form {...form}>
-                <form onSubmit={form.handleSubmit(onAdd)} className="flex flex-col md:flex-row gap-4 items-end">
-                    <FormField
-                        control={form.control}
-                        name="name"
-                        render={({ field }) => (
-                            <FormItem className="w-full md:w-[250px]">
-                                <FormLabel>频道名称</FormLabel>
-                                <FormControl>
-                                    <Input placeholder="输入频道名称" {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="group"
-                        render={({ field }) => (
-                            <FormItem className="w-full md:w-[160px]">
-                                <FormLabel>分组（可选）</FormLabel>
-                                <FormControl>
-                                    <Input placeholder="如：央视" list={GROUP_OPTIONS_ID} {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <FormField
-                        control={form.control}
-                        name="url"
-                        render={({ field }) => (
-                            <FormItem className="flex-1 w-full">
-                                <FormLabel className="flex items-center justify-between gap-2">
-                                    <span>频道地址</span>
-                                    {urlValue?.trim() ? <ChannelProtocolBadge url={urlValue} /> : null}
-                                </FormLabel>
-                                <FormControl>
-                                    <Input placeholder="rtsp://..." {...field} />
-                                </FormControl>
-                                <FormMessage />
-                            </FormItem>
-                        )}
-                    />
-                    <Button type="submit" className="w-full md:w-auto">
-                        <Plus className="mr-2 h-4 w-4" />
-                        添加频道
-                    </Button>
-                </form>
-            </Form>
-        </CardContent>
-      </Card>
 
       <Card className="flex flex-col md:min-h-0 md:flex-1">
         <CardHeader className="flex shrink-0 flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
@@ -614,6 +553,16 @@ const ChannelsPage = () => {
                 </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加频道
+                </Button>
+                <Button asChild variant="outline" size="sm">
+                    <Link to="/channels/import">
+                        <FileUp className="mr-2 h-4 w-4" />
+                        导入 M3U
+                    </Link>
+                </Button>
                 <Select value={groupFilter} onValueChange={onGroupFilterChange}>
                     <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="按分组筛选">
                         <SelectValue />
@@ -985,6 +934,70 @@ const ChannelsPage = () => {
             </div>
         </CardContent>
       </Card>
+
+      <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) form.reset() }}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>添加频道</DialogTitle>
+            <DialogDescription>填写频道名称、分组和地址。</DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onAdd)} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>频道名称</FormLabel>
+                    <FormControl>
+                      <Input placeholder="输入频道名称" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="group"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>分组（可选）</FormLabel>
+                    <FormControl>
+                      <Input placeholder="如：央视" list={GROUP_OPTIONS_ID} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="url"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center justify-between gap-2">
+                      <span>频道地址</span>
+                      {urlValue?.trim() ? <ChannelProtocolBadge url={urlValue} /> : null}
+                    </FormLabel>
+                    <FormControl>
+                      <Input placeholder="rtsp://..." {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button type="button" variant="outline" onClick={() => setAddOpen(false)}>
+                  取消
+                </Button>
+                <Button type="submit">
+                  <Plus className="mr-2 h-4 w-4" />
+                  添加频道
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={detailChannelId !== null} onOpenChange={(open) => { if (!open) setDetailChannelId(null) }}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[520px]">
