@@ -622,10 +622,7 @@ const TasksPage = () => {
           </CardHeader>
           <CardContent className="p-0">
             <TabsContent value={activeTab} className="m-0">
-              <div className={cn(
-                "flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2",
-                selectedCount === 0 && "md:hidden",
-              )}>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2">
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-2 text-xs text-muted-foreground md:hidden">
                     <input
@@ -644,39 +641,42 @@ const TasksPage = () => {
                     已选 <span className="font-medium text-foreground">{selectedCount}</span> 项
                   </span>
                 </div>
-                {selectedCount > 0 ? (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8"
-                      onClick={() => setBulkStopConfirmOpen(true)}
-                      disabled={selectedRecordingIds.length === 0}
-                      title="仅停止正在录制的任务"
-                    >
-                      <StopCircle className="mr-1 h-3.5 w-3.5" />
-                      停止录制
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8"
-                      onClick={() => setBulkDeleteConfirmOpen(true)}
-                      disabled={selectedDeletableIds.length === 0}
-                      title="删除任务记录；等待中的任务会被取消，录像文件不会删除"
-                    >
-                      <Trash2 className="mr-1 h-3.5 w-3.5" />
-                      删除记录
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" className="h-8" onClick={clearSelection}>
-                      取消选择
-                    </Button>
-                  </div>
-                ) : (
-                  <span className="text-[11px] text-muted-foreground">勾选任务后可批量操作</span>
-                )}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => setBulkStopConfirmOpen(true)}
+                    disabled={selectedRecordingIds.length === 0}
+                    title="仅停止正在录制的任务"
+                  >
+                    <StopCircle className="mr-1 h-3.5 w-3.5" />
+                    停止录制
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => setBulkDeleteConfirmOpen(true)}
+                    disabled={selectedDeletableIds.length === 0}
+                    title="删除任务记录；等待中的任务会被取消，录像文件不会删除"
+                  >
+                    <Trash2 className="mr-1 h-3.5 w-3.5" />
+                    删除记录
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8"
+                    onClick={clearSelection}
+                    disabled={selectedCount === 0}
+                  >
+                    取消选择
+                  </Button>
+                </div>
               </div>
               <div className="hidden rounded-md md:block">
                 <Table className="w-full min-w-[1120px] table-fixed">

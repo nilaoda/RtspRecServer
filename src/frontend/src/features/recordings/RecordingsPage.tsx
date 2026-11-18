@@ -162,30 +162,6 @@ const RecordingsPage = () => {
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新列表
           </Button>
-          {selectedRecordings.length > 0 && (
-            <>
-              <span className="text-sm text-muted-foreground">
-                已选 {selectedRecordings.length} 项 · {formatBytes(totalSelectedBytes)}
-              </span>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={deleting}
-                onClick={() =>
-                  setDeleteTarget({
-                    fileNames: selectedRecordings.map((record) => record.fileName),
-                    totalBytes: totalSelectedBytes,
-                  })
-                }
-              >
-                <Trash2 className="mr-1.5 h-4 w-4" />
-                删除选中
-              </Button>
-              <Button variant="ghost" size="sm" onClick={clearSelection} disabled={deleting}>
-                取消选择
-              </Button>
-            </>
-          )}
         </div>
         <div className="text-sm text-muted-foreground bg-muted/50 px-3 py-1 rounded-md">
           已录文件: <span className="font-mono font-medium text-foreground">{visibleRecordings.length}</span>
@@ -197,7 +173,38 @@ const RecordingsPage = () => {
           <CardTitle className="text-lg font-medium">录制文件</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="hidden md:block rounded-md border-t">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2">
+            <span className="text-xs text-muted-foreground">
+              已选 <span className="font-medium text-foreground">{selectedRecordings.length}</span> 项 · {formatBytes(totalSelectedBytes)}
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-8"
+                disabled={selectedRecordings.length === 0 || deleting}
+                onClick={() =>
+                  setDeleteTarget({
+                    fileNames: selectedRecordings.map((record) => record.fileName),
+                    totalBytes: totalSelectedBytes,
+                  })
+                }
+              >
+                <Trash2 className="mr-1.5 h-4 w-4" />
+                删除选中
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                onClick={clearSelection}
+                disabled={selectedRecordings.length === 0 || deleting}
+              >
+                取消选择
+              </Button>
+            </div>
+          </div>
+          <div className="hidden md:block rounded-md">
             <Table>
               <TableHeader>
                 <TableRow>

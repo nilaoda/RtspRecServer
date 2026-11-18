@@ -706,38 +706,41 @@ const ChannelsPage = () => {
             </div>
         </CardHeader>
         <CardContent className="p-0">
-            {selectedCount > 0 && (
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2">
-                    <span className="text-xs text-muted-foreground">
-                        已选 <span className="font-medium text-foreground">{selectedCount}</span> 个频道
-                    </span>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={probeSelected}
-                            disabled={scanning}
-                        >
-                            <Activity className="mr-2 h-4 w-4" />
-                            检测选中
-                        </Button>
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => setBulkDeleteOpen(true)}
-                            disabled={scanning}
-                        >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            删除选中
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setSelectedChannelIds(new Set())}>
-                            取消选择
-                        </Button>
-                    </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2">
+                <span className="text-xs text-muted-foreground">
+                    已选 <span className="font-medium text-foreground">{selectedCount}</span> 个频道
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={probeSelected}
+                        disabled={selectedCount === 0 || scanning}
+                    >
+                        <Activity className="mr-2 h-4 w-4" />
+                        检测选中
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => setBulkDeleteOpen(true)}
+                        disabled={selectedCount === 0 || scanning}
+                    >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        删除选中
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSelectedChannelIds(new Set())}
+                        disabled={selectedCount === 0}
+                    >
+                        取消选择
+                    </Button>
                 </div>
-            )}
-            <div className="rounded-md border-t">
+            </div>
+            <div className="rounded-md">
                 <Table>
                     <TableHeader>
                         <TableRow>

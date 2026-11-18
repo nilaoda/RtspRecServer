@@ -464,7 +464,7 @@ const M3uImportPage = () => {
               <div>
                 <CardTitle className="text-lg font-medium">识别结果</CardTitle>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  默认全选。分组与 Logo 只用于预览，不会写入频道配置。
+                  默认全选。分组会写入频道配置，Logo 仅用于预览。
                 </p>
               </div>
               <Badge variant="secondary" className="w-fit shrink-0">
@@ -737,7 +737,7 @@ const M3uImportPage = () => {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" />本地解析，不上传文件</span>
         <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" />默认全选，可按筛选结果勾选</span>
-        <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" />分组 / Logo 仅预览，只导入名称与地址</span>
+        <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" />只导入名称、地址和分组</span>
       </div>
     </div>
   )
