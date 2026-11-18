@@ -3,12 +3,12 @@ import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save, Settings2, Square, Trash2 } from 'lucide-react'
+import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save, Settings2, Square, Tags, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import { deleteChannels, getChannelProbes, probeChannels } from '../../services/api'
-import type { ChannelProbeResult } from '../../types'
+import { bulkEditChannels, deleteChannels, getChannelProbes, probeChannels } from '../../services/api'
+import type { ChannelBulkEditItem, ChannelProbeResult } from '../../types'
 import { formatDateTime } from '../shared/format'
 import { formatProbeBitrate } from '../shared/channel-probe'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
@@ -80,7 +80,7 @@ const PROBE_CONCURRENCY_KEY = 'rtsp_probe_concurrency'
 const PROBE_RETRIES_KEY = 'rtsp_probe_retries'
 const ALL_GROUPS = '__all_groups__'
 const UNGROUPED = '__ungrouped__'
-const GROUP_OPTIONS_ID = 'channel-group-options'
+const NEW_GROUP_VALUE = '__new_group__'
 
 const clampProbeSetting = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, Math.round(value)))
@@ -136,6 +136,16 @@ const ChannelsPage = () => {
   const [probeSettingsOpen, setProbeSettingsOpen] = useState(false)
   const [removeInvalidOpen, setRemoveInvalidOpen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [newGroupChannelId, setNewGroupChannelId] = useState<number | null>(null)
+  const [newGroupForAdd, setNewGroupForAdd] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [bulkGroupOpen, setBulkGroupOpen] = useState(false)
+  const [bulkGroupValue, setBulkGroupValue] = useState(UNGROUPED)
+  const [bulkGroupNewName, setBulkGroupNewName] = useState('')
+  const [groupManagerOpen, setGroupManagerOpen] = useState(false)
+  const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({})
+  const [groupDeleteTarget, setGroupDeleteTarget] = useState<string | null>(null)
+  const [groupSubmitting, setGroupSubmitting] = useState(false)
   const [probeProgress, setProbeProgress] = useState<{ done: number; total: number } | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const scanningRef = useRef(false)
@@ -151,6 +161,7 @@ const ChannelsPage = () => {
     },
   })
   const urlValue = form.watch('url')
+  const groupValue = form.watch('group')
 
   useEffect(() => {
     let cancelled = false
@@ -214,6 +225,41 @@ const ChannelsPage = () => {
     }
     return [...groups].sort((left, right) => left.localeCompare(right, 'zh-CN'))
   }, [channels])
+
+  const groupStats = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const channel of channels) {
+      const group = channel.group?.trim()
+      if (group) {
+        counts.set(group, (counts.get(group) ?? 0) + 1)
+      }
+    }
+    return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
+  }, [channels])
+
+  const addGroupOptions = groupValue && !groupOptions.includes(groupValue)
+    ? [...groupOptions, groupValue].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+    : groupOptions
+
+  useEffect(() => {
+    if (!groupManagerOpen) {
+      return
+    }
+    setRenameDrafts((previous) => {
+      const next: Record<string, string> = {}
+      let changed = false
+      for (const [group] of groupStats) {
+        next[group] = previous[group] ?? group
+        if (next[group] !== previous[group]) {
+          changed = true
+        }
+      }
+      if (Object.keys(next).length !== Object.keys(previous).length) {
+        changed = true
+      }
+      return changed ? next : previous
+    })
+  }, [groupManagerOpen, groupStats])
 
   const filteredChannels = useMemo(() => {
     if (groupFilter === ALL_GROUPS) {
@@ -429,6 +475,120 @@ const ChannelsPage = () => {
     void runProbe(selectedChannels.map((channel) => channel.id))
   }
 
+  const assignGroupToChannels = useCallback(async (ids: number[], group: string | null) => {
+    if (ids.length === 0) {
+      return null
+    }
+
+    setGroupSubmitting(true)
+    try {
+      const items: ChannelBulkEditItem[] = ids.map((id) => group === null
+        ? { id, clearGroup: true }
+        : { id, group })
+      const result = await bulkEditChannels(items)
+      if (result.failed === 0) {
+        toast.success(`已更新 ${result.succeeded} 个频道的分组`)
+      } else if (result.succeeded > 0) {
+        toast.info(`已更新 ${result.succeeded} 个频道，${result.failed} 个失败`)
+      } else {
+        toast.error('分组更新失败')
+      }
+      await reloadChannels()
+      return result
+    } catch {
+      toast.error('分组更新失败')
+      return null
+    } finally {
+      setGroupSubmitting(false)
+    }
+  }, [reloadChannels])
+
+  const openGroupManager = () => {
+    setRenameDrafts(Object.fromEntries(groupStats.map(([group]) => [group, group])))
+    setGroupManagerOpen(true)
+  }
+
+  const onRenameGroup = async (oldGroup: string) => {
+    const newName = (renameDrafts[oldGroup] ?? oldGroup).trim()
+    if (!newName) {
+      toast.error('分组名称不能为空')
+      return
+    }
+    if (newName === oldGroup) {
+      return
+    }
+    const ids = channels
+      .filter((channel) => (channel.group?.trim() || '') === oldGroup)
+      .map((channel) => channel.id)
+    if (ids.length === 0) {
+      return
+    }
+    await assignGroupToChannels(ids, newName)
+  }
+
+  const onDeleteGroup = async () => {
+    const target = groupDeleteTarget
+    if (!target) {
+      return
+    }
+    const ids = channels
+      .filter((channel) => (channel.group?.trim() || '') === target)
+      .map((channel) => channel.id)
+    setGroupDeleteTarget(null)
+    await assignGroupToChannels(ids, null)
+  }
+
+  const onBulkGroupApply = async () => {
+    const target = bulkGroupNewName.trim() || (bulkGroupValue === UNGROUPED ? null : bulkGroupValue)
+    const result = await assignGroupToChannels(selectedChannels.map((channel) => channel.id), target)
+    if (!result) {
+      return
+    }
+    setBulkGroupOpen(false)
+    if (result.failed === 0) {
+      setSelectedChannelIds(new Set())
+    } else {
+      setSelectedChannelIds(new Set(result.failedItems.map((failure) => failure.id)))
+    }
+  }
+
+  const closeNewGroupDialog = () => {
+    setNewGroupChannelId(null)
+    setNewGroupForAdd(false)
+    setNewGroupName('')
+  }
+
+  const confirmNewGroup = () => {
+    const name = newGroupName.trim()
+    if (!name) {
+      toast.error('分组名称不能为空')
+      return
+    }
+    if (newGroupForAdd) {
+      form.setValue('group', name, { shouldDirty: true, shouldValidate: true })
+      closeNewGroupDialog()
+      return
+    }
+    if (newGroupChannelId === null) {
+      return
+    }
+    const channel = channels.find((item) => item.id === newGroupChannelId)
+    if (!channel) {
+      closeNewGroupDialog()
+      return
+    }
+    const base = drafts[newGroupChannelId] ?? {
+      name: channel.name,
+      url: channel.url,
+      group: channel.group ?? '',
+    }
+    setDrafts((previous) => ({
+      ...previous,
+      [newGroupChannelId]: { ...base, group: name },
+    }))
+    closeNewGroupDialog()
+  }
+
   const removeChannels = useCallback(async (ids: number[]) => {
     if (ids.length === 0) {
       return
@@ -530,12 +690,6 @@ const ChannelsPage = () => {
 
   return (
     <div className="flex min-h-0 flex-col gap-6 md:h-full">
-      <datalist id={GROUP_OPTIONS_ID}>
-        {groupOptions.map((group) => (
-          <option key={group} value={group} />
-        ))}
-      </datalist>
-
       <Card className="flex flex-col md:min-h-0 md:flex-1">
         <CardHeader className="flex shrink-0 flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -578,6 +732,10 @@ const ChannelsPage = () => {
                 {groupFilter !== ALL_GROUPS && (
                     <span className="text-xs text-muted-foreground">显示 {filteredChannels.length}</span>
                 )}
+                <Button size="sm" variant="outline" onClick={openGroupManager} disabled={scanning}>
+                    <Tags className="mr-2 h-4 w-4" />
+                    管理分组
+                </Button>
                 {invalidChannels.length > 0 && (
                     <Button
                         size="sm"
@@ -672,6 +830,19 @@ const ChannelsPage = () => {
                     <Button
                         size="sm"
                         variant="outline"
+                        onClick={() => {
+                            setBulkGroupValue(groupFilter !== ALL_GROUPS && groupFilter !== UNGROUPED ? groupFilter : UNGROUPED)
+                            setBulkGroupNewName('')
+                            setBulkGroupOpen(true)
+                        }}
+                        disabled={selectedCount === 0 || scanning}
+                    >
+                        <Tags className="mr-2 h-4 w-4" />
+                        设置分组
+                    </Button>
+                    <Button
+                        size="sm"
+                        variant="outline"
                         className="text-destructive hover:text-destructive"
                         onClick={() => setBulkDeleteOpen(true)}
                         disabled={selectedCount === 0 || scanning}
@@ -707,7 +878,7 @@ const ChannelsPage = () => {
                             </TableHead>
                             <TableHead className="w-[64px]">ID</TableHead>
                             <TableHead className="w-[230px]">名称</TableHead>
-                            <TableHead className="w-[110px]">分组</TableHead>
+                            <TableHead className="w-[130px]">分组</TableHead>
                             <TableHead className="w-[72px]">协议</TableHead>
                             <TableHead className="min-w-[260px]">地址</TableHead>
                             <TableHead className="min-w-[230px]">检测</TableHead>
@@ -728,6 +899,9 @@ const ChannelsPage = () => {
                                     url: channel.url,
                                     group: channel.group ?? '',
                                 }
+                                const rowGroups = draft.group && !groupOptions.includes(draft.group)
+                                    ? [...groupOptions, draft.group].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+                                    : groupOptions
                                 const hasChanged = draft.name !== channel.name
                                     || draft.url !== channel.url
                                     || draft.group !== (channel.group ?? '')
@@ -758,16 +932,32 @@ const ChannelsPage = () => {
                                             />
                                         </TableCell>
                                         <TableCell className="py-2">
-                                            <Input
-                                                value={draft.group}
-                                                list={GROUP_OPTIONS_ID}
-                                                placeholder="未分组"
-                                                onChange={(e) => setDrafts(prev => ({
-                                                    ...prev,
-                                                    [channel.id]: { ...draft, group: e.target.value }
-                                                }))}
-                                                className="h-8"
-                                            />
+                                            <Select
+                                                value={draft.group || UNGROUPED}
+                                                onValueChange={(value) => {
+                                                    if (value === NEW_GROUP_VALUE) {
+                                                        setNewGroupName('')
+                                                        setNewGroupForAdd(false)
+                                                        setNewGroupChannelId(channel.id)
+                                                        return
+                                                    }
+                                                    setDrafts(prev => ({
+                                                        ...prev,
+                                                        [channel.id]: { ...draft, group: value === UNGROUPED ? '' : value }
+                                                    }))
+                                                }}
+                                            >
+                                                <SelectTrigger className="h-8 w-full text-xs" aria-label={`设置分组 ${channel.name}`}>
+                                                    <SelectValue placeholder="未分组" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value={UNGROUPED}>未分组</SelectItem>
+                                                    {rowGroups.map((group) => (
+                                                        <SelectItem key={group} value={group}>{group}</SelectItem>
+                                                    ))}
+                                                    <SelectItem value={NEW_GROUP_VALUE}>新建分组…</SelectItem>
+                                                </SelectContent>
+                                            </Select>
                                         </TableCell>
                                         <TableCell className="py-2">
                                             <ChannelProtocolBadge url={draft.url} />
@@ -935,6 +1125,165 @@ const ChannelsPage = () => {
         </CardContent>
       </Card>
 
+      <Dialog
+        open={newGroupChannelId !== null || newGroupForAdd}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeNewGroupDialog()
+          }
+        }}
+      >
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>新建分组</DialogTitle>
+            <DialogDescription>
+              {newGroupForAdd ? '输入新分组名称后，将作为当前频道的分组。' : '输入新分组名称后，保存该行即可生效。'}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              confirmNewGroup()
+            }}
+            className="space-y-4"
+          >
+            <Input
+              autoFocus
+              autoComplete="off"
+              value={newGroupName}
+              onChange={(event) => setNewGroupName(event.target.value)}
+              placeholder="新分组名称"
+            />
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button type="button" variant="outline" onClick={closeNewGroupDialog}>
+                取消
+              </Button>
+              <Button type="submit">确定</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bulkGroupOpen} onOpenChange={setBulkGroupOpen}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>设置分组</DialogTitle>
+            <DialogDescription>为选中的 {selectedCount} 个频道设置分组。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">选择已有分组</label>
+              <Select value={bulkGroupValue} onValueChange={setBulkGroupValue}>
+                <SelectTrigger className="h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNGROUPED}>未分组</SelectItem>
+                  {groupOptions.map((group) => (
+                    <SelectItem key={group} value={group}>{group}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">或输入新分组名称（优先）</label>
+              <Input
+                value={bulkGroupNewName}
+                onChange={(event) => setBulkGroupNewName(event.target.value)}
+                placeholder="留空则使用上方选择"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setBulkGroupOpen(false)} disabled={groupSubmitting}>
+              取消
+            </Button>
+            <Button onClick={() => void onBulkGroupApply()} disabled={groupSubmitting || selectedCount === 0}>
+              {groupSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Tags className="mr-2 h-4 w-4" />}
+              应用
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={groupManagerOpen} onOpenChange={setGroupManagerOpen}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>管理分组</DialogTitle>
+            <DialogDescription>重命名会同步更新该组所有频道；删除后频道归入未分组。</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[55vh] space-y-3 overflow-y-auto p-1.5">
+            {groupStats.length === 0 ? (
+              <p className="py-4 text-center text-sm text-muted-foreground">暂无分组</p>
+            ) : groupStats.map(([group, count]) => (
+              <div key={group} className="flex items-center gap-2">
+                <Input
+                  value={renameDrafts[group] ?? group}
+                  onChange={(event) => setRenameDrafts((previous) => ({
+                    ...previous,
+                    [group]: event.target.value,
+                  }))}
+                  className="h-8"
+                  aria-label={`分组名称 ${group}`}
+                  autoComplete="off"
+                />
+                <span className="w-14 shrink-0 text-right text-xs text-muted-foreground">{count} 个</span>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8"
+                  disabled={
+                    groupSubmitting
+                    || !(renameDrafts[group] ?? group).trim()
+                    || (renameDrafts[group] ?? group).trim() === group
+                  }
+                  onClick={() => void onRenameGroup(group)}
+                  title="保存重命名"
+                >
+                  <Save className="h-4 w-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  disabled={groupSubmitting}
+                  onClick={() => setGroupDeleteTarget(group)}
+                  title="删除分组"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            新建分组：在“添加频道”或“设置分组”时输入新名称。
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGroupManagerOpen(false)}>
+              关闭
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={groupDeleteTarget !== null} onOpenChange={(open) => { if (!open) setGroupDeleteTarget(null) }}>
+        <AlertDialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[440px]">
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除分组？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{groupDeleteTarget}」下的 {groupStats.find(([group]) => group === groupDeleteTarget)?.[1] ?? 0} 个频道将归入未分组，此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive hover:bg-destructive/90" onClick={() => void onDeleteGroup()}>
+              删除分组
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) form.reset() }}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-[480px]">
           <DialogHeader>
@@ -962,9 +1311,31 @@ const ChannelsPage = () => {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>分组（可选）</FormLabel>
-                    <FormControl>
-                      <Input placeholder="如：央视" list={GROUP_OPTIONS_ID} {...field} />
-                    </FormControl>
+                    <Select
+                      value={field.value || UNGROUPED}
+                      onValueChange={(value) => {
+                        if (value === NEW_GROUP_VALUE) {
+                          setNewGroupName('')
+                          setNewGroupChannelId(null)
+                          setNewGroupForAdd(true)
+                          return
+                        }
+                        field.onChange(value === UNGROUPED ? '' : value)
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="未分组" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value={UNGROUPED}>未分组</SelectItem>
+                        {addGroupOptions.map((group) => (
+                          <SelectItem key={group} value={group}>{group}</SelectItem>
+                        ))}
+                        <SelectItem value={NEW_GROUP_VALUE}>新建分组…</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
