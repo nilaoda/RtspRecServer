@@ -864,15 +864,10 @@ const ChannelsPage = () => {
                                                                 + {trackLabels(probe.audioTracks)}
                                                             </span>
                                                         )}
-                                                        {probe.accessible && probe.tsVerdict && probe.tsVerdict !== 'pass' && (
-                                                            <span className="text-[10px] text-amber-600 dark:text-amber-400">
-                                                                TS {probe.tsVerdict === 'error' ? '异常' : probe.tsVerdict === 'warning' ? '警告' : '未完成'}
-                                                            </span>
-                                                        )}
                                                     </div>
                                                     {probe.accessible ? (
                                                         <div className="text-[11px] text-muted-foreground">
-                                                            {formatProbeBitrate(probe.bitrateKbps)} · 错误 {probe.errorCount} · 警告 {probe.warningCount}
+                                                            {formatProbeBitrate(probe.bitrateKbps)}
                                                         </div>
                                                     ) : (
                                                         <div className="text-[11px] text-red-600 dark:text-red-400">
@@ -1053,19 +1048,6 @@ const ChannelsPage = () => {
                   <div className="mt-1 font-mono font-medium">{formatProbeBitrate(selectedProbe?.bitrateKbps)}</div>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <div className="text-xs text-muted-foreground">TS 检测</div>
-                  <div className="mt-1 font-medium">
-                    {selectedProbe?.tsVerdict
-                      ? selectedProbe.tsVerdict === 'pass' ? '正常' : selectedProbe.tsVerdict === 'warning' ? '警告' : selectedProbe.tsVerdict === 'error' ? '异常' : '未完成'
-                      : '—'}
-                    {selectedProbe && (selectedProbe.errorCount > 0 || selectedProbe.warningCount > 0) && (
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        错误 {selectedProbe.errorCount} · 警告 {selectedProbe.warningCount}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="rounded-lg border p-3">
                   <div className="text-xs text-muted-foreground">探测耗时</div>
                   <div className="mt-1 font-mono font-medium">
                     {selectedProbe ? `${selectedProbe.elapsedSeconds.toFixed(1)} s` : '—'}
@@ -1083,7 +1065,6 @@ const ChannelsPage = () => {
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span>上次检测：{selectedProbe ? formatDateTime(new Date(selectedProbe.checkedAt)) : '尚未检测'}</span>
                 {selectedProbe && <span>尝试次数：{selectedProbe.attempts ?? 1}</span>}
-                {selectedProbe?.checkedAt && selectedProbe.tsVerdict === 'warning' && <span>TS 存在警告，但流本身可访问</span>}
               </div>
             </div>
           )}
