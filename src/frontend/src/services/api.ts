@@ -2,6 +2,8 @@ import { toast } from 'sonner'
 import type {
   AppConfig,
   BulkTaskResult,
+  ChannelBulkEditItem,
+  ChannelBulkEditResult,
   ChannelBulkResult,
   ChannelConfig,
   ChannelProbeResult,
@@ -222,6 +224,13 @@ export const deleteChannels = (channelIds: number[]) =>
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ channelIds }),
+  })
+
+export const bulkEditChannels = (channels: ChannelBulkEditItem[]) =>
+  fetchJson<ChannelBulkEditResult>('/api/channels/bulk-edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channels }),
   })
 
 export const getRecordings = () => fetchJson<RecordingFileInfo[]>('/api/recordings', { silent: true })

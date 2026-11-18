@@ -283,6 +283,37 @@ try
         return Results.Ok(result);
     });
 
+    app.MapPost("/api/channels/bulk-edit", (
+        ConfigurationService service,
+        ChannelProbeService probeService,
+        ChannelBulkEditRequest request) =>
+    {
+        try
+        {
+            var before = service.GetChannels().ToDictionary(channel => channel.Id);
+            var result = service.BulkUpdateChannels(request.Channels);
+            if (result.SucceededIds.Length > 0)
+            {
+                var after = service.GetChannels().ToDictionary(channel => channel.Id);
+                var urlChangedIds = result.SucceededIds
+                    .Where(id =>
+                        before.TryGetValue(id, out var oldChannel)
+                        && after.TryGetValue(id, out var updatedChannel)
+                        && oldChannel.Url != updatedChannel.Url)
+                    .ToArray();
+                if (urlChangedIds.Length > 0)
+                {
+                    probeService.InvalidateChannels(urlChangedIds);
+                }
+            }
+            return Results.Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+    });
+
     app.MapGet("/api/tasks", (RecordingManager manager) =>
     {
         var tasks = manager.GetAllTasks().Select(ToDto).ToList();

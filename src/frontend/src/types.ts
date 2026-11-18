@@ -130,6 +130,26 @@ export type ChannelBulkResult = {
   failedIds: number[]
 }
 
+export type ChannelBulkEditItem = {
+  id: number
+  name?: string
+  url?: string
+  group?: string
+  clearGroup?: boolean
+}
+
+export type ChannelBulkEditFailure = {
+  id: number
+  message: string
+}
+
+export type ChannelBulkEditResult = {
+  succeeded: number
+  failed: number
+  succeededIds: number[]
+  failedItems: ChannelBulkEditFailure[]
+}
+
 export type BulkTaskResult = {
   succeeded: number
   failed: number

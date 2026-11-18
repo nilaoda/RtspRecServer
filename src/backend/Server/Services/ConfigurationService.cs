@@ -337,6 +337,136 @@ public sealed class ConfigurationService
         }
     }
 
+    public ChannelBulkEditResult BulkUpdateChannels(IReadOnlyList<ChannelBulkEditItem>? items)
+    {
+        if (items is null || items.Count == 0)
+        {
+            throw new InvalidOperationException("没有可更新的频道");
+        }
+
+        _lock.EnterWriteLock();
+        try
+        {
+            var channels = File.Exists(_channelsPath)
+                ? JsonSerializer.Deserialize(File.ReadAllText(_channelsPath), RtspJsonContext.Default.ListChannelConfig) ?? new List<ChannelConfig>()
+                : new List<ChannelConfig>();
+
+            var indexById = new Dictionary<int, int>();
+            for (var index = 0; index < channels.Count; index++)
+            {
+                indexById[channels[index].Id] = index;
+            }
+
+            var succeededIds = new List<int>();
+            var failures = new List<ChannelBulkEditFailure>();
+            var seenIds = new HashSet<int>();
+            var changed = false;
+
+            foreach (var item in items)
+            {
+                if (item is null)
+                {
+                    failures.Add(new ChannelBulkEditFailure { Id = 0, Message = "更新项不能为空" });
+                    continue;
+                }
+
+                if (!indexById.TryGetValue(item.Id, out var channelIndex))
+                {
+                    failures.Add(new ChannelBulkEditFailure { Id = item.Id, Message = "频道不存在" });
+                    continue;
+                }
+
+                if (!seenIds.Add(item.Id))
+                {
+                    failures.Add(new ChannelBulkEditFailure { Id = item.Id, Message = "频道 ID 重复" });
+                    continue;
+                }
+
+                var current = channels[channelIndex];
+                var hasFields = item.Name is not null
+                    || item.Url is not null
+                    || item.Group is not null
+                    || item.ClearGroup;
+                if (!hasFields)
+                {
+                    failures.Add(new ChannelBulkEditFailure { Id = item.Id, Message = "没有要更新的字段" });
+                    continue;
+                }
+
+                var name = current.Name;
+                var url = current.Url;
+                var group = current.Group;
+                string? error = null;
+
+                if (item.Name is not null)
+                {
+                    var trimmed = item.Name.Trim();
+                    if (trimmed.Length == 0)
+                    {
+                        error = "频道名称不能为空";
+                    }
+                    else
+                    {
+                        name = trimmed;
+                    }
+                }
+
+                if (error is null && item.Url is not null)
+                {
+                    var trimmed = item.Url.Trim();
+                    if (trimmed.Length == 0)
+                    {
+                        error = "频道地址不能为空";
+                    }
+                    else
+                    {
+                        url = trimmed;
+                    }
+                }
+
+                if (error is not null)
+                {
+                    failures.Add(new ChannelBulkEditFailure { Id = item.Id, Message = error });
+                    continue;
+                }
+
+                if (item.ClearGroup)
+                {
+                    group = null;
+                }
+                else if (item.Group is not null)
+                {
+                    group = NormalizeGroup(item.Group);
+                }
+
+                if (name != current.Name || url != current.Url || group != current.Group)
+                {
+                    channels[channelIndex] = current with { Name = name, Url = url, Group = group };
+                    changed = true;
+                }
+
+                succeededIds.Add(item.Id);
+            }
+
+            if (changed)
+            {
+                WriteJson(_channelsPath, channels);
+            }
+
+            return new ChannelBulkEditResult
+            {
+                Succeeded = succeededIds.Count,
+                Failed = failures.Count,
+                SucceededIds = succeededIds.ToArray(),
+                FailedItems = failures.ToArray()
+            };
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
     public ChannelConfig? UpdateChannel(int id, ChannelConfig channel)
     {
         _lock.EnterWriteLock();

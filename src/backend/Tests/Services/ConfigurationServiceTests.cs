@@ -73,6 +73,123 @@ public class ConfigurationServiceTests
     }
 
     [Fact]
+    public void BulkUpdateChannels_UpdatesProvidedFieldsOnly()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var service = new ConfigurationService(directory);
+            var first = service.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1",
+                Group = "央视"
+            });
+            var second = service.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-2",
+                Url = "rtsp://example.com/2",
+                Group = "央视"
+            });
+
+            var result = service.BulkUpdateChannels(
+            [
+                new ChannelBulkEditItem { Id = first.Id, Url = "rtsp://example.com/new1" },
+                new ChannelBulkEditItem { Id = second.Id, Name = " 新名称 ", Group = " 卫视 " }
+            ]);
+
+            Assert.Equal(2, result.Succeeded);
+            Assert.Equal(0, result.Failed);
+
+            var reloaded = new ConfigurationService(directory).GetChannels().ToDictionary(channel => channel.Id);
+            Assert.Equal("CCTV-1", reloaded[first.Id].Name);
+            Assert.Equal("rtsp://example.com/new1", reloaded[first.Id].Url);
+            Assert.Equal("央视", reloaded[first.Id].Group);
+            Assert.Equal("新名称", reloaded[second.Id].Name);
+            Assert.Equal("rtsp://example.com/2", reloaded[second.Id].Url);
+            Assert.Equal("卫视", reloaded[second.Id].Group);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void BulkUpdateChannels_ClearsGroup()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var service = new ConfigurationService(directory);
+            var channel = service.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1",
+                Group = "央视"
+            });
+
+            var result = service.BulkUpdateChannels(
+            [
+                new ChannelBulkEditItem { Id = channel.Id, ClearGroup = true }
+            ]);
+
+            Assert.Equal(1, result.Succeeded);
+            Assert.Null(new ConfigurationService(directory).GetChannels().Single().Group);
+
+            service.UpdateChannel(channel.Id, channel with { Group = "卫视" });
+            service.BulkUpdateChannels(
+            [
+                new ChannelBulkEditItem { Id = channel.Id, Group = "" }
+            ]);
+            Assert.Null(new ConfigurationService(directory).GetChannels().Single().Group);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void BulkUpdateChannels_ReportsInvalidAndDuplicateItems()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var service = new ConfigurationService(directory);
+            var first = service.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-1",
+                Url = "rtsp://example.com/1"
+            });
+            var second = service.AddChannel(new ChannelConfig
+            {
+                Name = "CCTV-2",
+                Url = "rtsp://example.com/2"
+            });
+
+            var result = service.BulkUpdateChannels(
+            [
+                new ChannelBulkEditItem { Id = 999, Url = "rtsp://example.com/9" },
+                new ChannelBulkEditItem { Id = first.Id, Name = "  " },
+                new ChannelBulkEditItem { Id = first.Id, Name = "重复项" },
+                new ChannelBulkEditItem { Id = second.Id }
+            ]);
+
+            Assert.Equal(0, result.Succeeded);
+            Assert.Equal(4, result.Failed);
+            Assert.Contains(result.FailedItems, failure => failure.Id == 999 && failure.Message == "频道不存在");
+            Assert.Contains(result.FailedItems, failure => failure.Id == first.Id && failure.Message == "频道名称不能为空");
+            Assert.Contains(result.FailedItems, failure => failure.Id == first.Id && failure.Message == "频道 ID 重复");
+            Assert.Contains(result.FailedItems, failure => failure.Id == second.Id && failure.Message == "没有要更新的字段");
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public void GetAppConfig_MissingWriteRecordingLog_DefaultsToTrue()
     {
         var directory = CreateTempDirectory();
