@@ -54,7 +54,7 @@ const LayoutShell = () => {
   const currentTitle = navItems.find(item => isActive(item.path))?.label || 'RTSP Playback Hub'
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row bg-background">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background md:flex-row">
       {/* Mobile Sidebar */}
       <Sheet>
         <SheetTrigger asChild>
@@ -88,7 +88,7 @@ const LayoutShell = () => {
       </Sheet>
 
       {/* Desktop Sidebar */}
-      <aside className="hidden w-64 flex-col border-r bg-card/50 md:flex">
+      <aside className="hidden w-64 shrink-0 flex-col border-r bg-card/50 md:flex">
         <div className="flex h-14 items-center border-b px-6 gap-2">
           <Activity className="h-6 w-6 text-primary" />
           <span className="font-bold text-lg tracking-tight">RTSP Hub</span>
@@ -127,7 +127,7 @@ const LayoutShell = () => {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
         <header className="flex h-14 items-center justify-between border-b px-4 md:px-6 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10">
            <div className="flex items-center ml-10 md:ml-0">
              <h1 className="text-lg font-semibold md:text-xl text-foreground/90">
@@ -139,12 +139,12 @@ const LayoutShell = () => {
              <ModeToggle />
            </div>
         </header>
-        <div className="flex-1 overflow-auto p-4 md:p-6">
-            <div className="mx-auto w-full max-w-[1600px]">
+        <div className="min-h-0 flex-1 overflow-auto p-4 md:p-6">
+            <div className={cn('mx-auto w-full max-w-[1600px]', location.pathname === '/channels' && 'md:h-full')}>
               <AppRoutes />
             </div>
         </div>
-        <TaskErrorLogPanel />
+        {location.pathname === '/' && <TaskErrorLogPanel />}
       </main>
     </div>
   )

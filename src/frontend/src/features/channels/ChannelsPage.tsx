@@ -527,13 +527,13 @@ const ChannelsPage = () => {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="flex min-h-0 flex-col gap-6 md:h-full">
       <datalist id={GROUP_OPTIONS_ID}>
         {groupOptions.map((group) => (
           <option key={group} value={group} />
         ))}
       </datalist>
-      <Card>
+      <Card className="shrink-0">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
             <CardTitle className="text-lg font-medium">添加频道</CardTitle>
             <Button asChild variant="outline" size="sm">
@@ -597,8 +597,8 @@ const ChannelsPage = () => {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="flex flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
+      <Card className="flex flex-col md:min-h-0 md:flex-1">
+        <CardHeader className="flex shrink-0 flex-col gap-3 pb-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
                 <CardTitle className="text-lg font-medium">频道列表</CardTitle>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -705,8 +705,8 @@ const ChannelsPage = () => {
                 )}
             </div>
         </CardHeader>
-        <CardContent className="p-0">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2">
+        <CardContent className="flex flex-col p-0 md:min-h-0 md:flex-1">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2">
                 <span className="text-xs text-muted-foreground">
                     已选 <span className="font-medium text-foreground">{selectedCount}</span> 个频道
                 </span>
@@ -740,9 +740,9 @@ const ChannelsPage = () => {
                     </Button>
                 </div>
             </div>
-            <div className="rounded-md">
-                <Table>
-                    <TableHeader>
+            <div className="min-h-0 rounded-md md:flex-1">
+                <Table containerClassName="max-h-[60vh] overscroll-contain md:max-h-none md:h-full">
+                    <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:border-b [&_th]:bg-background">
                         <TableRow>
                             <TableHead className="w-[40px]">
                                 <input
