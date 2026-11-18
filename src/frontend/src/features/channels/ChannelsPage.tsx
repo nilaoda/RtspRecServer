@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save, Settings2, Trash2 } from 'lucide-react'
+import { Activity, AlertCircle, CheckCircle2, FileUp, Info, Loader2, Plus, Save, Settings2, Square, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -135,6 +135,11 @@ const ChannelsPage = () => {
   const [probeRetries, setProbeRetries] = useState(() => readProbeSetting(PROBE_RETRIES_KEY, 0, 0, 5))
   const [probeSettingsOpen, setProbeSettingsOpen] = useState(false)
   const [removeInvalidOpen, setRemoveInvalidOpen] = useState(false)
+  const [probeProgress, setProbeProgress] = useState<{ done: number; total: number } | null>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const scanningRef = useRef(false)
+  const stopRequestedRef = useRef(false)
+  const scanning = probeProgress !== null
 
   const form = useForm<ChannelFormValues>({
     resolver: zodResolver(channelSchema),
@@ -317,49 +322,107 @@ const ChannelsPage = () => {
   }, [filteredChannels, groupFilter])
 
   const runProbe = useCallback(async (ids: number[]) => {
-    if (ids.length === 0) {
+    if (ids.length === 0 || scanningRef.current) {
       return
     }
 
-    setProbingIds((previous) => {
-      const next = new Set(previous)
-      ids.forEach((id) => next.add(id))
-      return next
-    })
+    const targets = [...new Set(ids)]
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+    scanningRef.current = true
+    stopRequestedRef.current = false
+    let timedOut = false
+    const chunkSize = Math.max(1, probeConcurrency)
+    const perChannelSeconds = 5 * (probeRetries + 1) + 0.5 * probeRetries
+    const chunkTimeoutMs = Math.max(15000, (perChannelSeconds + 10) * 1000)
+
+    setProbingIds(new Set())
+    setProbeProgress({ done: 0, total: targets.length })
 
     try {
-      const results = await probeChannels(ids, {
-        concurrency: probeConcurrency,
-        retries: probeRetries,
-      })
-      setProbes((previous) => {
-        const next = { ...previous }
-        results.forEach((result) => {
-          next[result.channelId] = result
+      for (let index = 0; index < targets.length; index += chunkSize) {
+        if (controller.signal.aborted) {
+          break
+        }
+
+        const chunk = targets.slice(index, index + chunkSize)
+        setProbingIds(new Set(chunk))
+
+        let timeoutId: number | undefined
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(() => {
+            timedOut = true
+            controller.abort()
+            reject(new Error('probe-timeout'))
+          }, chunkTimeoutMs)
         })
-        return next
-      })
-      void reloadChannelProfiles()
+
+        try {
+          const results = await Promise.race([
+            probeChannels(chunk, {
+              concurrency: probeConcurrency,
+              retries: probeRetries,
+              signal: controller.signal,
+            }),
+            timeoutPromise,
+          ])
+
+          setProbes((previous) => {
+            const next = { ...previous }
+            results.forEach((result) => {
+              next[result.channelId] = result
+            })
+            return next
+          })
+          setProbingIds(new Set())
+          setProbeProgress({
+            done: Math.min(index + chunk.length, targets.length),
+            total: targets.length,
+          })
+          void reloadChannelProfiles()
+        } finally {
+          if (timeoutId !== undefined) {
+            window.clearTimeout(timeoutId)
+          }
+        }
+      }
     } catch {
-      toast.error('频道检测失败，请检查服务端状态')
+      if (!controller.signal.aborted && !stopRequestedRef.current) {
+        toast.error('频道检测失败，请检查服务端状态')
+      }
     } finally {
-      setProbingIds((previous) => {
-        const next = new Set(previous)
-        ids.forEach((id) => next.delete(id))
-        return next
-      })
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null
+      }
+      scanningRef.current = false
+      setProbingIds(new Set())
+      setProbeProgress(null)
+      if (stopRequestedRef.current) {
+        toast.info('已停止频道检测')
+      } else if (timedOut) {
+        toast.error('检测超时，已停止')
+      }
+      stopRequestedRef.current = false
     }
   }, [probeConcurrency, probeRetries, reloadChannelProfiles])
 
+  const stopProbe = useCallback(() => {
+    if (!scanningRef.current) {
+      return
+    }
+    stopRequestedRef.current = true
+    abortControllerRef.current?.abort()
+  }, [])
+
   const probeAll = () => {
-    if (probingIds.size > 0) {
+    if (scanningRef.current) {
       return
     }
     void runProbe(channels.map((channel) => channel.id))
   }
 
   const probeSelected = () => {
-    if (selectedCount === 0 || probingIds.size > 0) {
+    if (selectedCount === 0 || scanningRef.current) {
       return
     }
     void runProbe(selectedChannels.map((channel) => channel.id))
@@ -542,10 +605,10 @@ const ChannelsPage = () => {
                     <span className="text-green-600 dark:text-green-400">可访问 {probeSummary.accessible}</span>
                     <span className="text-red-600 dark:text-red-400">异常 {probeSummary.offline}</span>
                     <span className="text-muted-foreground">未检测 {probeSummary.idle}</span>
-                    {probingIds.size > 0 && (
+                    {scanning && probeProgress && (
                         <span className="flex items-center gap-1 text-primary">
                             <Loader2 className="h-3 w-3 animate-spin" />
-                            检测中 {probingIds.size}
+                            检测中 {probeProgress.done}/{probeProgress.total}
                         </span>
                     )}
                 </div>
@@ -572,7 +635,7 @@ const ChannelsPage = () => {
                         variant="outline"
                         className="text-destructive hover:text-destructive"
                         onClick={() => setRemoveInvalidOpen(true)}
-                        disabled={probingIds.size > 0}
+                        disabled={scanning}
                     >
                         <Trash2 className="mr-2 h-4 w-4" />
                         移除失效 ({invalidChannels.length})
@@ -620,14 +683,26 @@ const ChannelsPage = () => {
                         </p>
                     </PopoverContent>
                 </Popover>
-                <Button
-                    size="sm"
-                    onClick={probeAll}
-                    disabled={channels.length === 0 || probingIds.size > 0}
-                >
-                    {probingIds.size > 0 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
-                    {probingIds.size > 0 ? '检测中' : '检测全部'}
-                </Button>
+                {scanning ? (
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={stopProbe}
+                    >
+                        <Square className="mr-2 h-4 w-4" />
+                        停止检测
+                    </Button>
+                ) : (
+                    <Button
+                        size="sm"
+                        onClick={probeAll}
+                        disabled={channels.length === 0}
+                    >
+                        <Activity className="mr-2 h-4 w-4" />
+                        检测全部
+                    </Button>
+                )}
             </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -641,9 +716,9 @@ const ChannelsPage = () => {
                             size="sm"
                             variant="outline"
                             onClick={probeSelected}
-                            disabled={probingIds.size > 0}
+                            disabled={scanning}
                         >
-                            {probingIds.size > 0 ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
+                            <Activity className="mr-2 h-4 w-4" />
                             检测选中
                         </Button>
                         <Button
@@ -651,7 +726,7 @@ const ChannelsPage = () => {
                             variant="outline"
                             className="text-destructive hover:text-destructive"
                             onClick={() => setBulkDeleteOpen(true)}
-                            disabled={probingIds.size > 0}
+                            disabled={scanning}
                         >
                             <Trash2 className="mr-2 h-4 w-4" />
                             删除选中
@@ -819,7 +894,7 @@ const ChannelsPage = () => {
                                                                 size="icon"
                                                                 variant="ghost"
                                                                 className="h-8 w-8"
-                                                                disabled={checking || hasChanged}
+                                                                disabled={checking || hasChanged || scanning}
                                                                 onClick={() => void runProbe([channel.id])}
                                                             >
                                                                 {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
@@ -827,7 +902,7 @@ const ChannelsPage = () => {
                                                             </Button>
                                                         </TooltipTrigger>
                                                         <TooltipContent>
-                                                            <p>{hasChanged ? '请先保存频道修改' : '检测频道'}</p>
+                                                            <p>{scanning ? '检测进行中' : hasChanged ? '请先保存频道修改' : '检测频道'}</p>
                                                         </TooltipContent>
                                                     </Tooltip>
                                                 </TooltipProvider>
@@ -1015,7 +1090,7 @@ const ChannelsPage = () => {
             <Button
               type="button"
               onClick={() => { if (selectedProbeChannel) void runProbe([selectedProbeChannel.id]) }}
-              disabled={selectedProbeChecking || !selectedProbeChannel}
+              disabled={selectedProbeChecking || !selectedProbeChannel || scanning}
             >
               {selectedProbeChecking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
               {selectedProbeChecking ? '检测中…' : '重新检测'}

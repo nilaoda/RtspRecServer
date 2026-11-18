@@ -73,7 +73,10 @@ const fetchJson = async <T>(url: string, options?: FetchOptions) => {
   try {
     response = await fetch(url, options)
   } catch (err) {
-    notifyError(`请求失败: ${err instanceof Error ? err.message : '网络错误'}`, options)
+    const aborted = options?.signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')
+    if (!aborted) {
+      notifyError(`请求失败: ${err instanceof Error ? err.message : '网络错误'}`, options)
+    }
     throw err
   }
   if (!response.ok) {
@@ -183,7 +186,7 @@ export const getChannelProfiles = () => fetchJson<ChannelProbeResult[]>('/api/ch
 
 export const probeChannels = (
   channelIds: number[],
-  options?: { concurrency?: number; retries?: number },
+  options?: { concurrency?: number; retries?: number; signal?: AbortSignal },
 ) =>
   fetchJson<ChannelProbeResult[]>('/api/channels/probe', {
     method: 'POST',
@@ -193,6 +196,7 @@ export const probeChannels = (
       concurrency: options?.concurrency,
       retries: options?.retries,
     }),
+    signal: options?.signal,
   })
 
 export const importChannels = (channels: { name: string; url: string; group?: string | null }[]) =>
