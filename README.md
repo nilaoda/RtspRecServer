@@ -19,7 +19,7 @@
 - **日志查看**：浏览器内查看每日运行日志和任务录制日志，支持自动刷新和下载。
 - **M3U 导入**：支持拖入 `.m3u` / `.m3u8` 播放列表，本地解析后选择频道批量导入。
 - **Web 管理界面**：提供直观的网页界面，默认跟随系统主题，可切换浅色/深色模式。
-- **协议支持**：回放录制支持 MP2T/TCP 和 MP2T/RTP/TCP；直播源支持 udpxy HTTP、`rtp://` RTP 和 `udp://` 裸 MPEG-TS；RTP 支持短窗口乱序恢复和去重，同端口频道共享 UDP 接收。
+- **协议支持**：回放录制支持 MP2T/TCP 和 MP2T/RTP/TCP；直播源支持 udpxy HTTP、`rtp://` RTP 和 `udp://` 裸 MPEG-TS；RTP 支持短窗口乱序恢复和去重，同网卡、同端口频道共享 UDP 接收。
 - **EPG 电子节目表**：支持导入节目表。
 - **低资源占用**：采用 NativeAOT 技术编译，启动快，占用低。
 
@@ -105,3 +105,5 @@
 本项目采用 GNU General Public License v3.0，详见 [LICENSE](./LICENSE)。
 
 部分 TS 检测能力适配自同作者的 [TSCutter.GUI](https://github.com/nilaoda/TSCutter.GUI)。
+
+组播绑定和 RTP 顺序收流的设计参考了 [msd_lite](https://github.com/rozhuk-im/msd_lite) 和 [rtp2httpd](https://github.com/stackia/rtp2httpd)。本项目使用 C# 独立实现。

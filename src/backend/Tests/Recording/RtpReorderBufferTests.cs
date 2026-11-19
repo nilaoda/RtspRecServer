@@ -12,11 +12,11 @@ public class RtpReorderBufferTests
         var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1, 2, 3 };
 
-        Assert.Empty(buffer.Push(3, payload, now));
-        Assert.Empty(buffer.Push(1, payload, now));
-        Assert.Empty(buffer.Push(4, payload, now));
-        Assert.Empty(buffer.Push(2, payload, now));
-        Assert.Empty(buffer.Push(2, payload, now));
+        Assert.Empty(Push(buffer, 3, payload, now));
+        Assert.Empty(Push(buffer, 1, payload, now));
+        Assert.Empty(Push(buffer, 4, payload, now));
+        Assert.Empty(Push(buffer, 2, payload, now));
+        Assert.Empty(Push(buffer, 2, payload, now));
 
         var ready = buffer.Flush();
         try
@@ -39,16 +39,16 @@ public class RtpReorderBufferTests
         var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1 };
 
-        buffer.Push(1, payload, now);
-        buffer.Push(3, payload, now);
+        Push(buffer, 1, payload, now);
+        Push(buffer, 3, payload, now);
 
         var afterWindow = now + Stopwatch.Frequency / 4;
-        var ready = buffer.Push(4, payload, afterWindow);
+        var ready = Push(buffer, 4, payload, afterWindow);
         try
         {
-            Assert.Equal([1L, 3L], ready.Select(packet => packet.Sequence));
+            Assert.Equal([1L, 3L, 4L], ready.Select(packet => packet.Sequence));
             Assert.Equal(1, buffer.MissingSequences);
-            Assert.Empty(buffer.Push(2, payload, afterWindow));
+            Assert.Empty(Push(buffer, 2, payload, afterWindow));
             Assert.Equal(1, buffer.OldPackets);
         }
         finally
@@ -67,11 +67,11 @@ public class RtpReorderBufferTests
         var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1 };
 
-        buffer.Push(100, payload, now);
-        buffer.Push(101, payload, now);
+        Push(buffer, 100, payload, now);
+        Push(buffer, 101, payload, now);
         buffer.Reset();
 
-        Assert.Empty(buffer.Push(5, payload, now));
+        Assert.Empty(Push(buffer, 5, payload, now));
         var ready = buffer.Flush();
         try
         {
@@ -93,9 +93,9 @@ public class RtpReorderBufferTests
         var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1 };
 
-        buffer.Push(65535, payload, now);
-        buffer.Push(0, payload, now);
-        buffer.Push(1, payload, now);
+        Push(buffer, 65535, payload, now);
+        Push(buffer, 0, payload, now);
+        Push(buffer, 1, payload, now);
 
         var ready = buffer.Flush();
         try
@@ -109,5 +109,51 @@ public class RtpReorderBufferTests
                 packet.Dispose();
             }
         }
+    }
+
+    [Fact]
+    public void OrderedPacketsBypassWindowWhileGapStillWaitsForReordering()
+    {
+        using var buffer = new RtpReorderBuffer();
+        var start = Stopwatch.GetTimestamp();
+        var afterWindow = start + Stopwatch.Frequency / 10;
+        using var datagram = new UdpDatagram([1, 2, 3], start);
+
+        Assert.Empty(buffer.Push(65534, datagram, datagram.Payload));
+        Assert.False(buffer.TryReleaseInOrder(65535));
+        var first = Assert.Single(buffer.ReleaseDue(afterWindow));
+        using (first)
+        {
+            Assert.Same(datagram, first.Datagram);
+            Assert.Equal(65534L, first.Sequence);
+        }
+
+        Assert.True(buffer.TryReleaseInOrder(65535));
+        Assert.True(buffer.TryReleaseInOrder(0));
+        Assert.False(buffer.TryReleaseInOrder(2));
+
+        using var two = new UdpDatagram([2], afterWindow);
+        Assert.Empty(buffer.Push(2, two, two.Payload));
+        using var one = new UdpDatagram([1], afterWindow + 1);
+        var released = buffer.Push(1, one, one.Payload);
+        try
+        {
+            Assert.Equal([65537L, 65538L], released.Select(packet => packet.Sequence));
+            Assert.Same(two, released[1].Datagram);
+            Assert.Equal(0, buffer.MissingSequences);
+        }
+        finally
+        {
+            foreach (var packet in released)
+            {
+                packet.Dispose();
+            }
+        }
+    }
+
+    private static IReadOnlyList<BufferedRtpPacket> Push(RtpReorderBuffer buffer, ushort sequence, byte[] payload, long timestamp)
+    {
+        using var datagram = new UdpDatagram(payload, timestamp);
+        return buffer.Push(sequence, datagram, datagram.Payload);
     }
 }

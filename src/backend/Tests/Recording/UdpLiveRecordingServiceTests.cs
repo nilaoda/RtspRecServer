@@ -56,6 +56,7 @@ public class UdpLiveRecordingServiceTests
 
         using var firstDatagram = await first.Reader.ReadAsync(cancellation.Token);
         using var secondDatagram = await second.Reader.ReadAsync(cancellation.Token);
+        Assert.Same(firstDatagram, secondDatagram);
         Assert.Equal(3, firstDatagram.Length);
         Assert.Equal(3, secondDatagram.Length);
         Assert.Equal(IPAddress.Loopback, firstDatagram.SourceAddress);
@@ -90,10 +91,86 @@ public class UdpLiveRecordingServiceTests
         var group = IPAddress.Parse("239.1.1.1");
 
         Assert.True(UdpEndpointReceiver.ShouldDeliver(group, group));
-        Assert.True(UdpEndpointReceiver.ShouldDeliver(group, IPAddress.Any));
+        Assert.False(UdpEndpointReceiver.ShouldDeliver(group, IPAddress.Any));
+        Assert.False(UdpEndpointReceiver.ShouldDeliver(group, null));
         Assert.False(UdpEndpointReceiver.ShouldDeliver(group, IPAddress.Parse("239.1.1.2")));
         Assert.True(UdpEndpointReceiver.ShouldDeliver(null, IPAddress.Loopback));
         Assert.False(UdpEndpointReceiver.ShouldDeliver(null, group));
+    }
+
+    [Fact]
+    public void ReceiverKey_UsesLocalAddressForMembershipWithoutBindingItForMulticast()
+    {
+        var local = IPAddress.Loopback;
+        var group = IPAddress.Parse("239.1.1.1");
+
+        Assert.Equal(new UdpReceiverKey(IPAddress.Any, local, 8000), UdpReceiverKey.ForSubscription(group, local, 8000));
+        Assert.Equal(new UdpReceiverKey(local, null, 8000), UdpReceiverKey.ForSubscription(null, local, 8000));
+    }
+
+    [Fact]
+    public async Task ReceivesUnicastAndExplicitMulticastOnSamePort()
+    {
+        // Linux 和 macOS 支持回环接口加入组播，Windows 的回环接口没有这个前提。
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var port = GetFreeUdpPort();
+        var hub = new UdpReceiveHub();
+        var group = IPAddress.Parse("239.255.37.44");
+        await using var unicast = hub.Subscribe(null, null, port);
+        await using var multicast = hub.Subscribe(group, IPAddress.Loopback, port);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        for (byte marker = 0; marker < 8; marker++)
+        {
+            using var sender = new UdpClient(AddressFamily.InterNetwork);
+            await sender.SendAsync(new byte[] { marker }, new IPEndPoint(IPAddress.Loopback, port), deadline.Token);
+            using var datagram = await unicast.Reader.ReadAsync(deadline.Token);
+            Assert.Equal(marker, datagram.Payload.Span[0]);
+        }
+        Assert.False(multicast.Reader.TryPeek(out _));
+
+        using var multicastSender = new UdpClient(AddressFamily.InterNetwork);
+        multicastSender.MulticastLoopback = true;
+        multicastSender.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, IPAddress.Loopback.GetAddressBytes());
+        await multicastSender.SendAsync(new byte[] { 42 }, new IPEndPoint(group, port), deadline.Token);
+        using var multicastDatagram = await multicast.Reader.ReadAsync(deadline.Token);
+        Assert.Equal(42, multicastDatagram.Payload.Span[0]);
+        Assert.False(unicast.Reader.TryPeek(out _));
+    }
+
+    [Fact]
+    public async Task DrainsBufferedRtpWhenSourcePausesAndStopArrivesDuringWrite()
+    {
+        var port = GetFreeUdpPort();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+        using var sink = new PausedWriteStream();
+        using var sender = new UdpClient(AddressFamily.InterNetwork);
+        var recording = new UdpLiveRecordingService().RecordAsync(
+            new RecordingTask { Url = $"rtp://127.0.0.1:{port}", IsLive = true },
+            string.Empty, null, "MP2T/TCP", _ => { }, stop.Token, sink);
+
+        var payload = CreateTsPayload();
+        var endpoint = new IPEndPoint(IPAddress.Loopback, port);
+        try
+        {
+            await sender.SendAsync(CreateRtpPacket(payload, sequence: 1), endpoint, deadline.Token);
+            await sender.SendAsync(CreateRtpPacket(payload, sequence: 2), endpoint, deadline.Token);
+            await sink.FirstWrite.Task.WaitAsync(deadline.Token);
+        }
+        finally
+        {
+            stop.Cancel();
+            sink.Resume.TrySetResult();
+        }
+
+        var result = await recording.WaitAsync(deadline.Token);
+        Assert.Equal(payload.Length * 2, result.BytesWritten);
+        Assert.Equal((byte[])[.. payload, .. payload], sink.ToArray());
     }
 
     [Theory]
@@ -163,8 +240,10 @@ public class UdpLiveRecordingServiceTests
         }
     }
 
-    [Fact]
-    public async Task RecordsOutOfOrderRtpPacketsInSequenceOrder()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecordsOutOfOrderRtpPacketsInSequenceOrder(bool switchToRawTs)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"rtsp-rtp-order-{Guid.NewGuid():N}");
         var outputPath = Path.Combine(directory, "recording.ts");
@@ -196,13 +275,24 @@ public class UdpLiveRecordingServiceTests
             await WaitUntilAsync(() => File.Exists(outputPath), TimeSpan.FromSeconds(3));
             using (var sender = new UdpClient(AddressFamily.InterNetwork))
             {
+                var endpoint = new IPEndPoint(IPAddress.Loopback, port);
                 foreach (var sequence in new ushort[] { 3, 1, 4, 2 })
                 {
                     var payload = new byte[188];
                     payload[0] = 0x47;
                     payload[1] = (byte)sequence;
                     var datagram = CreateRtpPacket(payload, sequence);
-                    await sender.SendAsync(datagram, datagram.Length, new IPEndPoint(IPAddress.Loopback, port));
+                    await sender.SendAsync(datagram, datagram.Length, endpoint);
+                }
+
+                if (switchToRawTs)
+                {
+                    var payload = new byte[188];
+                    payload[0] = 0x47;
+                    payload[1] = 5;
+                    await sender.SendAsync(payload, endpoint, cancellation.Token);
+                    payload[1] = 6;
+                    await sender.SendAsync(CreateRtpPacket(payload, sequence: 1), endpoint, cancellation.Token);
                 }
             }
 
@@ -211,8 +301,9 @@ public class UdpLiveRecordingServiceTests
             await recording;
 
             var written = await File.ReadAllBytesAsync(outputPath);
-            Assert.Equal(188 * 4, written.Length);
-            Assert.Equal([1, 2, 3, 4], new[] { written[1], written[189], written[377], written[565] });
+            byte[] expected = switchToRawTs ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4];
+            Assert.Equal(188 * expected.Length, written.Length);
+            Assert.Equal(expected, Enumerable.Range(0, expected.Length).Select(index => written[index * 188 + 1]));
         }
         finally
         {
@@ -417,6 +508,21 @@ public class UdpLiveRecordingServiceTests
             {
                 Directory.Delete(directory, true);
             }
+        }
+    }
+
+    private sealed class PausedWriteStream : MemoryStream
+    {
+        public TaskCompletionSource FirstWrite { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Resume { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (FirstWrite.TrySetResult())
+            {
+                await Resume.Task.WaitAsync(cancellationToken);
+            }
+            await base.WriteAsync(buffer, cancellationToken);
         }
     }
 

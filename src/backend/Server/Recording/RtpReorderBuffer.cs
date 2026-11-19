@@ -1,21 +1,11 @@
-using System.Buffers;
 using System.Diagnostics;
 
 namespace RtspRecServer.Server.Recording;
 
-internal sealed class BufferedRtpPacket : IDisposable
+internal readonly record struct BufferedRtpPacket(
+    long Sequence, UdpDatagram Datagram, ReadOnlyMemory<byte> Payload) : IDisposable
 {
-    public required long Sequence { get; init; }
-    public required byte[] Buffer { get; init; }
-    public required int Length { get; init; }
-    public required long ReceivedTimestamp { get; init; }
-
-    public ReadOnlyMemory<byte> Payload => Buffer.AsMemory(0, Length);
-
-    public void Dispose()
-    {
-        ArrayPool<byte>.Shared.Return(Buffer);
-    }
+    public void Dispose() => Datagram.Dispose();
 }
 
 internal sealed class RtpReorderBuffer : IDisposable
@@ -28,6 +18,7 @@ internal sealed class RtpReorderBuffer : IDisposable
     private readonly SortedDictionary<long, BufferedRtpPacket> _packets = new();
     private long _referenceSequence;
     private long _nextSequence;
+    private long _startupTimestamp;
     private bool _initialized;
     private bool _hasReleased;
     private bool _disposed;
@@ -41,10 +32,21 @@ internal sealed class RtpReorderBuffer : IDisposable
         _maxPackets = Math.Max(1, maxPackets);
     }
 
+    public bool TryReleaseInOrder(ushort sequence)
+    {
+        if (_disposed || !_hasReleased || _packets.Count != 0 || sequence != unchecked((ushort)_nextSequence))
+        {
+            return false;
+        }
+
+        _referenceSequence = _nextSequence++;
+        return true;
+    }
+
     public IReadOnlyList<BufferedRtpPacket> Push(
         ushort sequence,
-        ReadOnlySpan<byte> payload,
-        long receivedTimestamp)
+        UdpDatagram datagram,
+        ReadOnlyMemory<byte> payload)
     {
         if (_disposed || payload.Length == 0)
         {
@@ -52,31 +54,20 @@ internal sealed class RtpReorderBuffer : IDisposable
         }
 
         var extendedSequence = ExtendSequence(sequence);
-        if (_hasReleased && extendedSequence < _nextSequence)
+        if ((_hasReleased && extendedSequence < _nextSequence) || _packets.ContainsKey(extendedSequence))
         {
             OldPackets++;
-            return [];
+            return ReleaseDue(datagram.ReceivedTimestamp);
         }
 
-        if (_packets.ContainsKey(extendedSequence))
-        {
-            return [];
-        }
-
-        var buffer = ArrayPool<byte>.Shared.Rent(payload.Length);
-        payload.CopyTo(buffer);
-        _packets[extendedSequence] = new BufferedRtpPacket
-        {
-            Sequence = extendedSequence,
-            Buffer = buffer,
-            Length = payload.Length,
-            ReceivedTimestamp = receivedTimestamp
-        };
+        datagram.Retain();
+        _packets.Add(extendedSequence, new BufferedRtpPacket(extendedSequence, datagram, payload));
 
         if (!_initialized)
         {
             _referenceSequence = extendedSequence;
             _nextSequence = extendedSequence;
+            _startupTimestamp = datagram.ReceivedTimestamp;
             _initialized = true;
         }
         else
@@ -88,8 +79,15 @@ internal sealed class RtpReorderBuffer : IDisposable
             }
         }
 
-        return DrainDue(receivedTimestamp, force: false);
+        return ReleaseDue(datagram.ReceivedTimestamp);
     }
+
+    public TimeSpan? GetReleaseDelay(long timestamp)
+    {
+        return _packets.Count == 0 ? null : DelayRemaining(_packets.First().Value, timestamp);
+    }
+
+    public IReadOnlyList<BufferedRtpPacket> ReleaseDue(long timestamp) => DrainDue(timestamp, force: false);
 
     public IReadOnlyList<BufferedRtpPacket> Flush()
     {
@@ -103,26 +101,21 @@ internal sealed class RtpReorderBuffer : IDisposable
             return [];
         }
 
-        var ready = new List<BufferedRtpPacket>();
+        List<BufferedRtpPacket>? ready = null;
         while (_packets.Count > 0)
         {
             var first = _packets.First();
             var packet = first.Value;
             var due = force ||
+                      (_hasReleased && packet.Sequence == _nextSequence) ||
                       _packets.Count > _maxPackets ||
-                      Stopwatch.GetElapsedTime(packet.ReceivedTimestamp, timestamp) >= _delay;
+                      DelayRemaining(packet, timestamp) <= TimeSpan.Zero;
             if (!due)
             {
                 break;
             }
 
             _packets.Remove(first.Key);
-            if (packet.Sequence < _nextSequence && _hasReleased)
-            {
-                packet.Dispose();
-                continue;
-            }
-
             if (_hasReleased)
             {
                 MissingSequences += packet.Sequence - _nextSequence;
@@ -130,11 +123,14 @@ internal sealed class RtpReorderBuffer : IDisposable
 
             _nextSequence = packet.Sequence + 1;
             _hasReleased = true;
-            ready.Add(packet);
+            (ready ??= []).Add(packet);
         }
 
-        return ready;
+        return ready ?? [];
     }
+
+    private TimeSpan DelayRemaining(BufferedRtpPacket packet, long timestamp) =>
+        _delay - Stopwatch.GetElapsedTime(_hasReleased ? packet.Datagram.ReceivedTimestamp : _startupTimestamp, timestamp);
 
     private long ExtendSequence(ushort sequence)
     {

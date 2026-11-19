@@ -9,20 +9,43 @@ namespace RtspRecServer.Server.Recording;
 
 internal sealed class UdpDatagram : IDisposable
 {
-    public required byte[] Buffer { get; init; }
-    public required int Length { get; init; }
-    public required long ReceivedTimestamp { get; init; }
-    public IPAddress? SourceAddress { get; init; }
-    public int SourcePort { get; init; }
-    public ReadOnlyMemory<byte> Payload => Buffer.AsMemory(0, Length);
+    private readonly byte[] _buffer;
+    private int _references = 1;
+
+    public UdpDatagram(ReadOnlySpan<byte> payload, long receivedTimestamp, IPEndPoint? remote = null)
+    {
+        _buffer = ArrayPool<byte>.Shared.Rent(payload.Length);
+        payload.CopyTo(_buffer);
+        Length = payload.Length;
+        ReceivedTimestamp = receivedTimestamp;
+        SourceAddress = remote?.Address;
+        SourcePort = remote?.Port ?? 0;
+    }
+
+    public int Length { get; }
+    public long ReceivedTimestamp { get; }
+    public IPAddress? SourceAddress { get; }
+    public int SourcePort { get; }
+    public ReadOnlyMemory<byte> Payload => _buffer.AsMemory(0, Length);
+
+    // 接收循环、订阅队列和重排窗口各持有独立的引用。
+    public void Retain() => Interlocked.Increment(ref _references);
 
     public void Dispose()
     {
-        ArrayPool<byte>.Shared.Return(Buffer);
+        if (Interlocked.Decrement(ref _references) == 0)
+        {
+            ArrayPool<byte>.Shared.Return(_buffer);
+        }
     }
 }
 
-internal readonly record struct UdpReceiverKey(IPAddress LocalAddress, int Port);
+internal readonly record struct UdpReceiverKey(IPAddress BindAddress, IPAddress? MulticastInterface, int Port)
+{
+    public static UdpReceiverKey ForSubscription(IPAddress? group, IPAddress? localAddress, int port) => group is null
+        ? new UdpReceiverKey(localAddress ?? IPAddress.Any, null, port)
+        : new UdpReceiverKey(IPAddress.Any, localAddress, port);
+}
 
 internal sealed class UdpSubscription : IAsyncDisposable
 {
@@ -39,7 +62,7 @@ internal sealed class UdpSubscription : IAsyncDisposable
         {
             FullMode = BoundedChannelFullMode.DropWrite,
             SingleReader = true,
-            SingleWriter = true,
+            SingleWriter = false,
             AllowSynchronousContinuations = false
         }, dropped =>
         {
@@ -75,11 +98,14 @@ internal sealed class UdpSubscription : IAsyncDisposable
 internal sealed class UdpEndpointReceiver : IDisposable
 {
     private const int ReceiveBufferBytes = 16 * 1024 * 1024;
+    private const int LinuxIpMulticastAll = 49;
+    private const int BsdSoReusePort = 0x0200;
     private static readonly TimeSpan MembershipRefreshInterval = TimeSpan.FromSeconds(60);
     private readonly object _sync = new();
     private readonly Socket _socket;
-    private readonly IPAddress? _localAddress;
+    private readonly IPAddress? _multicastInterface;
     private readonly int _port;
+    private readonly Func<int, UdpSubscription[]> _getWildcardSubscribers;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly List<UdpSubscription> _subscriptions = [];
     private readonly Dictionary<IPAddress, int> _groupRefs = [];
@@ -87,14 +113,17 @@ internal sealed class UdpEndpointReceiver : IDisposable
     private UdpSubscription[] _snapshot = [];
     private bool _disposed;
 
-    public UdpEndpointReceiver(IPAddress? localAddress, int port)
+    public UdpEndpointReceiver(UdpReceiverKey key, Func<int, UdpSubscription[]> getWildcardSubscribers)
     {
-        _localAddress = localAddress;
-        _port = port;
-        _socket = CreateSocket(localAddress, port);
+        _multicastInterface = key.MulticastInterface;
+        _port = key.Port;
+        _getWildcardSubscribers = getWildcardSubscribers;
+        _socket = CreateSocket(key.BindAddress, key.Port);
         _membershipRefresh = new Timer(RefreshMemberships, null, MembershipRefreshInterval, MembershipRefreshInterval);
         _ = Task.Run(ReceiveLoopAsync);
     }
+
+    public UdpSubscription[] GetSubscribers() => Volatile.Read(ref _snapshot);
 
     public UdpSubscription Subscribe(IPAddress? groupAddress, int capacity, Action<UdpSubscription> onDispose)
     {
@@ -117,7 +146,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
 
             var subscription = new UdpSubscription(groupAddress, capacity, onDispose, ReportDrop);
             _subscriptions.Add(subscription);
-            _snapshot = _subscriptions.ToArray();
+            Volatile.Write(ref _snapshot, _subscriptions.ToArray());
             return subscription;
         }
     }
@@ -147,7 +176,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
             }
 
             empty = _subscriptions.Count == 0;
-            _snapshot = _subscriptions.ToArray();
+            Volatile.Write(ref _snapshot, _subscriptions.ToArray());
         }
 
         return empty;
@@ -177,7 +206,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
             _disposed = true;
             subscriptions = _subscriptions.ToArray();
             _subscriptions.Clear();
-            _snapshot = [];
+            Volatile.Write(ref _snapshot, []);
         }
 
         _membershipRefresh.Dispose();
@@ -196,6 +225,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
         var buffer = ArrayPool<byte>.Shared.Rent(65536);
         EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
         var consecutiveErrors = 0;
+        var reportedMissingDestination = false;
         try
         {
             while (!_cancellation.IsCancellationRequested)
@@ -223,36 +253,53 @@ internal sealed class UdpEndpointReceiver : IDisposable
                 }
 
                 consecutiveErrors = 0;
-                if (received.ReceivedBytes <= 0)
+                if (received.ReceivedBytes <= 0 || (received.SocketFlags & SocketFlags.Truncated) != 0)
                 {
                     continue;
                 }
 
                 var destination = received.PacketInformation.Address;
+                var subscribers = GetSubscribers();
+                if ((destination is null || destination.Equals(IPAddress.Any)) &&
+                    Array.Exists(subscribers, static target => target.GroupAddress is not null))
+                {
+                    if (!reportedMissingDestination)
+                    {
+                        reportedMissingDestination = true;
+                        Log.Warning("UDP 数据报缺少目标地址，无法按组播组分发，端口 {Port}", _port);
+                    }
+                    continue;
+                }
+
+                if (_multicastInterface is not null && destination is not null && !IsMulticast(destination))
+                {
+                    // 通配地址同端口的 socket 可能被内核选中接收单播，交回该端口的单播订阅。
+                    subscribers = _getWildcardSubscribers(_port);
+                }
+
                 var source = received.RemoteEndPoint as IPEndPoint;
                 var receivedTimestamp = Stopwatch.GetTimestamp();
-                foreach (var target in Volatile.Read(ref _snapshot))
+                UdpDatagram? datagram = null;
+                try
                 {
-                    if (!ShouldDeliver(target.GroupAddress, destination))
+                    foreach (var target in subscribers)
                     {
-                        continue;
-                    }
+                        if (!ShouldDeliver(target.GroupAddress, destination))
+                        {
+                            continue;
+                        }
 
-                    var copy = ArrayPool<byte>.Shared.Rent(received.ReceivedBytes);
-                    buffer.AsSpan(0, received.ReceivedBytes).CopyTo(copy);
-                    var datagram = new UdpDatagram
-                    {
-                        Buffer = copy,
-                        Length = received.ReceivedBytes,
-                        ReceivedTimestamp = receivedTimestamp,
-                        SourceAddress = source?.Address,
-                        SourcePort = source?.Port ?? 0
-                    };
-
-                    if (!target.TryWrite(datagram))
-                    {
-                        datagram.Dispose();
+                        datagram ??= new UdpDatagram(buffer.AsSpan(0, received.ReceivedBytes), receivedTimestamp, source);
+                        datagram.Retain();
+                        if (!target.TryWrite(datagram))
+                        {
+                            datagram.Dispose();
+                        }
                     }
+                }
+                finally
+                {
+                    datagram?.Dispose();
                 }
             }
         }
@@ -295,12 +342,32 @@ internal sealed class UdpEndpointReceiver : IDisposable
         }
     }
 
-    private static Socket CreateSocket(IPAddress? localAddress, int port)
+    private static Socket CreateSocket(IPAddress bindAddress, int port)
     {
         var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         try
         {
             socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            if (bindAddress.Equals(IPAddress.Any))
+            {
+                try
+                {
+                    if (OperatingSystem.IsLinux())
+                    {
+                        // 只收当前 socket 加入的组播，避免其他组的流量填满接收队列。
+                        socket.SetRawSocketOption((int)SocketOptionLevel.IP, LinuxIpMulticastAll, BitConverter.GetBytes(0));
+                    }
+                    else if (OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+                    {
+                        // macOS/BSD 的通配地址同端口绑定还需要 SO_REUSEPORT。
+                        socket.SetRawSocketOption((int)SocketOptionLevel.Socket, BsdSoReusePort, BitConverter.GetBytes(1));
+                    }
+                }
+                catch (SocketException ex)
+                {
+                    Log.Debug(ex, "设置 UDP 通配地址选项失败，端口 {Port}", port);
+                }
+            }
             try
             {
                 socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
@@ -315,10 +382,10 @@ internal sealed class UdpEndpointReceiver : IDisposable
                 socket.ReceiveBufferSize = ReceiveBufferBytes;
                 var reportedBuffer = socket.ReceiveBufferSize;
                 // Linux SO_RCVBUF 汇报的值包含内核记账空间，是实际设置值的两倍。
-                if (OperatingSystem.IsLinux() && reportedBuffer / 2 < ReceiveBufferBytes)
+                var appliedBuffer = OperatingSystem.IsLinux() ? reportedBuffer / 2 : reportedBuffer;
+                if (appliedBuffer < ReceiveBufferBytes)
                 {
-                    Log.Warning(
-                        "UDP Socket 接收缓冲受系统限制: 端口 {Port}，请求 {Requested} 字节，SO_RCVBUF 返回 {Actual} 字节，请检查 net.core.rmem_max",
+                    Log.Warning("UDP Socket 接收缓冲小于请求值: 端口 {Port}，请求 {Requested} 字节，SO_RCVBUF 返回 {Actual} 字节",
                         port, ReceiveBufferBytes, reportedBuffer);
                 }
             }
@@ -339,7 +406,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
                 }
             }
 
-            socket.Bind(new IPEndPoint(localAddress ?? IPAddress.Any, port));
+            socket.Bind(new IPEndPoint(bindAddress, port));
             return socket;
         }
         catch
@@ -351,38 +418,35 @@ internal sealed class UdpEndpointReceiver : IDisposable
 
     private void JoinGroup(IPAddress group)
     {
-        var option = _localAddress is null
+        var option = _multicastInterface is null
             ? new MulticastOption(group)
-            : new MulticastOption(group, _localAddress);
+            : new MulticastOption(group, _multicastInterface);
         _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, option);
         Log.Information("UDP 共享接收加入组播组 {Group}:{Port}", group, _port);
     }
 
     private void RefreshMemberships(object? state)
     {
-        IPAddress[] groups;
         lock (_sync)
         {
-            if (_disposed || _groupRefs.Count == 0)
+            if (_disposed)
             {
                 return;
             }
 
-            groups = _groupRefs.Keys.ToArray();
-        }
-
-        foreach (var group in groups)
-        {
-            try
+            foreach (var group in _groupRefs.Keys)
             {
-                var option = _localAddress is null
-                    ? new MulticastOption(group)
-                    : new MulticastOption(group, _localAddress);
-                _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, option);
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "刷新组播成员失败: {Group}:{Port}", group, _port);
+                try
+                {
+                    var option = _multicastInterface is null
+                        ? new MulticastOption(group)
+                        : new MulticastOption(group, _multicastInterface);
+                    _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, option);
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "刷新组播成员失败: {Group}:{Port}", group, _port);
+                }
             }
         }
     }
@@ -391,9 +455,9 @@ internal sealed class UdpEndpointReceiver : IDisposable
     {
         try
         {
-            var option = _localAddress is null
+            var option = _multicastInterface is null
                 ? new MulticastOption(group)
-                : new MulticastOption(group, _localAddress);
+                : new MulticastOption(group, _multicastInterface);
             _socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.DropMembership, option);
         }
         catch (Exception ex)
@@ -402,20 +466,20 @@ internal sealed class UdpEndpointReceiver : IDisposable
         }
     }
 
-    internal static bool ShouldDeliver(IPAddress? subscriptionGroup, IPAddress destination)
+    internal static bool ShouldDeliver(IPAddress? subscriptionGroup, IPAddress? destination)
     {
         if (subscriptionGroup is not null)
         {
-            return destination.Equals(IPAddress.Any) || destination.Equals(subscriptionGroup);
+            return subscriptionGroup.Equals(destination);
         }
 
-        return !IsMulticast(destination) || destination.Equals(IPAddress.Any);
+        return destination is null || !IsMulticast(destination);
     }
 
     internal static bool IsMulticast(IPAddress address)
     {
-        var bytes = address.GetAddressBytes();
-        return bytes.Length == 4 && bytes[0] is >= 224 and <= 239;
+        Span<byte> bytes = stackalloc byte[4];
+        return address.TryWriteBytes(bytes, out var count) && count == 4 && bytes[0] is >= 224 and <= 239;
     }
 }
 
@@ -430,12 +494,12 @@ internal sealed class UdpReceiveHub
         int port,
         int capacity = 8192)
     {
-        var key = new UdpReceiverKey(localAddress ?? IPAddress.Any, port);
+        var key = UdpReceiverKey.ForSubscription(groupAddress, localAddress, port);
         lock (_sync)
         {
             if (!_receivers.TryGetValue(key, out var receiver))
             {
-                receiver = new UdpEndpointReceiver(localAddress, port);
+                receiver = new UdpEndpointReceiver(key, GetWildcardSubscribers);
                 _receivers[key] = receiver;
             }
             try
@@ -455,6 +519,16 @@ internal sealed class UdpReceiveHub
 
                 throw;
             }
+        }
+    }
+
+    private UdpSubscription[] GetWildcardSubscribers(int port)
+    {
+        lock (_sync)
+        {
+            return _receivers.TryGetValue(new UdpReceiverKey(IPAddress.Any, null, port), out var receiver)
+                ? receiver.GetSubscribers()
+                : [];
         }
     }
 

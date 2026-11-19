@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Net;
 using System.Threading.Channels;
@@ -200,9 +201,10 @@ public sealed class UdpLiveRecordingService : IRecordingService
             var validTsSeen = false;
             var idleRecoveries = 0;
 
-            async Task WritePayloadAsync(ReadOnlyMemory<byte> payload, CancellationToken token)
+            async ValueTask WritePayloadAsync(ReadOnlyMemory<byte> payload)
             {
-                await sink.WriteAsync(payload, token);
+                // 当前 TS 数据块写完再响应停录，与结束时排空重排窗口一致。
+                await sink.WriteAsync(payload, CancellationToken.None);
                 bytesWritten += payload.Length;
                 analysis.Append(payload.Span);
 
@@ -226,13 +228,13 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 IPAddress? lastSourceAddress = null;
                 var idleTimedOut = false;
 
-                async Task WriteReorderedAsync(IReadOnlyList<BufferedRtpPacket> packets, CancellationToken token)
+                async ValueTask WriteReorderedAsync(IReadOnlyList<BufferedRtpPacket> packets)
                 {
                     try
                     {
                         foreach (var packet in packets)
                         {
-                            await WritePayloadAsync(packet.Payload, token);
+                            await WritePayloadAsync(packet.Payload);
                         }
                     }
                     finally
@@ -251,23 +253,52 @@ public sealed class UdpLiveRecordingService : IRecordingService
                         return;
                     }
 
-                    await WriteReorderedAsync(rtpReorder.Flush(), CancellationToken.None);
+                    await WriteReorderedAsync(rtpReorder.Flush());
                     if (rtpReorder.MissingSequences > 0 || rtpReorder.OldPackets > 0)
                     {
                         Log.Information(
-                            "RTP 重排统计: 跳过 {Missing} 个序列，收到 {Old} 个超出窗口的迟到或重复包: {Url}",
+                            "RTP 重排统计: 跳过 {Missing} 个序列，丢弃 {Old} 个迟到或重复包: {Url}",
                             rtpReorder.MissingSequences, rtpReorder.OldPackets, task.Url);
                     }
                 }
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    idleCts.CancelAfter(_idleTimeout);
-
                     UdpDatagram datagram;
                     try
                     {
-                        datagram = await subscription.Reader.ReadAsync(idleCts.Token);
+                        if (subscription.Reader.TryRead(out var queued))
+                        {
+                            datagram = queued;
+                        }
+                        else
+                        {
+                            idleCts.CancelAfter(_idleTimeout);
+                            try
+                            {
+                                var delay = rtpReorder?.GetReleaseDelay(Stopwatch.GetTimestamp());
+                                if (delay is { } remaining)
+                                {
+                                    using var reorderDeadline = CancellationTokenSource.CreateLinkedTokenSource(idleCts.Token);
+                                    // CancelAfter 会截断亚毫秒部分，确保定时触发时窗口已经到期。
+                                    reorderDeadline.CancelAfter(Math.Max(1, (int)Math.Ceiling(remaining.TotalMilliseconds)));
+                                    datagram = await subscription.Reader.ReadAsync(reorderDeadline.Token);
+                                }
+                                else
+                                {
+                                    datagram = await subscription.Reader.ReadAsync(idleCts.Token);
+                                }
+                            }
+                            finally
+                            {
+                                idleCts.CancelAfter(Timeout.InfiniteTimeSpan);
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) when (!idleCts.IsCancellationRequested && rtpReorder is not null)
+                    {
+                        await WriteReorderedAsync(rtpReorder.ReleaseDue(Stopwatch.GetTimestamp()));
+                        continue;
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
@@ -304,6 +335,10 @@ public sealed class UdpLiveRecordingService : IRecordingService
                                 return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
                             }
 
+                            if (rtpReorder is not null)
+                            {
+                                await WriteReorderedAsync(rtpReorder.ReleaseDue(datagram.ReceivedTimestamp));
+                            }
                             continue;
                         }
 
@@ -345,33 +380,31 @@ public sealed class UdpLiveRecordingService : IRecordingService
                             lastSourceAddress = sourceAddress;
                         }
 
-                        if (ssrc.HasValue)
+                        if (lastSsrc.HasValue && ssrc != lastSsrc)
                         {
-                            if (lastSsrc.HasValue && ssrc.Value != lastSsrc.Value)
+                            if (ssrc.HasValue)
                             {
                                 Log.Information(
                                     "RTP SSRC 变化（{Old} -> {New}），重置乱序缓冲: {Url}",
                                     lastSsrc.Value,
                                     ssrc.Value,
                                     task.Url);
-                                await FlushReorderedAsync();
-                                rtpReorder?.Reset();
                             }
 
-                            lastSsrc = ssrc;
+                            // RTP 源也允许回退到裸 TS，先写完旧序列，避免后到数据超越窗口。
+                            await FlushReorderedAsync();
+                            rtpReorder?.Reset();
                         }
+                        lastSsrc = ssrc;
 
-                        if (rtpSequence.HasValue && rtpReorder is not null)
+                        var payload = datagram.Payload.Slice(dataOffset, dataLength);
+                        if (rtpSequence.HasValue && rtpReorder is not null && !rtpReorder.TryReleaseInOrder(rtpSequence.Value))
                         {
-                            var ready = rtpReorder.Push(
-                                rtpSequence.Value,
-                                datagram.Payload.Span.Slice(dataOffset, dataLength),
-                                datagram.ReceivedTimestamp);
-                            await WriteReorderedAsync(ready, cancellationToken);
+                            await WriteReorderedAsync(rtpReorder.Push(rtpSequence.Value, datagram, payload));
                         }
                         else
                         {
-                            await WritePayloadAsync(datagram.Payload.Slice(dataOffset, dataLength), cancellationToken);
+                            await WritePayloadAsync(payload);
                         }
                     }
                 }
