@@ -74,7 +74,8 @@
 {
     "port": 8080,              // Web 界面端口
     "recordPath": "./records", // 录像保存路径
-    "maxRecordingTasks": 1,    // 最大同时录制任务数
+    "maxRecordingTasks": 1,    // 最大并发收流数，同源直播共用一条连接
+    "maxRecordingWriters": 0,  // 最大同时写盘任务数，0 自动取 2 和收流上限中的较大值
     "recordingTransport": "MP2T/TCP", // 回放封装方式，仅 RTSP 回放使用
     "writeRecordingLog": true  // 是否在录像旁写入同名 .log
 }
@@ -100,6 +101,8 @@
 ```
 
 直播任务按预约开始时间启动；开始时间已过但尚未到结束时间时会立即补录。结束时间可在任务列表中随时修改，延长会继续写入当前文件。未填写任务名称时，回放任务默认以 `Playback_` 开头，直播任务默认以 `Live_` 开头；直播文件名只带开始时间，回放文件名同时带开始和结束时间。直接 RTP/UDP 地址会按 URL 协议接收组播流。
+
+同一 RTP、UDP 或 udpxy HTTP 源的重叠直播任务会共用一路收流，各自写独立录像并检查 TS。并发收流数设为 1 时，只要仍有写盘名额，后来开始的同源任务就能加入。RTSP 回放任务各占一路收流。
 
 频道右侧的播放菜单使用 `/api/channels/{id}/play.ts` 转发当前保存的地址，沿用服务访问认证。HTTP(S) 输入须是连续 MPEG-TS 流。RTSP 播放使用频道原始地址及设置里的 MP2T/TCP 或 MP2T/RTP/TCP 封装，要求该地址可直接发起播放。播放在内存中转发，最后一个播放器退出后释放上游。
 

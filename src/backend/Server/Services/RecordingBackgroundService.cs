@@ -69,14 +69,14 @@ public sealed class RecordingBackgroundService : BackgroundService
                         continue;
                     }
 
-                    if (now < task.StartTime || _manager.ActiveCount >= config.MaxRecordingTasks)
+                    if (now < task.StartTime)
                     {
                         continue;
                     }
 
                     if (task.IsLive)
                     {
-                        await _manager.TryStartTaskAsync(task, stoppingToken);
+                        await _manager.TryStartTaskAsync(task, stoppingToken, config);
                         continue;
                     }
 
@@ -88,10 +88,7 @@ public sealed class RecordingBackgroundService : BackgroundService
                         continue;
                     }
 
-                    _logger.LogInformation("准备启动录制任务，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
-                        task.Id, task.TaskName, task.ChannelName);
-
-                    await _manager.TryStartTaskAsync(task, stoppingToken);
+                    await _manager.TryStartTaskAsync(task, stoppingToken, config);
                 }
             }
             catch (Exception ex)

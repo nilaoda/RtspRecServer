@@ -270,6 +270,7 @@ export type UpdateConfigPayload = {
   username?: string
   password?: string | null
   maxRecordingTasks?: number
+  maxRecordingWriters?: number
   recordingTransport?: AppConfig['recordingTransport']
   writeRecordingLog?: boolean
   taskErrorLogMaxEntries?: number

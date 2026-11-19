@@ -409,12 +409,9 @@ public sealed class RecordingManager
         }
     }
 
-    public async Task<bool> TryStartTaskAsync(RecordingTask task, CancellationToken cancellationToken)
+    public async Task<bool> TryStartTaskAsync(RecordingTask task, CancellationToken cancellationToken, AppConfig? config = null)
     {
-        _logger.LogInformation("尝试启动录制任务，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}",
-            task.Id, task.TaskName, task.ChannelName);
-
-        var config = _configurationService.GetAppConfig();
+        config ??= _configurationService.GetAppConfig();
         RecordingTask started;
         RecordingSession session;
         string outputPath;
@@ -432,6 +429,12 @@ public sealed class RecordingManager
             if (_activeSessions.ContainsKey(task.Id))
             {
                 _logger.LogWarning("录制任务启动失败：任务已在运行中，任务ID: {TaskId}", task.Id);
+                return false;
+            }
+
+            var sourceKey = LiveRecordingSourceKey.FromTask(currentTask);
+            if (!HasRecordingCapacity(config, sourceKey))
+            {
                 return false;
             }
 
@@ -457,7 +460,7 @@ public sealed class RecordingManager
             }
 
             started = updated;
-            session = new RecordingSession(started.Id, outputPath, started.IsLive, started.EndTime);
+            session = new RecordingSession(started.Id, outputPath, started.IsLive, started.EndTime, sourceKey);
             session.Completion = sessionCompletion.Task;
             if (!_activeSessions.TryAdd(started.Id, session))
             {
@@ -666,6 +669,42 @@ public sealed class RecordingManager
         return _activeSessions.ContainsKey(id);
     }
 
+    // 与任务启动一起判断，避免同时到期的任务抢占同一个收流或写盘名额。
+    private bool HasRecordingCapacity(AppConfig config, LiveRecordingSourceKey? sourceKey)
+    {
+        var writerLimit = config.MaxRecordingWriters > 0 ? config.MaxRecordingWriters : Math.Max(2, config.MaxRecordingTasks);
+        if (_activeSessions.Count >= writerLimit)
+        {
+            return false;
+        }
+
+        if (_activeSessions.Count < config.MaxRecordingTasks)
+        {
+            return true;
+        }
+
+        var sharedSources = new HashSet<LiveRecordingSourceKey>();
+        var exclusiveSources = 0;
+        foreach (var session in _activeSessions.Values)
+        {
+            if (session.SourceKey is { } activeSource)
+            {
+                if (activeSource == sourceKey)
+                {
+                    return true;
+                }
+                sharedSources.Add(activeSource);
+            }
+            else
+            {
+                // 每个回放任务仍独立占用一个上游名额。
+                exclusiveSources++;
+            }
+        }
+
+        return sharedSources.Count + exclusiveSources < config.MaxRecordingTasks;
+    }
+
     public IReadOnlySet<string> GetActiveOutputPaths()
     {
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -752,17 +791,19 @@ public sealed class RecordingManager
 
     private sealed class RecordingSession
     {
-        public RecordingSession(long taskId, string outputPath, bool isLive, DateTimeOffset endTime)
+        public RecordingSession(long taskId, string outputPath, bool isLive, DateTimeOffset endTime, LiveRecordingSourceKey? sourceKey)
         {
             TaskId = taskId;
             OutputPath = outputPath;
             IsLive = isLive;
+            SourceKey = sourceKey;
             _endTimeUtcTicks = endTime.ToUniversalTime().Ticks;
         }
 
         public long TaskId { get; }
         public string OutputPath { get; }
         public bool IsLive { get; }
+        public LiveRecordingSourceKey? SourceKey { get; }
         public CancellationTokenSource Cancellation { get; } = new();
         public Task Completion { get; set; } = Task.CompletedTask;
         public long BytesWritten { get; set; }

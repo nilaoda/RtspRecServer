@@ -14,6 +14,7 @@ export type AppConfig = {
   username: string
   hasPassword: boolean
   maxRecordingTasks: number
+  maxRecordingWriters: number
   recordingTransport: 'MP2T/TCP' | 'MP2T/RTP/TCP'
   writeRecordingLog: boolean
   taskErrorLogMaxEntries: number

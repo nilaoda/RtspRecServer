@@ -9,6 +9,7 @@ public sealed record AppConfig
     public string Username { get; init; } = "admin";
     public string Password { get; init; } = "admin";
     public int MaxRecordingTasks { get; init; } = 1;
+    public int MaxRecordingWriters { get; init; }
     public string RecordingTransport { get; init; } = "MP2T/TCP";
     public bool WriteRecordingLog { get; init; } = true;
     /// <summary>实时错误日志的内存环形缓冲上限（条）</summary>
@@ -40,6 +41,7 @@ public sealed record AppConfigUpdateRequest
     public string? Username { get; init; }
     public string? Password { get; init; }
     public int? MaxRecordingTasks { get; init; }
+    public int? MaxRecordingWriters { get; init; }
     public string? RecordingTransport { get; init; }
     public bool? WriteRecordingLog { get; init; }
     public int? TaskErrorLogMaxEntries { get; init; }
@@ -56,6 +58,7 @@ public sealed record AppConfigView
     public string Username { get; init; } = string.Empty;
     public bool HasPassword { get; init; }
     public int MaxRecordingTasks { get; init; }
+    public int MaxRecordingWriters { get; init; }
     public string RecordingTransport { get; init; } = string.Empty;
     public bool WriteRecordingLog { get; init; }
     public int TaskErrorLogMaxEntries { get; init; }

@@ -2,20 +2,23 @@ using RtspRecServer.Shared;
 
 namespace RtspRecServer.Server.Recording;
 
-public sealed class RecordingServiceRouter : IRecordingService
+internal sealed class RecordingServiceRouter : IRecordingService
 {
     private readonly RtspRecordingService _rtspRecordingService;
     private readonly HttpLiveRecordingService _httpLiveRecordingService;
     private readonly UdpLiveRecordingService _udpLiveRecordingService;
+    private readonly SharedLiveRecordingService _sharedLiveRecordingService;
 
     public RecordingServiceRouter(
         RtspRecordingService rtspRecordingService,
         HttpLiveRecordingService httpLiveRecordingService,
-        UdpLiveRecordingService udpLiveRecordingService)
+        UdpLiveRecordingService udpLiveRecordingService,
+        SharedLiveRecordingService sharedLiveRecordingService)
     {
         _rtspRecordingService = rtspRecordingService;
         _httpLiveRecordingService = httpLiveRecordingService;
         _udpLiveRecordingService = udpLiveRecordingService;
+        _sharedLiveRecordingService = sharedLiveRecordingService;
     }
 
     public Task<RecordingResult> RecordAsync(
@@ -29,6 +32,12 @@ public sealed class RecordingServiceRouter : IRecordingService
     {
         if (task.IsLive)
         {
+            // 扫描与模拟录制的调用方提供输出流，保持它们独立采样。
+            if (output is null && LiveRecordingSourceKey.FromTask(task) is { } sourceKey)
+            {
+                return _sharedLiveRecordingService.RecordAsync(task, sourceKey, outputPath, onProgress, cancellationToken);
+            }
+
             if (LiveSourceClassifier.IsHttpLive(task.Url))
             {
                 return _httpLiveRecordingService.RecordAsync(

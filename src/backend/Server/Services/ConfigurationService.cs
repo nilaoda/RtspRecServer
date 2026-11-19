@@ -94,7 +94,13 @@ public sealed class ConfigurationService
             var maxRecordingTasks = request.MaxRecordingTasks ?? current.MaxRecordingTasks;
             if (maxRecordingTasks < 1)
             {
-                throw new InvalidOperationException("最大并发必须大于 0");
+                throw new InvalidOperationException("最大并发收流数必须大于 0");
+            }
+
+            var maxRecordingWriters = request.MaxRecordingWriters ?? current.MaxRecordingWriters;
+            if (maxRecordingWriters < 0)
+            {
+                throw new InvalidOperationException("最大同时写盘任务数不能小于 0");
             }
 
             var taskErrorLogMaxEntries = request.TaskErrorLogMaxEntries ?? current.TaskErrorLogMaxEntries;
@@ -149,6 +155,7 @@ public sealed class ConfigurationService
                 Username = username,
                 Password = password,
                 MaxRecordingTasks = maxRecordingTasks,
+                MaxRecordingWriters = maxRecordingWriters,
                 RecordingTransport = transport,
                 WriteRecordingLog = request.WriteRecordingLog ?? current.WriteRecordingLog,
                 TaskErrorLogMaxEntries = taskErrorLogMaxEntries,
@@ -179,6 +186,7 @@ public sealed class ConfigurationService
             Username = config.Username,
             HasPassword = !string.IsNullOrEmpty(config.Password),
             MaxRecordingTasks = config.MaxRecordingTasks,
+            MaxRecordingWriters = config.MaxRecordingWriters,
             RecordingTransport = config.RecordingTransport,
             WriteRecordingLog = config.WriteRecordingLog,
             TaskErrorLogMaxEntries = config.TaskErrorLogMaxEntries,
@@ -596,6 +604,10 @@ public sealed class ConfigurationService
         if (config.MaxRecordingTasks < 1)
         {
             config = config with { MaxRecordingTasks = 1 };
+        }
+        if (config.MaxRecordingWriters < 0)
+        {
+            config = config with { MaxRecordingWriters = 0 };
         }
         if (config.TaskErrorLogMaxEntries is < 100 or > 50_000)
         {

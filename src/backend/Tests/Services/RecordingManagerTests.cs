@@ -224,7 +224,7 @@ public class RecordingManagerTests : IDisposable
         var manager = new RecordingManager(_store, config, new BlockingRecordingService(), _notifier,
             new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
         var start = DateTimeOffset.UtcNow;
-        var task = new RecordingTask { TaskName = "CON.同名/节目:4K", IsLive = true, StartTime = start, EndTime = start.AddHours(1) };
+        var task = new RecordingTask { TaskName = "CON.同名/节目:4K", Url = "rtp://239.1.1.1:8000", IsLive = true, StartTime = start, EndTime = start.AddHours(1) };
         var first = _store.Add(task);
         var second = _store.Add(task with { EndTime = start.AddHours(2) });
         var originalPath = Path.Combine(directory.FullName, "_CON.同名_节目_4K.ts");
@@ -242,6 +242,44 @@ public class RecordingManagerTests : IDisposable
         finally
         {
             await manager.StopTasksAsync([first.Id, second.Id], CancellationToken.None);
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartTask_CountsSharedLiveSourcesAndWritersSeparately()
+    {
+        var directory = Directory.CreateTempSubdirectory("rtsp-source-capacity-");
+        var configuration = new ConfigurationService(directory.FullName);
+        configuration.UpdateAppConfig(new AppConfigUpdateRequest { RecordPath = directory.FullName, WriteRecordingLog = false });
+        var manager = new RecordingManager(_store, configuration, new BlockingRecordingService(), _notifier,
+            new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
+        var now = DateTimeOffset.UtcNow;
+        var task = new RecordingTask
+        {
+            TaskName = "A", Url = "rtp://239.1.1.1:8000?localaddr=192.0.2.1",
+            IsLive = true, StartTime = now, EndTime = now.AddHours(1)
+        };
+        var first = _store.Add(task);
+        var equivalent = _store.Add(task with { TaskName = "B", Url = "rtp://@239.1.1.1:8000/?localAddress=192.0.2.1" });
+        var third = _store.Add(task with { TaskName = "C" });
+        var otherInterface = _store.Add(task with { TaskName = "D", Url = "rtp://239.1.1.1:8000?localaddr=192.0.2.2" });
+
+        try
+        {
+            Assert.True(await manager.TryStartTaskAsync(first, CancellationToken.None));
+            Assert.False(await manager.TryStartTaskAsync(otherInterface, CancellationToken.None));
+            Assert.True(await manager.TryStartTaskAsync(equivalent, CancellationToken.None));
+            Assert.False(await manager.TryStartTaskAsync(third, CancellationToken.None));
+            Assert.Equal(2, manager.ActiveCount);
+
+            Assert.True(await manager.StopTaskAsync(first.Id, CancellationToken.None));
+            Assert.False(await manager.TryStartTaskAsync(otherInterface, CancellationToken.None));
+            Assert.True(await manager.TryStartTaskAsync(third, CancellationToken.None));
+        }
+        finally
+        {
+            await manager.StopTasksAsync([first.Id, equivalent.Id, third.Id, otherInterface.Id], CancellationToken.None);
             directory.Delete(recursive: true);
         }
     }

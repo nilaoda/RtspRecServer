@@ -206,6 +206,8 @@ public sealed class HttpLiveRecordingService : IRecordingService
         var handler = new SocketsHttpHandler
         {
             ConnectTimeout = TimeSpan.FromSeconds(15),
+            // 持续直播响应停止时直接关闭，避免后台继续读取旧连接。
+            MaxResponseDrainSize = 0,
             AllowAutoRedirect = true
         };
 

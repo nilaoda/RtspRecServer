@@ -46,7 +46,8 @@ const settingsSchema = z
     useAuth: z.boolean(),
     username: z.string(),
     password: z.string(),
-    maxRecordingTasks: z.coerce.number().int('必须是整数').min(1, '最大并发必须大于 0'),
+    maxRecordingTasks: z.coerce.number().int('必须是整数').min(1, '最大并发收流数必须大于 0'),
+    maxRecordingWriters: z.coerce.number().int('必须是整数').min(0, '最大同时写盘任务数不能小于 0'),
     recordingTransport: z.enum(['MP2T/TCP', 'MP2T/RTP/TCP']),
     writeRecordingLog: z.boolean(),
     taskErrorLogMaxEntries: z.coerce
@@ -92,6 +93,7 @@ const SettingsPage = () => {
     username: appConfig?.username ?? 'admin',
     password: '',
     maxRecordingTasks: appConfig?.maxRecordingTasks ?? 1,
+    maxRecordingWriters: appConfig?.maxRecordingWriters ?? 0,
     recordingTransport: appConfig?.recordingTransport ?? 'MP2T/TCP',
     writeRecordingLog: appConfig?.writeRecordingLog ?? true,
     taskErrorLogMaxEntries: appConfig?.taskErrorLogMaxEntries ?? 10_000,
@@ -126,6 +128,7 @@ const SettingsPage = () => {
         username: values.username.trim(),
         password: values.password ? values.password : null,
         maxRecordingTasks: values.maxRecordingTasks,
+        maxRecordingWriters: values.maxRecordingWriters,
         recordingTransport: values.recordingTransport,
         writeRecordingLog: values.writeRecordingLog,
         taskErrorLogMaxEntries: values.taskErrorLogMaxEntries,
@@ -289,11 +292,25 @@ const SettingsPage = () => {
                   name="maxRecordingTasks"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>最大并发录制任务数</FormLabel>
+                      <FormLabel>最大并发收流数</FormLabel>
                       <FormControl>
                         <Input type="number" min={1} {...field} />
                       </FormControl>
-                      <FormDescription>机械硬盘建议不超过 5 路。</FormDescription>
+                      <FormDescription>同源直播任务共用一路，回放任务各占一路。</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="maxRecordingWriters"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>最大同时写盘任务数</FormLabel>
+                      <FormControl>
+                        <Input type="number" min={0} {...field} />
+                      </FormControl>
+                      <FormDescription>填 0 自动取 2 和收流上限两者中的较大值。</FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}

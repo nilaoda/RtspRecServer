@@ -3,7 +3,6 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 import { Check, ChevronsUpDown } from 'lucide-react'
-import { toast } from 'sonner'
 import { useAppContext } from '../../app/context'
 import { formatChannelCodecSummary } from '../shared/channel-probe'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
@@ -68,7 +67,7 @@ export default function TaskFormDialog({
   onOpenChange: (open: boolean) => void
   initialValues?: TaskFormInitialValues
 }) {
-  const { tasks, channels, channelProfiles, createTask, appConfig } = useAppContext()
+  const { channels, channelProfiles, createTask } = useAppContext()
   const channelGroups = useMemo(() => {
     const groups = new Map<string, typeof channels>()
     for (const channel of channels) {
@@ -88,11 +87,6 @@ export default function TaskFormDialog({
   }, [channels])
   const [openCombobox, setOpenCombobox] = useState(false)
   const fromEpg = initialValues != null
-
-  const activeCount = useMemo(
-    () => tasks.filter((task) => task.status === 'Recording' || task.status === 1).length,
-    [tasks],
-  )
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskSchema),
@@ -146,10 +140,6 @@ export default function TaskFormDialog({
   }, [open, initialValues, channels, form])
 
   const onSubmit = async (values: TaskFormValues) => {
-    if (appConfig && activeCount >= appConfig.maxRecordingTasks) {
-      toast.info('当前并发已达上限，任务将进入等待队列')
-    }
-
     const channelId = parseInt(values.channelId)
     if (!fromEpg) {
       window.localStorage.setItem(
