@@ -3,7 +3,7 @@ namespace RtspRecServer.Server.Recording;
 internal sealed class BatchedTsStream : Stream
 {
     private const int PacketSize = 188;
-    private const int BlockSize = PacketSize * 128;
+    internal const int BlockSize = PacketSize * 128;
     private static readonly TimeSpan FlushDelay = TimeSpan.FromMilliseconds(40);
     private readonly Action<ReadOnlyMemory<byte>> _publish;
     private readonly bool _alignPackets;

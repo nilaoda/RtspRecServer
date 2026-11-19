@@ -9,8 +9,8 @@ internal sealed class SharedLiveRecordingService(
     UdpLiveRecordingService udp,
     ILogger<SharedLiveRecordingService> logger)
 {
-    // 大块上限为 24 KiB。即使一个写入端停滞，队列也最多保留约 12 MiB 数据。
-    private const int QueueCapacity = 512;
+    // 按块的最大尺寸控制每个任务的缓冲上限。队列只在实际积压时持有数据。
+    private const int QueueCapacity = 50 * 1024 * 1024 / BatchedTsStream.BlockSize;
     private readonly object _sync = new();
     private readonly Dictionary<LiveRecordingSourceKey, SourceSession> _sources = [];
 
@@ -216,7 +216,7 @@ internal sealed class SharedLiveRecordingService(
                     Output.Flush();
                     if (_subscriptions.Count == 1 && _subscriptions[0] == subscription)
                     {
-                        // 最后一个任务等上游收尾，接收 RTP 重排窗口和 HTTP 读缓冲里已经收到的数据。
+                        // 最后一个任务等上游收尾，接收 UDP 队列、RTP 重排窗口和 HTTP 读缓冲中已有的数据。
                         RequestStop();
                     }
                     else if (_subscriptions.Remove(subscription))

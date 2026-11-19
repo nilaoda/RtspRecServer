@@ -97,7 +97,7 @@ public class SharedLiveRecordingServiceTests
         {
             // 每批不足写入队列容量，累计则超过容量。先确认另一个写入端已经跟上再发下一批。
             var payload = TsPacketBuilder.Concatenate(Enumerable.Repeat(CreatePayload(1), 1024).ToArray());
-            const int batches = 20;
+            const int batches = 76;
             for (var index = 1; index <= batches; index++)
             {
                 Assert.True(input.Writer.TryWrite(payload));
@@ -107,7 +107,7 @@ public class SharedLiveRecordingServiceTests
             resumeWriting.TrySetResult();
             var slowResult = await slow.WaitAsync(deadline.Token);
             Assert.Contains("录像写入缓冲已满", slowResult.ErrorMessage);
-            Assert.InRange(slowResult.BytesWritten, 1, (long)batches * payload.Length - 1);
+            Assert.InRange(slowResult.BytesWritten, 48L * 1024 * 1024, (long)batches * payload.Length - 1);
 
             var finalPayload = CreatePayload(2);
             Assert.True(input.Writer.TryWrite(finalPayload));

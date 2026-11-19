@@ -112,4 +112,4 @@
 
 部分 TS 检测能力适配自同作者的 [TSCutter.GUI](https://github.com/nilaoda/TSCutter.GUI)。
 
-组播绑定和 RTP 顺序收流的设计参考了 [msd_lite](https://github.com/rozhuk-im/msd_lite) 和 [rtp2httpd](https://github.com/stackia/rtp2httpd)。本项目使用 C# 独立实现。
+组播绑定和 RTP 顺序收流的设计参考了 [msd_lite](https://github.com/rozhuk-im/msd_lite) 和 [rtp2httpd](https://github.com/stackia/rtp2httpd)。Linux 按组播地址绑定和批量读取的设计参考了 [TVHeadend](https://github.com/tvheadend/tvheadend)。本项目使用 C# 独立实现。

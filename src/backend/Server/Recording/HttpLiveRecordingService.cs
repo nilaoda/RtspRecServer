@@ -8,7 +8,7 @@ namespace RtspRecServer.Server.Recording;
 public sealed class HttpLiveRecordingService : IRecordingService
 {
     private const int ReadBufferBytes = 64 * 1024;
-    private const int PauseBufferBytes = 4 * 1024 * 1024;
+    private const int PauseBufferBytes = 8 * 1024 * 1024;
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient HttpClient = CreateHttpClient();
 

@@ -130,7 +130,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
 {
     private static readonly TimeSpan InvalidDataTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan DefaultRetryDelayBase = TimeSpan.FromSeconds(2);
-    private readonly UdpReceiveHub _receiverHub = new();
+    private readonly UdpReceiveHub _receiverHub;
     private readonly TimeSpan _idleTimeout;
     private readonly int _maxIdleRecoveries;
     private readonly TimeSpan _retryDelayBase;
@@ -140,8 +140,10 @@ public sealed class UdpLiveRecordingService : IRecordingService
     {
     }
 
-    internal UdpLiveRecordingService(TimeSpan idleTimeout, int maxIdleRecoveries, TimeSpan? retryDelayBase = null)
+    internal UdpLiveRecordingService(
+        TimeSpan idleTimeout, int maxIdleRecoveries, TimeSpan? retryDelayBase = null, UdpReceiveHub? receiverHub = null)
     {
+        _receiverHub = receiverHub ?? new UdpReceiveHub();
         _idleTimeout = idleTimeout;
         _maxIdleRecoveries = maxIdleRecoveries;
         _retryDelayBase = retryDelayBase ?? DefaultRetryDelayBase;
@@ -229,9 +231,12 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     source.Port);
                 using var rtpReorder = source.IsRtp ? new RtpReorderBuffer() : null;
                 using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var stopReceiving = cancellationToken.UnsafeRegister(
+                    static state => ((UdpSubscription)state!).StopReceiving(), subscription);
                 uint? lastSsrc = null;
                 IPAddress? lastSourceAddress = null;
                 var idleTimedOut = false;
+                var draining = false;
 
                 async ValueTask WriteReorderedAsync(IReadOnlyList<BufferedRtpPacket> packets)
                 {
@@ -267,14 +272,24 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
                 }
 
-                while (!cancellationToken.IsCancellationRequested)
+                while (true)
                 {
+                    if (!draining && cancellationToken.IsCancellationRequested)
+                    {
+                        subscription.StopReceiving();
+                        draining = true;
+                    }
+
                     UdpDatagram datagram;
                     try
                     {
-                        if (subscription.Reader.TryRead(out var queued))
+                        if (subscription.TryRead(out var queued))
                         {
                             datagram = queued;
+                        }
+                        else if (draining)
+                        {
+                            break;
                         }
                         else
                         {
@@ -287,11 +302,11 @@ public sealed class UdpLiveRecordingService : IRecordingService
                                     using var reorderDeadline = CancellationTokenSource.CreateLinkedTokenSource(idleCts.Token);
                                     // CancelAfter 会截断亚毫秒部分，确保定时触发时窗口已经到期。
                                     reorderDeadline.CancelAfter(Math.Max(1, (int)Math.Ceiling(remaining.TotalMilliseconds)));
-                                    datagram = await subscription.Reader.ReadAsync(reorderDeadline.Token);
+                                    datagram = await subscription.ReadAsync(reorderDeadline.Token);
                                 }
                                 else
                                 {
-                                    datagram = await subscription.Reader.ReadAsync(idleCts.Token);
+                                    datagram = await subscription.ReadAsync(idleCts.Token);
                                 }
                             }
                             finally
@@ -313,6 +328,10 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     }
                     catch (OperationCanceledException)
                     {
+                        continue;
+                    }
+                    catch (ChannelClosedException) when (cancellationToken.IsCancellationRequested)
+                    {
                         break;
                     }
                     catch (ChannelClosedException ex)
@@ -333,7 +352,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                                 out var rtpSequence,
                                 out var ssrc))
                         {
-                            if (!validTsSeen && DateTime.UtcNow - startedAt > InvalidDataTimeout)
+                            if (!draining && !validTsSeen && DateTime.UtcNow - startedAt > InvalidDataTimeout)
                             {
                                 Log.Warning("UDP 直播源未返回有效的 MPEG-TS 数据: {Url}", task.Url);
                                 await FlushReorderedAsync();
