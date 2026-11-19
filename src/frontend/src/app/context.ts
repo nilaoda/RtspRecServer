@@ -37,7 +37,7 @@ export type AppContextValue = {
     startTime: string
     endTime: string
     taskName: string | null
-  }) => Promise<void>
+  }) => Promise<boolean>
   stopTask: (id: number) => Promise<void>
   stopTasks: (ids: number[]) => Promise<void>
   updateTaskEndTime: (id: number, endTime: string) => Promise<boolean>

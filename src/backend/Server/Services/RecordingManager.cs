@@ -72,7 +72,27 @@ public sealed class RecordingManager
         return task;
     }
 
-    public async Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, CancellationToken cancellationToken)
+    public Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, CancellationToken cancellationToken) =>
+        CreateTaskAsync(request, null, cancellationToken);
+
+    public async Task<RecordingTask?> RetryTaskAsync(long id, CancellationToken cancellationToken)
+    {
+        var original = _taskStore.GetById(id);
+        if (original is null)
+        {
+            return null;
+        }
+
+        return await CreateTaskAsync(new RecordingTaskCreateRequest
+        {
+            ChannelId = original.ChannelId,
+            StartTime = original.StartTime,
+            EndTime = original.EndTime,
+            TaskName = original.DisplayName
+        }, id, cancellationToken);
+    }
+
+    private async Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, long? retryTaskId, CancellationToken cancellationToken)
     {
         if (request.EndTime <= request.StartTime)
         {
@@ -120,9 +140,23 @@ public sealed class RecordingManager
         RecordingTask created;
         lock (_taskTransitionLock)
         {
+            if (retryTaskId is { } id)
+            {
+                var original = _taskStore.GetById(id);
+                if (original is null || !CanRetry(original))
+                {
+                    throw new InvalidOperationException("仅可重试已结束的失败或停止任务，请等待录制收尾完成");
+                }
+                if ((original.IsLive || isLive) && request.EndTime <= DateTimeOffset.UtcNow)
+                {
+                    throw new InvalidOperationException("原直播时段已结束，请选择新的录制时间");
+                }
+            }
+
             if (_taskStore.GetAll().Any(t => t.ChannelId == request.ChannelId &&
                                              t.StartTime == request.StartTime &&
-                                             t.EndTime == request.EndTime))
+                                             t.EndTime == request.EndTime &&
+                                             (!retryTaskId.HasValue || !CanRetry(t))))
             {
                 throw new InvalidOperationException("已存在相同参数的录制任务");
             }
@@ -135,6 +169,9 @@ public sealed class RecordingManager
         await _notifier.NotifyTaskUpdateAsync(ToDto(created), cancellationToken);
         return created;
     }
+
+    private bool CanRetry(RecordingTask task) =>
+        (task.Status is RecordingStatus.Failed or RecordingStatus.Stopped) && !IsActive(task.Id);
 
     public bool DeleteTask(long id)
     {

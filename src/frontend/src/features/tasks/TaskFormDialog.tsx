@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 import { Check, ChevronsUpDown } from 'lucide-react'
 import { useAppContext } from '../../app/context'
 import { formatChannelCodecSummary } from '../shared/channel-probe'
+import { getRecordingSourceMode } from '../shared/recording-source'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -62,12 +63,14 @@ export default function TaskFormDialog({
   open,
   onOpenChange,
   initialValues,
+  entry,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   initialValues?: TaskFormInitialValues
+  entry?: 'retry'
 }) {
-  const { channels, channelProfiles, createTask } = useAppContext()
+  const { channels, channelProfiles, createTask, now } = useAppContext()
   const channelGroups = useMemo(() => {
     const groups = new Map<string, typeof channels>()
     for (const channel of channels) {
@@ -86,12 +89,16 @@ export default function TaskFormDialog({
     })
   }, [channels])
   const [openCombobox, setOpenCombobox] = useState(false)
-  const fromEpg = initialValues != null
+  const fromEpg = initialValues != null && entry == null
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskSchema),
     defaultValues: { taskName: '' },
   })
+  const channelId = useWatch({ name: 'channelId', control: form.control })
+  const selectedChannel = channels.find((channel) => String(channel.id) === channelId)
+  const isLive = selectedChannel != null && getRecordingSourceMode(selectedChannel.url) === 'live'
+  const submitting = form.formState.isSubmitting
 
   // 仅在弹窗从关闭到打开的那次渲染重置表单。打开期间 initialValues/channels 等引用
   // 可能变化（如 EPG 节目切换、后台刷新），不应覆盖用户正在编辑的内容。
@@ -108,18 +115,24 @@ export default function TaskFormDialog({
     wasOpenRef.current = true
 
     if (initialValues) {
+      const start = initialValues.startTime ?? (entry ? now : new Date())
       form.reset({
         channelId:
           initialValues.channelId != null ? String(initialValues.channelId) : String(channels[0]?.id ?? ''),
-        startTime: initialValues.startTime ?? new Date(),
-        endTime: initialValues.endTime ?? new Date(Date.now() + 30 * 60 * 1000),
+        startTime: start,
+        endTime: initialValues.endTime ?? new Date(start.getTime() + 30 * 60 * 1000),
         taskName: initialValues.taskName ?? '',
       })
       return
     }
 
-    const stored = window.localStorage.getItem('rtsp_task_draft')
-    const draft = stored ? JSON.parse(stored) : null
+    let draft: { channelId?: number; startTime?: string; endTime?: string; taskName?: string } | null = null
+    try {
+      const stored = window.localStorage.getItem('rtsp_task_draft')
+      if (stored) draft = JSON.parse(stored)
+    } catch {
+      // 浏览器禁用存储或旧草稿损坏时，继续使用新任务默认值。
+    }
     const defaultStart = new Date()
     const defaultEnd = new Date(defaultStart.getTime() + 30 * 60 * 1000)
     let startTime = defaultStart
@@ -137,46 +150,46 @@ export default function TaskFormDialog({
         ? String(draft.channelId)
         : String(channels[0]?.id ?? '')
     form.reset({ channelId: preferredChannelId, startTime, endTime, taskName: draft?.taskName ?? '' })
-  }, [open, initialValues, channels, form])
+  }, [open, initialValues, channels, entry, form, now])
 
   const onSubmit = async (values: TaskFormValues) => {
     const channelId = parseInt(values.channelId)
-    if (!fromEpg) {
-      window.localStorage.setItem(
-        'rtsp_task_draft',
-        JSON.stringify({
-          channelId,
-          startTime: values.startTime.toISOString(),
-          endTime: values.endTime.toISOString(),
-          taskName: values.taskName?.trim() || '',
-        }),
-      )
+    if (!fromEpg && isLive && values.endTime <= now) {
+      form.setError('endTime', { message: '直播录制的结束时间必须晚于当前时间' })
+      return
     }
-
-    try {
-      await createTask({
-        channelId,
-        startTime: values.startTime.toISOString(),
-        endTime: values.endTime.toISOString(),
-        taskName: values.taskName?.trim() || null,
-      })
+    const payload = {
+      channelId,
+      startTime: values.startTime.toISOString(),
+      endTime: values.endTime.toISOString(),
+      taskName: values.taskName?.trim() || null,
+    }
+    const created = await createTask(payload)
+    if (created && !initialValues) {
+      try {
+        window.localStorage.setItem('rtsp_task_draft', JSON.stringify(payload))
+      } catch {
+        // 保存草稿失败不影响已创建的任务。
+      }
+    }
+    if (created || fromEpg) {
       onOpenChange(false)
-    } catch {
-      // 错误已在 AppContext 中处理
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!submitting || fromEpg) onOpenChange(next) }}>
       <DialogContent
         className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-[500px]"
       >
         <DialogHeader>
-          <DialogTitle>{fromEpg ? '预约录制' : '新建录制任务'}</DialogTitle>
+          <DialogTitle>{fromEpg ? '预约录制' : entry === 'retry' ? '重新安排直播录制' : '新建录制任务'}</DialogTitle>
           <DialogDescription>
             {fromEpg
               ? '已按节目表预填频道和时间，节目表仅供参考，可自行修改。时间为本地时区。'
-              : '请设置录制频道和时间段。时间为本地时区。'}
+              : entry === 'retry'
+                ? '原直播时段已结束，请选择新的录制时间。原任务记录会保留。'
+                : '请设置录制频道和时间段。时间为本地时区。'}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -317,10 +330,10 @@ export default function TaskFormDialog({
               )}
             />
             <DialogFooter className="gap-2 sm:gap-0">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="outline" disabled={!fromEpg && submitting} onClick={() => onOpenChange(false)}>
                 取消
               </Button>
-              <Button type="submit">提交任务</Button>
+              <Button type="submit" disabled={!fromEpg && submitting}>{!fromEpg && submitting ? '提交中…' : '提交任务'}</Button>
             </DialogFooter>
           </form>
         </Form>

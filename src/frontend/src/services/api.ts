@@ -121,6 +121,9 @@ export const createTask = (payload: {
 export const stopTask = (id: number) =>
   fetchJson<{ message: string }>(`/api/tasks/${id}/stop`, { method: 'POST' })
 
+export const retryTask = (id: number) =>
+  fetchJson<RecordingTaskDto>(`/api/tasks/${id}/retry`, { method: 'POST' })
+
 export const stopTasks = (ids: number[]) =>
   fetchJson<BulkTaskResult>('/api/tasks/bulk-stop', {
     method: 'POST',

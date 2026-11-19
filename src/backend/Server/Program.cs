@@ -443,6 +443,19 @@ try
         }
     });
 
+    app.MapPost("/api/tasks/{id:long}/retry", async (RecordingManager manager, long id, CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var retry = await manager.RetryTaskAsync(id, cancellationToken);
+            return retry is null ? Results.NotFound(ApiResponse.Create("任务不存在")) : Results.Ok(ToDto(retry));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+    });
+
     app.MapPost("/api/tasks/{id:long}/stop", async (RecordingManager manager, long id, CancellationToken cancellationToken) =>
     {
         var task = manager.GetTask(id);

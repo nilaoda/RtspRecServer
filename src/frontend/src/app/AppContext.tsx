@@ -336,9 +336,10 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
       try {
         await createTask(payload)
         notifySuccess('任务已创建')
-        reloadTasks()
+        void reloadTasks()
+        return true
       } catch {
-        return
+        return false
       }
     },
     [notifySuccess, reloadTasks],

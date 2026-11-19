@@ -284,6 +284,52 @@ public class RecordingManagerTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("rtsp://example.test/source", false)]
+    [InlineData("rtp://239.1.1.1:8000", true)]
+    [InlineData("rtsp://example.test/source", true)]
+    public async Task RetryTask_PreservesOriginalRecording(string url, bool expiredLive)
+    {
+        var directory = Directory.CreateTempSubdirectory("rtsp-retry-");
+        try
+        {
+            var config = new ConfigurationService(directory.FullName);
+            var channel = config.AddChannel(new ChannelConfig { Name = "频道", Url = url });
+            var manager = new RecordingManager(_store, config, new NoopRecordingService(), _notifier,
+                new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
+            var start = DateTimeOffset.UtcNow.AddHours(-2);
+            var original = _store.Add(new RecordingTask
+            {
+                ChannelId = channel.Id, DisplayName = "测试录像", StartTime = start, EndTime = start.AddHours(1),
+                IsLive = expiredLive, Status = RecordingStatus.Failed, ErrorMessage = "网络中断", FilePath = "old.ts"
+            });
+
+            if (expiredLive)
+            {
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.RetryTaskAsync(original.Id, CancellationToken.None));
+                Assert.Contains("请选择新的录制时间", error.Message);
+                Assert.Single(_store.GetAll());
+            }
+            else
+            {
+                var retry = await manager.RetryTaskAsync(original.Id, CancellationToken.None);
+                Assert.NotNull(retry);
+                Assert.NotEqual(original.Id, retry.Id);
+                Assert.Equal(original.StartTime, retry.StartTime);
+                Assert.Equal(original.EndTime, retry.EndTime);
+                Assert.Equal(RecordingStatus.Pending, retry.Status);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => manager.RetryTaskAsync(original.Id, CancellationToken.None));
+                Assert.Equal(2, _store.GetAll().Count);
+            }
+
+            Assert.Equal(original, _store.GetById(original.Id));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
     [Fact]
     public async Task CreateTask_RejectsEndTimeAtStartTime()
     {

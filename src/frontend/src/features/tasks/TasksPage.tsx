@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, RefreshCw, CalendarClock, ChevronLeft, ChevronRight, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import { getTaskLog } from '../../services/api'
+import { getTaskLog, retryTask } from '../../services/api'
 import type { RecordingStatus, RecordingTaskDto } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
@@ -233,6 +233,22 @@ const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
   </Badge>
 )
 
+const TaskStatusDetail = ({ task, status, onViewFailure }: {
+  task: RecordingTaskDto
+  status: RecordingStatusKey
+  onViewFailure: (task: RecordingTaskDto) => void
+}) => {
+  if (status === 'Failed' && task.errorMessage) {
+    return (
+      <Button variant="link" className="mt-1 h-auto px-0 py-0 text-xs" onClick={() => onViewFailure(task)}>
+        失败详情
+      </Button>
+    )
+  }
+
+  return null
+}
+
 const TaskProgress = ({
   recordedDuration,
   plannedDuration,
@@ -259,14 +275,18 @@ const TaskProgress = ({
 )
 
 const TasksPage = () => {
-  const { tasks, channels, createTask, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, totalBitrateKbps } = useAppContext()
+  const { tasks, channels, reloadTasks, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, totalBitrateKbps } = useAppContext()
   const [createOpen, setCreateOpen] = useState(false)
+  const [rescheduleTask, setRescheduleTask] = useState<RecordingTaskDto | null>(null)
+  const [retryTarget, setRetryTarget] = useState<RecordingTaskDto | null>(null)
+  const [retrySubmitting, setRetrySubmitting] = useState(false)
   const [tsDialogTaskId, setTsDialogTaskId] = useState<number | null>(null)
   const tsDialogTask =
     tsDialogTaskId == null ? null : (tasks.find((task) => task.id === tsDialogTaskId) ?? null)
-  const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
+  const [infoModal, setInfoModal] = useState<{ title: string; content: string; wrap?: boolean } | null>(null)
   const [infoTaskId, setInfoTaskId] = useState<number | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
+  const detailsRequest = useRef(0)
   const [logModal, setLogModal] = useState<{ title: string; content: string; truncated: boolean } | null>(null)
   const [logLoading, setLogLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<TaskTab>('active')
@@ -390,44 +410,94 @@ const TasksPage = () => {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [stopConfirmOpen, setStopConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
-  const [retryConfirmOpen, setRetryConfirmOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [endTimeEditOpen, setEndTimeEditOpen] = useState<{ isOpen: boolean; taskId: number | null }>({ isOpen: false, taskId: null })
   const [editingEndTime, setEditingEndTime] = useState<Date | undefined>(undefined)
   const [savingEndTime, setSavingEndTime] = useState(false)
 
-  const onViewInfo = useCallback(
-    async (id: number, title: string) => {
-      setInfoLoading(true)
-      setInfoTaskId(id)
-      setInfoModal({ title, content: '' }) // Open modal first
-      try {
-        const info = await getTaskMediaInfo(id)
-        setInfoModal({ title, content: info })
-      } catch {
-        setInfoModal(null)
-        setInfoTaskId(null)
-      } finally {
-        setInfoLoading(false)
-      }
-    },
-    [getTaskMediaInfo],
-  )
+  const openRetry = (task: RecordingTaskDto) => {
+    if (task.isLive && parseTaskTime(task.endTime) <= now.getTime()) {
+      setRetryTarget(null)
+      setRescheduleTask(task)
+    } else {
+      setRetryTarget(task)
+    }
+  }
 
-  const onViewLog = useCallback(async (id: number, title: string) => {
+  const confirmRetry = async () => {
+    if (!retryTarget || retrySubmitting) return
+    if (retryTarget.isLive && parseTaskTime(retryTarget.endTime) <= now.getTime()) {
+      openRetry(retryTarget)
+      return
+    }
+
+    setRetrySubmitting(true)
+    try {
+      await retryTask(retryTarget.id)
+      toast.success('已创建重试任务')
+      setRetryTarget(null)
+      setActiveTab('active')
+      setPage(1)
+      clearSelection()
+      void reloadTasks()
+    } catch {
+      // 请求层会提示失败原因，保留弹窗供用户继续操作。
+    } finally {
+      setRetrySubmitting(false)
+    }
+  }
+
+  const closeDetails = useCallback(() => {
+    detailsRequest.current += 1
     setInfoModal(null)
     setInfoTaskId(null)
+    setInfoLoading(false)
+    setLogModal(null)
+    setLogLoading(false)
+  }, [])
+
+  const onViewInfo = useCallback(
+    async (id: number, title: string) => {
+      closeDetails()
+      const request = detailsRequest.current
+      setInfoLoading(true)
+      setInfoTaskId(id)
+      setInfoModal({ title, content: '' })
+      try {
+        const info = await getTaskMediaInfo(id)
+        if (request === detailsRequest.current) setInfoModal({ title, content: info })
+      } catch {
+        if (request === detailsRequest.current) closeDetails()
+      } finally {
+        if (request === detailsRequest.current) setInfoLoading(false)
+      }
+    },
+    [closeDetails, getTaskMediaInfo],
+  )
+
+  const onViewFailure = (task: RecordingTaskDto) => {
+    if (!task.errorMessage) return
+    closeDetails()
+    setInfoTaskId(task.id)
+    setInfoModal({ title: `录制失败 · ${task.displayName || `#${task.id}`}`, content: task.errorMessage, wrap: true })
+  }
+
+  const onViewLog = useCallback(async (id: number, title: string) => {
+    closeDetails()
+    const request = detailsRequest.current
     setLogLoading(true)
     setLogModal({ title: `${title} · 录制日志`, content: '', truncated: false })
     try {
       const data = await getTaskLog(id)
-      setLogModal({ title: `${title} · 录制日志`, content: data.content, truncated: data.truncated })
+      if (request === detailsRequest.current) setLogModal({ title: `${title} · 录制日志`, content: data.content, truncated: data.truncated })
     } catch {
-      setLogModal(null)
-      toast.error('录制日志不存在或加载失败')
+      if (request === detailsRequest.current) {
+        closeDetails()
+        toast.error('录制日志不存在或加载失败')
+      }
     } finally {
-      setLogLoading(false)
+      if (request === detailsRequest.current) setLogLoading(false)
     }
-  }, [])
+  }, [closeDetails])
 
   const openEndTimeEditor = useCallback((id: number, endTime: string) => {
     setEditingEndTime(new Date(endTime))
@@ -531,7 +601,7 @@ const TasksPage = () => {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                onClick={() => setRetryConfirmOpen({ isOpen: true, taskId: task.id })}
+                onClick={() => openRetry(task)}
                 aria-label="重试任务"
                 title="重试任务"
               >
@@ -744,6 +814,7 @@ const TasksPage = () => {
                                     <TableCell className="font-mono text-xs">{task.id}</TableCell>
                                     <TableCell>
                                         <TaskStatusBadge status={normalizedStatus} />
+                                        <TaskStatusDetail task={task} status={normalizedStatus} onViewFailure={onViewFailure} />
                                     </TableCell>
                                     <TableCell>
                                         <div className="font-medium truncate max-w-full" title={task.displayName || '--'}>
@@ -926,7 +997,7 @@ const TasksPage = () => {
                                                         <TooltipProvider>
                                                             <Tooltip>
                                                                 <TooltipTrigger asChild>
-                                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setRetryConfirmOpen({ isOpen: true, taskId: task.id })}>
+                                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openRetry(task)}>
                                                                         <RefreshCw className="h-4 w-4" />
                                                                         <span className="sr-only">Retry</span>
                                                                     </Button>
@@ -1028,6 +1099,7 @@ const TasksPage = () => {
                                 {task.displayName || '--'}
                               </span>
                             </div>
+                            <TaskStatusDetail task={task} status={normalizedStatus} onViewFailure={onViewFailure} />
                             <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                               <span className="truncate">{task.channelId} - {task.channelName}</span>
                               {channel && <ChannelProtocolBadge url={channel.url} />}
@@ -1277,41 +1349,38 @@ const TasksPage = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={retryConfirmOpen.isOpen} onOpenChange={(open) => !open && setRetryConfirmOpen({ isOpen: false, taskId: null })}>
+      <AlertDialog open={retryTarget !== null} onOpenChange={(open) => { if (!open && !retrySubmitting) setRetryTarget(null) }}>
         <AlertDialogContent>
             <AlertDialogHeader>
                 <AlertDialogTitle>确认重试任务？</AlertDialogTitle>
                 <AlertDialogDescription>
-                    此操作将删除当前任务记录，并以相同参数创建新任务。
+                    将按原时间段创建一个新任务，原任务记录和录像会保留。
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogCancel disabled={retrySubmitting}>取消</AlertDialogCancel>
                 <AlertDialogAction
-                    onClick={async () => {
-                        if (retryConfirmOpen.taskId) {
-                            const targetTask = tasks.find((task) => task.id === retryConfirmOpen.taskId)
-                            if (targetTask) {
-                                await deleteTask(targetTask.id)
-                                await createTask({
-                                    channelId: targetTask.channelId,
-                                    startTime: new Date(targetTask.startTime).toISOString(),
-                                    endTime: new Date(targetTask.endTime).toISOString(),
-                                    taskName: targetTask.displayName?.trim() || null,
-                                })
-                            }
-                        }
-                        setRetryConfirmOpen({ isOpen: false, taskId: null })
+                    disabled={retrySubmitting}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      void confirmRetry()
                     }}
-                    className="bg-destructive hover:bg-destructive/90"
                 >
-                    继续重试
+                    {retrySubmitting ? '创建中…' : '继续重试'}
                 </AlertDialogAction>
             </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
       <TaskFormDialog open={createOpen} onOpenChange={setCreateOpen} />
+      {rescheduleTask && (
+        <TaskFormDialog
+          open
+          onOpenChange={(open) => { if (!open) setRescheduleTask(null) }}
+          entry="retry"
+          initialValues={{ channelId: rescheduleTask.channelId, taskName: rescheduleTask.displayName }}
+        />
+      )}
       <TsCheckDialog
         task={tsDialogTask}
         onOpenChange={(open) => {
@@ -1365,7 +1434,7 @@ const TasksPage = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(infoModal)} onOpenChange={(open) => { if (!open) { setInfoModal(null); setInfoTaskId(null) } }}>
+      <Dialog open={Boolean(infoModal)} onOpenChange={(open) => { if (!open) closeDetails() }}>
         <DialogContent className="max-h-[85dvh] max-w-[calc(100vw-2rem)] flex flex-col sm:max-w-3xl">
             <DialogHeader>
                 <DialogTitle>{infoModal?.title}</DialogTitle>
@@ -1376,11 +1445,11 @@ const TasksPage = () => {
                         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                     </div>
                 ) : (
-                    <pre className="whitespace-pre">{infoModal?.content}</pre>
+                    <pre className={infoModal?.wrap ? 'whitespace-pre-wrap break-words' : 'whitespace-pre'}>{infoModal?.content}</pre>
                 )}
             </div>
             <DialogFooter className="gap-2 sm:gap-0">
-                <Button type="button" variant="outline" onClick={() => { setInfoModal(null); setInfoTaskId(null) }}>
+                <Button type="button" variant="outline" onClick={closeDetails}>
                     关闭
                 </Button>
                 <Button
@@ -1399,7 +1468,7 @@ const TasksPage = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(logModal)} onOpenChange={(open) => { if (!open) setLogModal(null) }}>
+      <Dialog open={Boolean(logModal)} onOpenChange={(open) => { if (!open) closeDetails() }}>
         <DialogContent className="max-h-[85dvh] max-w-[calc(100vw-2rem)] flex flex-col sm:max-w-3xl">
             <DialogHeader>
                 <DialogTitle>{logModal?.title}</DialogTitle>
@@ -1417,7 +1486,7 @@ const TasksPage = () => {
                 )}
             </div>
             <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setLogModal(null)}>
+                <Button type="button" variant="outline" onClick={closeDetails}>
                     关闭
                 </Button>
             </DialogFooter>
