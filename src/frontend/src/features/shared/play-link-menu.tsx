@@ -158,11 +158,13 @@ export default function PlayLinkMenu({
   path,
   name,
   withLabel = false,
+  disabled = false,
   className,
 }: {
   path: string
   name: string
   withLabel?: boolean
+  disabled?: boolean
   className?: string
 }) {
   const { appConfig } = useAppContext()
@@ -280,6 +282,7 @@ export default function PlayLinkMenu({
             variant="ghost"
             size={withLabel ? 'sm' : 'icon'}
             className={cn(!withLabel && 'h-8 w-8', className)}
+            disabled={disabled}
             aria-label="播放/串流"
             title="播放/串流"
           >

@@ -63,6 +63,7 @@ try
     builder.Services.AddSingleton<TaskErrorLogService>();
     builder.Services.AddSingleton<ChannelProbeService>();
     builder.Services.AddSingleton<ChannelRecordingSimulation>();
+    builder.Services.AddSingleton<ChannelPlaybackService>();
     builder.Services.AddSingleton<RecordingTimerStore>();
     builder.Services.AddSingleton<RecordingTimerService>();
     builder.Services.AddHostedService<RecordingBackgroundService>();
@@ -298,10 +299,19 @@ try
             ? Results.Accepted()
             : Results.NotFound(ApiResponse.Create("该模拟录制已结束")));
 
+    app.MapGet("/api/channels/{id:int}/play.ts", (ChannelPlaybackService playback, int id) =>
+    {
+        lock (channelOperations)
+        {
+            return playback.Subscribe(id);
+        }
+    });
+
     app.MapPut("/api/channels/{id:int}", (
         ConfigurationService service,
         ChannelProbeService probeService,
         ChannelRecordingSimulation simulation,
+        ChannelPlaybackService playback,
         int id,
         ChannelConfig channel) =>
     {
@@ -318,6 +328,7 @@ try
             {
                 probeService.InvalidateChannel(id);
                 simulation.InvalidateChannels([id]);
+                playback.InvalidateChannels([id]);
             }
             return Results.Ok(updated);
         }
@@ -327,6 +338,7 @@ try
         ConfigurationService service,
         ChannelProbeService probeService,
         ChannelRecordingSimulation simulation,
+        ChannelPlaybackService playback,
         int id) =>
     {
         lock (channelOperations)
@@ -338,6 +350,7 @@ try
 
             probeService.InvalidateChannel(id);
             simulation.InvalidateChannels([id]);
+            playback.InvalidateChannels([id]);
             return Results.Ok(ApiResponse.Create("频道已删除"));
         }
     });
@@ -346,6 +359,7 @@ try
         ConfigurationService service,
         ChannelProbeService probeService,
         ChannelRecordingSimulation simulation,
+        ChannelPlaybackService playback,
         ChannelBulkRequest request) =>
     {
         lock (channelOperations)
@@ -355,6 +369,7 @@ try
             {
                 probeService.InvalidateChannels(result.SucceededIds);
                 simulation.InvalidateChannels(result.SucceededIds);
+                playback.InvalidateChannels(result.SucceededIds);
             }
             return Results.Ok(result);
         }
@@ -364,6 +379,7 @@ try
         ConfigurationService service,
         ChannelProbeService probeService,
         ChannelRecordingSimulation simulation,
+        ChannelPlaybackService playback,
         ChannelBulkEditRequest request) =>
     {
         lock (channelOperations)
@@ -385,6 +401,7 @@ try
                     {
                         probeService.InvalidateChannels(urlChangedIds);
                         simulation.InvalidateChannels(urlChangedIds);
+                        playback.InvalidateChannels(urlChangedIds);
                     }
                 }
                 return Results.Ok(result);

@@ -19,12 +19,10 @@ internal static class RtpPayloadParser
 
         if (useRtp && payload.Length > 0 && payload[0] != 0x47)
         {
-            if (!TryGetRtpHeaderLength(payload, out var rtpHeaderLength) || rtpHeaderLength >= payload.Length)
+            if (!TryGetRtpPayloadSegment(payload, out dataOffset, out dataLength))
             {
                 return false;
             }
-            dataOffset = rtpHeaderLength;
-            dataLength = payload.Length - rtpHeaderLength;
         }
 
         if (dataLength <= 0)
@@ -39,6 +37,29 @@ internal static class RtpPayloadParser
             {
                 shouldStop = true;
             }
+        }
+
+        return true;
+    }
+
+    public static bool TryGetRtpPayloadSegment(ReadOnlySpan<byte> packet, out int offset, out int length)
+    {
+        length = 0;
+        if (!TryGetRtpHeaderLength(packet, out offset) || packet[0] >> 6 != 2 || offset >= packet.Length)
+        {
+            return false;
+        }
+
+        length = packet.Length - offset;
+        if ((packet[0] & 0x20) != 0)
+        {
+            var padding = packet[^1];
+            if (padding == 0 || padding >= length)
+            {
+                return false;
+            }
+
+            length -= padding;
         }
 
         return true;

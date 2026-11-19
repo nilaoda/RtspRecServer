@@ -11,6 +11,7 @@ import { bulkEditChannels, deleteChannels, startChannelScan, stopChannelScan } f
 import type { ChannelBulkEditItem, ChannelConfig, ChannelProbeResult } from '../../types'
 import { formatDateTime } from '../shared/format'
 import { formatProbeBitrate } from '../shared/channel-probe'
+import PlayLinkMenu from '../shared/play-link-menu'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import ChannelRecordingSimulationDialog from './ChannelRecordingSimulationDialog'
 import { useChannelDiagnostics } from './useChannelDiagnostics'
@@ -1062,6 +1063,13 @@ const ChannelsPage = () => {
                                                         </TooltipContent>
                                                     </Tooltip>
                                                 </TooltipProvider>
+                                                {/^(rtsp|rtp|udp|https?):\/\//i.test(channel.url.trim()) && (
+                                                    <PlayLinkMenu
+                                                        path={`/api/channels/${channel.id}/play.ts`}
+                                                        name={channel.name}
+                                                        disabled={hasChanged}
+                                                    />
+                                                )}
                                             </div>
                                         </TableCell>
                                     </TableRow>

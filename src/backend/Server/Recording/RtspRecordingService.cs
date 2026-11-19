@@ -21,16 +21,23 @@ public sealed record RecordingResult
 
 public sealed class RtspRecordingService : IRecordingService
 {
-    public async Task<RecordingResult> RecordAsync(
+    public Task<RecordingResult> RecordAsync(
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken,
-        Stream? output = null)
+        Stream? output = null) => RunAsync(task, outputPath, targetDuration, recordingTransport, onProgress, cancellationToken, output, live: false);
+
+    internal Task<RecordingResult> ForwardAsync(RecordingTask task, string transport, Stream output, CancellationToken cancellationToken) =>
+        RunAsync(task, string.Empty, null, transport, null, cancellationToken, output, live: true);
+
+    private static async Task<RecordingResult> RunAsync(
+        RecordingTask task, string outputPath, TimeSpan? targetDuration, string recordingTransport,
+        Action<RecordingProgress>? onProgress, CancellationToken cancellationToken, Stream? output, bool live)
     {
-        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport, task.TaskName, output);
+        var recorder = new RtspStreamRecorder(task.Url, outputPath, recordingTransport, task.TaskName, output, live);
         try
         {
             var result = await recorder.RunAsync(targetDuration, onProgress, cancellationToken);
@@ -70,24 +77,30 @@ internal sealed class RtspStreamRecorder
     private readonly bool _useRtp;
     private readonly string _displayName;
     private readonly Stream? _output;
+    private readonly bool _live;
     private TcpClient? _client;
+    private string? _sessionId;
+    private CancellationTokenSource? _keepAliveCancellation;
+    private Task? _keepAliveTask;
     private int _seq = 2;
     private TsLiveAnalysisSession? _analysis;
     public long BytesWritten { get; private set; }
 
-    public RtspStreamRecorder(string url, string outputPath, string recordingTransport, string displayName, Stream? output = null)
+    public RtspStreamRecorder(string url, string outputPath, string recordingTransport, string displayName, Stream? output = null, bool live = false)
     {
         _url = url;
         _outputPath = outputPath;
         _recordingTransport = recordingTransport;
         _displayName = displayName;
         _output = output;
+        _live = live;
         _useRtp = string.Equals(_recordingTransport, "MP2T/RTP/TCP", StringComparison.OrdinalIgnoreCase);
     }
 
-    public async Task<RecordingResult> RunAsync(TimeSpan? targetDuration, Action<RecordingProgress> onProgress, CancellationToken cancellationToken)
+    public async Task<RecordingResult> RunAsync(
+        TimeSpan? targetDuration, Action<RecordingProgress>? onProgress, CancellationToken cancellationToken, int redirectsRemaining = 5)
     {
-        _analysis = new TsLiveAnalysisSession(_displayName);
+        _analysis = onProgress is null ? null : new TsLiveAnalysisSession(_displayName);
         await ConnectAsync(cancellationToken);
         var stream = _client!.GetStream();
         // 握手和媒体共用读取缓冲，避免丢掉与 PLAY 响应同批到达的数据。
@@ -109,19 +122,22 @@ internal sealed class RtspStreamRecorder
         await SendAsync(stream, describe, cancellationToken);
         var resp = await ReceiveHeadAsync(reader, cancellationToken);
 
-        if (Regex.IsMatch(resp, "Location: (.*)"))
+        if (RtspMessage.GetHeader(resp, "Location") is { Length: > 0 } newUrl)
         {
-            var newUrl = Regex.Match(resp, "Location: (.*)").Groups[1].Value.Trim();
+            if (redirectsRemaining == 0)
+            {
+                throw new InvalidOperationException("RTSP 重定向次数过多");
+            }
             Log.Information("RTSP重定向到新URL：{NewUrl} (原URL: {OldUrl})", newUrl, _url);
             _client.Close();
             _client = null;
             _seq = 2;
             _analysis?.Dispose();
             _analysis = null;
-            var redirected = new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName, _output);
+            var redirected = new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName, _output, _live);
             try
             {
-                return await redirected.RunAsync(targetDuration, onProgress, cancellationToken);
+                return await redirected.RunAsync(targetDuration, onProgress, cancellationToken, redirectsRemaining - 1);
             }
             finally
             {
@@ -132,7 +148,7 @@ internal sealed class RtspStreamRecorder
             }
         }
 
-        if (!resp.Contains("200 OK"))
+        if (!RtspMessage.IsOk(resp))
         {
             var statusLine = resp.Split("\r\n").FirstOrDefault() ?? "Unknown";
             Log.Error("RTSP DESCRIBE失败。状态行: {StatusLine}, URL: {Url}, 完整响应: {Response}", statusLine, _url, resp);
@@ -143,22 +159,53 @@ internal sealed class RtspStreamRecorder
         await SendAsync(stream, setup, cancellationToken);
         var setupResp = await ReceiveHeadAsync(reader, cancellationToken);
 
-        if (!setupResp.Contains("200 OK"))
+        if (!RtspMessage.IsOk(setupResp))
         {
             var statusLine = setupResp.Split("\r\n").FirstOrDefault() ?? "Unknown";
             Log.Error("RTSP SETUP失败。状态行: {StatusLine}, URL: {Url}, 响应内容: {Response}", statusLine, _url, setupResp);
             throw new InvalidOperationException($"RTSP SETUP失败 ({statusLine})，可能不支持 {_recordingTransport} 传输模式");
         }
 
-        var play = RtspMessage.BuildPlay(_url, _seq++);
+        var sessionHeader = RtspMessage.GetHeader(setupResp, "Session");
+        _sessionId = sessionHeader?.Split(';', 2)[0].Trim();
+        var useRtp = _useRtp;
+        byte mediaChannel = 0;
+        if (_live && RtspMessage.GetHeader(setupResp, "Transport") is { Length: > 0 } transport)
+        {
+            var mode = transport.Split(';', 2)[0].Trim();
+            useRtp = mode.Equals("MP2T/RTP/TCP", StringComparison.OrdinalIgnoreCase) ||
+                     mode.Equals("RTP/AVP/TCP", StringComparison.OrdinalIgnoreCase);
+            if (!useRtp && !mode.Equals("MP2T/TCP", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"频道播放不支持 RTSP 传输模式 {mode}");
+            }
+
+            var interleaved = Regex.Match(transport, @";\s*interleaved\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+            if (interleaved.Success && !byte.TryParse(interleaved.Groups[1].Value, out mediaChannel))
+            {
+                throw new InvalidDataException("RTSP 媒体通道号无效");
+            }
+        }
+
+        var play = RtspMessage.BuildPlay(_url, _seq++, _sessionId, _live);
         await SendAsync(stream, play, cancellationToken);
         var playResp = await ReceiveHeadAsync(reader, cancellationToken);
 
-        if (!playResp.Contains("200 OK"))
+        if (!RtspMessage.IsOk(playResp))
         {
             var statusLine = playResp.Split("\r\n").FirstOrDefault() ?? "Unknown";
             Log.Error("RTSP PLAY失败。状态行: {StatusLine}, URL: {Url}, 响应内容: {Response}", statusLine, _url, playResp);
             throw new InvalidOperationException($"RTSP PLAY失败 ({statusLine})，服务器拒绝播放请求");
+        }
+
+        if (_live && _sessionId is { Length: > 0 } sessionId)
+        {
+            var sessionTimeout = Regex.Match(sessionHeader!, @";\s*timeout\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+            var interval = int.TryParse(sessionTimeout.Groups[1].Value, out var seconds) && seconds > 0
+                ? TimeSpan.FromSeconds(Math.Min(30, seconds / 2d))
+                : TimeSpan.FromSeconds(30);
+            _keepAliveCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _keepAliveTask = KeepAliveAsync(stream, sessionId, interval, _keepAliveCancellation.Token);
         }
         if (_output is null)
         {
@@ -171,8 +218,8 @@ internal sealed class RtspStreamRecorder
         var sink = _output ?? buffered!;
 
         const int BatchSize = 64 * 1024;
-        using var batch = MemoryPool<byte>.Shared.Rent(BatchSize);
-        var batchBuffer = batch.Memory;
+        using var batch = _live ? null : MemoryPool<byte>.Shared.Rent(BatchSize);
+        var batchBuffer = batch?.Memory ?? Memory<byte>.Empty;
         var batchOffset = 0;
         var header = new byte[4];
         while (!cancellationToken.IsCancellationRequested)
@@ -219,16 +266,16 @@ internal sealed class RtspStreamRecorder
                     break;
                 }
 
-                if (header[1] == 0)
+                if (header[1] == mediaChannel)
                 {
                     packetCount++;
                     var payloadMemory = payload.AsMemory(0, length);
-                    if (!RtpPayloadParser.TryResolvePayloadSegment(payloadMemory.Span, _useRtp, ref firstPcrTicks, ref lastPcrTicks, targetTicks, packetCount, out var dataOffset, out var dataLength, out var shouldStop))
+                    if (!RtpPayloadParser.TryResolvePayloadSegment(payloadMemory.Span, useRtp, ref firstPcrTicks, ref lastPcrTicks, targetTicks, packetCount, out var dataOffset, out var dataLength, out var shouldStop))
                     {
                         continue;
                     }
 
-                    if (dataLength > BatchSize)
+                    if (_live || dataLength > BatchSize)
                     {
                         if (batchOffset > 0)
                         {
@@ -260,8 +307,7 @@ internal sealed class RtspStreamRecorder
                     }
                     
                     // 每秒进度上报：检查是否需要上报进度
-                    var now = DateTime.UtcNow;
-                    if ((now - lastProgressTime).TotalSeconds >= 1.0)
+                    if (onProgress is not null && DateTime.UtcNow - lastProgressTime >= TimeSpan.FromSeconds(1))
                     {
                         double? currentPcrElapsedSeconds = null;
                         if (firstPcrTicks.HasValue && lastPcrTicks.HasValue)
@@ -274,7 +320,7 @@ internal sealed class RtspStreamRecorder
                             PcrElapsedSeconds = currentPcrElapsedSeconds,
                             TsCheck = _analysis?.GetSummary()
                         });
-                        lastProgressTime = now;
+                        lastProgressTime = DateTime.UtcNow;
                     }
                 }
             }
@@ -298,7 +344,7 @@ internal sealed class RtspStreamRecorder
         {
             finalPcrElapsedSeconds = PcrParser.CalculateElapsedSeconds(firstPcrTicks.Value, lastPcrTicks.Value);
         }
-        onProgress(new RecordingProgress 
+        onProgress?.Invoke(new RecordingProgress
         { 
             BytesWritten = BytesWritten, 
             PcrElapsedSeconds = finalPcrElapsedSeconds,
@@ -339,17 +385,48 @@ internal sealed class RtspStreamRecorder
     {
         using var client = _client;
         _client = null;
+        if (_keepAliveCancellation is { } keepAlive)
+        {
+            _keepAliveCancellation = null;
+            using (keepAlive)
+            {
+                await keepAlive.CancelAsync();
+                await _keepAliveTask!;
+            }
+        }
+
         if (client?.Connected == true)
         {
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-                var teardown = RtspMessage.BuildTeardown(_url, _seq);
+                var teardown = RtspMessage.BuildTeardown(_url, _seq, _sessionId);
                 await SendAsync(client.GetStream(), teardown, timeout.Token);
             }
             catch
             {
             }
+        }
+    }
+
+    private async Task KeepAliveAsync(Stream stream, string sessionId, TimeSpan interval, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(interval, cancellationToken);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(5));
+                await SendAsync(stream, RtspMessage.BuildOptions(_url, _seq++, sessionId), timeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or OperationCanceledException)
+        {
+            Log.Debug(ex, "RTSP 播放会话保活失败: {Url}", _url);
         }
     }
 
@@ -461,6 +538,24 @@ internal static class RtspMessage
 {
     private const string UserAgent = "Lavf58.20.100";
 
+    public static bool IsOk(string response) => Regex.IsMatch(response, @"\ARTSP/\d+\.\d+[ \t]+200(?:[ \t\r\n]|$)");
+
+    public static string? GetHeader(string response, string name)
+    {
+        using var reader = new StringReader(response);
+        reader.ReadLine();
+        var prefix = name + ":";
+        while (reader.ReadLine() is { Length: > 0 } line)
+        {
+            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return line[prefix.Length..].Trim();
+            }
+        }
+
+        return null;
+    }
+
     public static string BuildDescribe(string url, int seq)
     {
         return $"DESCRIBE {url} RTSP/1.0\r\n" +
@@ -480,18 +575,25 @@ internal static class RtspMessage
                $"User-Agent: {UserAgent}\r\n\r\n";
     }
 
-    public static string BuildPlay(string url, int seq)
+    public static string BuildPlay(string url, int seq, string? sessionId = null, bool live = false)
     {
         return $"PLAY {url} RTSP/1.0\r\n" +
-               "Range: npt=0.000-\r\n" +
+               (live ? string.Empty : "Range: npt=0.000-\r\n") +
+               SessionHeader(sessionId) +
                $"CSeq: {seq}\r\n" +
                $"User-Agent: {UserAgent}\r\n\r\n";
     }
 
-    public static string BuildTeardown(string url, int seq)
+    public static string BuildTeardown(string url, int seq, string? sessionId = null)
     {
         return $"TEARDOWN {url} RTSP/1.0\r\n" +
+               SessionHeader(sessionId) +
                $"CSeq: {seq}\r\n" +
                $"User-Agent: {UserAgent}\r\n\r\n";
     }
+
+    public static string BuildOptions(string url, int seq, string sessionId) =>
+        $"OPTIONS {url} RTSP/1.0\r\nCSeq: {seq}\r\n{SessionHeader(sessionId)}User-Agent: {UserAgent}\r\n\r\n";
+
+    private static string SessionHeader(string? sessionId) => string.IsNullOrEmpty(sessionId) ? string.Empty : $"Session: {sessionId}\r\n";
 }

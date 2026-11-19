@@ -12,17 +12,23 @@ public sealed class HttpLiveRecordingService : IRecordingService
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient HttpClient = CreateHttpClient();
 
-    public async Task<RecordingResult> RecordAsync(
+    public Task<RecordingResult> RecordAsync(
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken,
-        Stream? output = null)
+        Stream? output = null) => RecordCoreAsync(task, outputPath, onProgress, cancellationToken, output);
+
+    internal Task<RecordingResult> ForwardAsync(RecordingTask task, Stream output, CancellationToken cancellationToken) =>
+        RecordCoreAsync(task, string.Empty, null, cancellationToken, output);
+
+    private async Task<RecordingResult> RecordCoreAsync(
+        RecordingTask task, string outputPath, Action<RecordingProgress>? onProgress, CancellationToken cancellationToken, Stream? output)
     {
         var bytesWritten = 0L;
-        using var analysis = new TsLiveAnalysisSession(task.TaskName);
+        using var analysis = onProgress is null ? null : new TsLiveAnalysisSession(task.TaskName);
 
         RecordingResult Finish(bool success, string? error, long bytes)
         {
@@ -32,7 +38,7 @@ public sealed class HttpLiveRecordingService : IRecordingService
                 ErrorMessage = error,
                 BytesWritten = bytes,
                 OutputPath = outputPath,
-                TsCheck = analysis.Complete()
+                TsCheck = analysis?.Complete()
             };
         }
 
@@ -80,15 +86,14 @@ public sealed class HttpLiveRecordingService : IRecordingService
                             // 停录时让已收到的数据完成写入和检测。
                             await sink.WriteAsync(segment);
                             bytesWritten += segment.Length;
-                            analysis.Append(segment.Span);
+                            analysis?.Append(segment.Span);
                         }
 
                         pipe.Reader.AdvanceTo(read.Buffer.End);
-                        var now = DateTime.UtcNow;
-                        if ((now - lastProgress).TotalSeconds >= 1.0)
+                        if (onProgress is not null && DateTime.UtcNow - lastProgress >= TimeSpan.FromSeconds(1))
                         {
-                            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                            lastProgress = now;
+                            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
+                            lastProgress = DateTime.UtcNow;
                         }
 
                         if (read.IsCompleted)
@@ -125,13 +130,13 @@ public sealed class HttpLiveRecordingService : IRecordingService
             }
 
             await sink.FlushAsync(CancellationToken.None);
-            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+            onProgress?.Invoke(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
 
             return Finish(!cancellationToken.IsCancellationRequested && streamError is null, streamError, bytesWritten);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+            onProgress?.Invoke(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
             return Finish(false, null, bytesWritten);
         }
         catch (Exception ex)

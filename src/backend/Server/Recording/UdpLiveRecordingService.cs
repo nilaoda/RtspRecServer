@@ -147,17 +147,23 @@ public sealed class UdpLiveRecordingService : IRecordingService
         _retryDelayBase = retryDelayBase ?? DefaultRetryDelayBase;
     }
 
-    public async Task<RecordingResult> RecordAsync(
+    public Task<RecordingResult> RecordAsync(
         RecordingTask task,
         string outputPath,
         TimeSpan? targetDuration,
         string recordingTransport,
         Action<RecordingProgress> onProgress,
         CancellationToken cancellationToken,
-        Stream? output = null)
+        Stream? output = null) => RecordCoreAsync(task, outputPath, onProgress, cancellationToken, output);
+
+    internal Task<RecordingResult> ForwardAsync(RecordingTask task, Stream output, CancellationToken cancellationToken) =>
+        RecordCoreAsync(task, string.Empty, null, cancellationToken, output);
+
+    private async Task<RecordingResult> RecordCoreAsync(
+        RecordingTask task, string outputPath, Action<RecordingProgress>? onProgress, CancellationToken cancellationToken, Stream? output)
     {
         var bytesWritten = 0L;
-        using var analysis = new TsLiveAnalysisSession(task.TaskName);
+        using var analysis = onProgress is null ? null : new TsLiveAnalysisSession(task.TaskName);
 
         RecordingResult Finish(bool success, string? error, long bytes)
         {
@@ -167,7 +173,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 ErrorMessage = error,
                 BytesWritten = bytes,
                 OutputPath = outputPath,
-                TsCheck = analysis.Complete()
+                TsCheck = analysis?.Complete()
             };
         }
 
@@ -206,13 +212,12 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 // 当前 TS 数据块写完再响应停录，与结束时排空重排窗口一致。
                 await sink.WriteAsync(payload, CancellationToken.None);
                 bytesWritten += payload.Length;
-                analysis.Append(payload.Span);
+                analysis?.Append(payload.Span);
 
-                var now = DateTime.UtcNow;
-                if ((now - lastProgress).TotalSeconds >= 1.0)
+                if (onProgress is not null && DateTime.UtcNow - lastProgress >= TimeSpan.FromSeconds(1))
                 {
-                    onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                    lastProgress = now;
+                    onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
+                    lastProgress = DateTime.UtcNow;
                 }
             }
 
@@ -419,7 +424,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 idleRecoveries++;
                 if (idleRecoveries > _maxIdleRecoveries)
                 {
-                    onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                    onProgress?.Invoke(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
                     return Finish(false, "直播流无数据超时", bytesWritten);
                 }
 
@@ -430,7 +435,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
                     idleRecoveries,
                     _maxIdleRecoveries,
                     task.Url);
-                onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                onProgress?.Invoke(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
                 try
                 {
                     await Task.Delay(retryDelay, cancellationToken);
@@ -442,12 +447,12 @@ public sealed class UdpLiveRecordingService : IRecordingService
             }
 
             await sink.FlushAsync(CancellationToken.None);
-            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+            onProgress?.Invoke(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
             return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+            onProgress?.Invoke(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis?.GetSummary() });
             return Finish(false, null, bytesWritten);
         }
         catch (Exception ex)
@@ -476,28 +481,13 @@ public sealed class UdpLiveRecordingService : IRecordingService
 
         if (isRtp && datagram[0] != 0x47)
         {
-            if ((datagram[0] >> 6) != 2 ||
-                !RtpPayloadParser.TryGetRtpHeaderLength(datagram, out var headerLength) ||
-                headerLength >= length)
+            if (!RtpPayloadParser.TryGetRtpPayloadSegment(datagram, out offset, out length))
             {
                 return false;
             }
 
             rtpSequence = (ushort)((datagram[2] << 8) | datagram[3]);
             ssrc = BinaryPrimitives.ReadUInt32BigEndian(datagram.Slice(8, 4));
-            offset = headerLength;
-            length -= headerLength;
-
-            if ((datagram[0] & 0x20) != 0)
-            {
-                var padding = datagram[^1];
-                if (padding == 0 || padding >= length)
-                {
-                    return false;
-                }
-
-                length -= padding;
-            }
         }
 
         return length > 0 && MpegTsValidator.LooksLikeMpegTs(datagram.Slice(offset, length));
