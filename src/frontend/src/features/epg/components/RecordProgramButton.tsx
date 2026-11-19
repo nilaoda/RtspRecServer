@@ -64,7 +64,7 @@ export default function RecordProgramButton({
           variant="ghost"
           size="icon"
           title="预约录制"
-          className={cn('h-7 w-7 text-muted-foreground hover:text-primary', className)}
+          className={cn('h-10 w-10 text-muted-foreground hover:text-primary sm:h-9 sm:w-9', className)}
           onClick={() => setOpen(true)}
         >
           <CalendarPlus className="h-4 w-4" />
