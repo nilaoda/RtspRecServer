@@ -226,6 +226,24 @@ public sealed class UdpLiveRecordingService : IRecordingService
                 IPAddress? lastSourceAddress = null;
                 var idleTimedOut = false;
 
+                async Task WriteReorderedAsync(IReadOnlyList<BufferedRtpPacket> packets, CancellationToken token)
+                {
+                    try
+                    {
+                        foreach (var packet in packets)
+                        {
+                            await WritePayloadAsync(packet.Payload, token);
+                        }
+                    }
+                    finally
+                    {
+                        foreach (var packet in packets)
+                        {
+                            packet.Dispose();
+                        }
+                    }
+                }
+
                 async Task FlushReorderedAsync()
                 {
                     if (rtpReorder is null)
@@ -233,16 +251,12 @@ public sealed class UdpLiveRecordingService : IRecordingService
                         return;
                     }
 
-                    foreach (var packet in rtpReorder.Flush())
+                    await WriteReorderedAsync(rtpReorder.Flush(), CancellationToken.None);
+                    if (rtpReorder.MissingSequences > 0 || rtpReorder.OldPackets > 0)
                     {
-                        try
-                        {
-                            await WritePayloadAsync(packet.Payload, CancellationToken.None);
-                        }
-                        finally
-                        {
-                            packet.Dispose();
-                        }
+                        Log.Information(
+                            "RTP 重排统计: 跳过 {Missing} 个序列，收到 {Old} 个超出窗口的迟到或重复包: {Url}",
+                            rtpReorder.MissingSequences, rtpReorder.OldPackets, task.Url);
                     }
                 }
 
@@ -352,18 +366,8 @@ public sealed class UdpLiveRecordingService : IRecordingService
                             var ready = rtpReorder.Push(
                                 rtpSequence.Value,
                                 datagram.Payload.Span.Slice(dataOffset, dataLength),
-                                DateTime.UtcNow);
-                            foreach (var packet in ready)
-                            {
-                                try
-                                {
-                                    await WritePayloadAsync(packet.Payload, cancellationToken);
-                                }
-                                finally
-                                {
-                                    packet.Dispose();
-                                }
-                            }
+                                datagram.ReceivedTimestamp);
+                            await WriteReorderedAsync(ready, cancellationToken);
                         }
                         else
                         {

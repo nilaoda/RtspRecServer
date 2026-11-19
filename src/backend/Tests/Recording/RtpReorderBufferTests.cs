@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using RtspRecServer.Server.Recording;
 
 namespace RtspRecServer.Tests.Recording;
@@ -8,7 +9,7 @@ public class RtpReorderBufferTests
     public void Flush_ReordersPacketsAndDropsDuplicates()
     {
         using var buffer = new RtpReorderBuffer(TimeSpan.FromMilliseconds(80));
-        var now = DateTime.UtcNow;
+        var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1, 2, 3 };
 
         Assert.Empty(buffer.Push(3, payload, now));
@@ -32,19 +33,23 @@ public class RtpReorderBufferTests
     }
 
     [Fact]
-    public void Flush_KeepsOrderWhenPacketsAreMissing()
+    public void Push_ReleasesPacketsAfterWindowAndCountsMissingSequence()
     {
         using var buffer = new RtpReorderBuffer();
-        var now = DateTime.UtcNow;
+        var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1 };
 
         buffer.Push(1, payload, now);
         buffer.Push(3, payload, now);
 
-        var ready = buffer.Flush();
+        var afterWindow = now + Stopwatch.Frequency / 4;
+        var ready = buffer.Push(4, payload, afterWindow);
         try
         {
             Assert.Equal([1L, 3L], ready.Select(packet => packet.Sequence));
+            Assert.Equal(1, buffer.MissingSequences);
+            Assert.Empty(buffer.Push(2, payload, afterWindow));
+            Assert.Equal(1, buffer.OldPackets);
         }
         finally
         {
@@ -59,7 +64,7 @@ public class RtpReorderBufferTests
     public void Reset_DiscardsPendingPacketsAndAcceptsNewBaseline()
     {
         using var buffer = new RtpReorderBuffer();
-        var now = DateTime.UtcNow;
+        var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1 };
 
         buffer.Push(100, payload, now);
@@ -85,7 +90,7 @@ public class RtpReorderBufferTests
     public void Flush_HandlesSequenceWrap()
     {
         using var buffer = new RtpReorderBuffer();
-        var now = DateTime.UtcNow;
+        var now = Stopwatch.GetTimestamp();
         var payload = new byte[] { 1 };
 
         buffer.Push(65535, payload, now);

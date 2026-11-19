@@ -1,4 +1,4 @@
-using System.Buffers;
+using System.IO.Pipelines;
 using Serilog;
 using RtspRecServer.Server.Recording.TsAnalysis;
 using RtspRecServer.Shared;
@@ -7,6 +7,8 @@ namespace RtspRecServer.Server.Recording;
 
 public sealed class HttpLiveRecordingService : IRecordingService
 {
+    private const int ReadBufferBytes = 64 * 1024;
+    private const int PauseBufferBytes = 4 * 1024 * 1024;
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(30);
     private static readonly HttpClient HttpClient = CreateHttpClient();
 
@@ -58,65 +60,74 @@ public sealed class HttpLiveRecordingService : IRecordingService
                 ? new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 32 * 1024, FileOptions.Asynchronous)
                 : null;
             var sink = output ?? ownedFile!;
-            var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            var pipe = new Pipe(new PipeOptions(
+                pauseWriterThreshold: PauseBufferBytes,
+                resumeWriterThreshold: PauseBufferBytes / 2,
+                minimumSegmentSize: ReadBufferBytes,
+                useSynchronizationContext: false));
+            using var stopReading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var lastProgress = DateTime.UtcNow;
-            var firstChunk = true;
 
-            try
+            async Task WriteOutputAsync()
             {
-                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                while (!cancellationToken.IsCancellationRequested)
+                try
                 {
-                    idleCts.CancelAfter(IdleTimeout);
-
-                    int read;
-                    try
+                    while (true)
                     {
-                        read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), idleCts.Token);
-                    }
-                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        Log.Warning("HTTP 直播流超过 {Seconds} 秒无数据: {Url}", IdleTimeout.TotalSeconds, task.Url);
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                        return Finish(false, "直播流无数据超时", bytesWritten);
-                    }
-
-                    if (read == 0)
-                    {
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                        return Finish(false, "直播流已结束", bytesWritten);
-                    }
-
-                    if (firstChunk)
-                    {
-                        firstChunk = false;
-                        if (!MpegTsValidator.LooksLikeMpegTs(buffer.AsSpan(0, read)))
+                        var read = await pipe.Reader.ReadAsync();
+                        foreach (var segment in read.Buffer)
                         {
-                            return Finish(false, "直播源返回内容不是 MPEG-TS", bytesWritten);
+                            // 停录时让已收到的数据完成写入和检测。
+                            await sink.WriteAsync(segment);
+                            bytesWritten += segment.Length;
+                            analysis.Append(segment.Span);
+                        }
+
+                        pipe.Reader.AdvanceTo(read.Buffer.End);
+                        var now = DateTime.UtcNow;
+                        if ((now - lastProgress).TotalSeconds >= 1.0)
+                        {
+                            onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
+                            lastProgress = now;
+                        }
+
+                        if (read.IsCompleted)
+                        {
+                            break;
                         }
                     }
-
-                    await sink.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                    bytesWritten += read;
-                    analysis.Append(buffer.AsSpan(0, read));
-
-                    var now = DateTime.UtcNow;
-                    if ((now - lastProgress).TotalSeconds >= 1.0)
-                    {
-                        onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
-                        lastProgress = now;
-                    }
                 }
+                catch
+                {
+                    stopReading.Cancel();
+                    throw;
+                }
+                finally
+                {
+                    await pipe.Reader.CompleteAsync();
+                }
+            }
+
+            var writing = WriteOutputAsync();
+            string? streamError = null;
+            try
+            {
+                streamError = await ReadSourceAsync(source, pipe.Writer, task.Url, stopReading.Token);
+            }
+            catch (OperationCanceledException) when (stopReading.IsCancellationRequested)
+            {
+                // 停录或写入端失败，先等待写入端退出，再汇报结果。
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
+                await pipe.Writer.CompleteAsync();
+                await writing;
             }
 
             await sink.FlushAsync(CancellationToken.None);
             onProgress(new RecordingProgress { BytesWritten = bytesWritten, TsCheck = analysis.GetSummary() });
 
-            return Finish(!cancellationToken.IsCancellationRequested, null, bytesWritten);
+            return Finish(!cancellationToken.IsCancellationRequested && streamError is null, streamError, bytesWritten);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -128,6 +139,61 @@ public sealed class HttpLiveRecordingService : IRecordingService
             Log.Error(ex, "HTTP 直播录制失败: {Url}", task.Url);
             return Finish(false, ex.Message, bytesWritten);
         }
+    }
+
+    private static async Task<string?> ReadSourceAsync(
+        Stream source, PipeWriter writer, string url, CancellationToken cancellationToken)
+    {
+        using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var firstChunk = true;
+        var reportedBackpressure = false;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var buffer = writer.GetMemory(4096);
+            int read;
+            idleCts.CancelAfter(IdleTimeout);
+            try
+            {
+                read = await source.ReadAsync(buffer[..Math.Min(buffer.Length, ReadBufferBytes)], idleCts.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                Log.Warning("HTTP 直播流超过 {Seconds} 秒无数据: {Url}", IdleTimeout.TotalSeconds, url);
+                return "直播流无数据超时";
+            }
+            finally
+            {
+                // 缓冲满时的等待属于本机背压，不计入上游无数据超时。
+                idleCts.CancelAfter(Timeout.InfiniteTimeSpan);
+            }
+
+            if (read == 0)
+            {
+                return "直播流已结束";
+            }
+
+            if (firstChunk && !MpegTsValidator.LooksLikeMpegTs(buffer.Span[..read]))
+            {
+                return "直播源返回内容不是 MPEG-TS";
+            }
+
+            firstChunk = false;
+            writer.Advance(read);
+            var flushing = writer.FlushAsync(cancellationToken);
+            if (!reportedBackpressure && !flushing.IsCompleted)
+            {
+                reportedBackpressure = true;
+                Log.Warning("HTTP 直播收流缓冲已满，等待写盘或 TS 检测: {Url}", url);
+            }
+
+            var flushed = await flushing;
+            if (flushed.IsCompleted || flushed.IsCanceled)
+            {
+                break;
+            }
+        }
+
+        return null;
     }
 
     private static HttpClient CreateHttpClient()

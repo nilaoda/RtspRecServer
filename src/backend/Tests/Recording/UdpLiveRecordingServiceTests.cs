@@ -63,6 +63,28 @@ public class UdpLiveRecordingServiceTests
     }
 
     [Fact]
+    public async Task UdpReceiveHub_CountsDropsWhenOneSubscriptionIsFull()
+    {
+        var port = GetFreeUdpPort();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var hub = new UdpReceiveHub();
+        await using var slow = hub.Subscribe(null, null, port, capacity: 1);
+        await using var fast = hub.Subscribe(null, null, port, capacity: 2);
+        using var sender = new UdpClient(AddressFamily.InterNetwork);
+        var endpoint = new IPEndPoint(IPAddress.Loopback, port);
+
+        await sender.SendAsync(new byte[] { 1 }, 1, endpoint);
+        using var first = await fast.Reader.ReadAsync(cancellation.Token);
+        await sender.SendAsync(new byte[] { 2 }, 1, endpoint);
+        using var second = await fast.Reader.ReadAsync(cancellation.Token);
+
+        Assert.Equal(1, Volatile.Read(ref slow.DroppedCount));
+        using var retained = await slow.Reader.ReadAsync(cancellation.Token);
+        Assert.Equal(1, retained.Payload.Span[0]);
+        Assert.Equal(2, second.Payload.Span[0]);
+    }
+
+    [Fact]
     public void ShouldDeliver_FiltersByMulticastGroupAndSupportsUnicast()
     {
         var group = IPAddress.Parse("239.1.1.1");

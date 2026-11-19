@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 
 namespace RtspRecServer.Server.Recording;
 
@@ -7,7 +8,7 @@ internal sealed class BufferedRtpPacket : IDisposable
     public required long Sequence { get; init; }
     public required byte[] Buffer { get; init; }
     public required int Length { get; init; }
-    public required DateTime ReceivedAt { get; init; }
+    public required long ReceivedTimestamp { get; init; }
 
     public ReadOnlyMemory<byte> Payload => Buffer.AsMemory(0, Length);
 
@@ -31,6 +32,9 @@ internal sealed class RtpReorderBuffer : IDisposable
     private bool _hasReleased;
     private bool _disposed;
 
+    public long MissingSequences { get; private set; }
+    public long OldPackets { get; private set; }
+
     public RtpReorderBuffer(TimeSpan? delay = null, int maxPackets = DefaultMaxPackets)
     {
         _delay = delay ?? DefaultDelay;
@@ -40,7 +44,7 @@ internal sealed class RtpReorderBuffer : IDisposable
     public IReadOnlyList<BufferedRtpPacket> Push(
         ushort sequence,
         ReadOnlySpan<byte> payload,
-        DateTime now)
+        long receivedTimestamp)
     {
         if (_disposed || payload.Length == 0)
         {
@@ -50,6 +54,7 @@ internal sealed class RtpReorderBuffer : IDisposable
         var extendedSequence = ExtendSequence(sequence);
         if (_hasReleased && extendedSequence < _nextSequence)
         {
+            OldPackets++;
             return [];
         }
 
@@ -65,7 +70,7 @@ internal sealed class RtpReorderBuffer : IDisposable
             Sequence = extendedSequence,
             Buffer = buffer,
             Length = payload.Length,
-            ReceivedAt = now
+            ReceivedTimestamp = receivedTimestamp
         };
 
         if (!_initialized)
@@ -83,15 +88,15 @@ internal sealed class RtpReorderBuffer : IDisposable
             }
         }
 
-        return DrainDue(now, force: false);
+        return DrainDue(receivedTimestamp, force: false);
     }
 
     public IReadOnlyList<BufferedRtpPacket> Flush()
     {
-        return DrainDue(DateTime.MaxValue, force: true);
+        return DrainDue(0, force: true);
     }
 
-    private IReadOnlyList<BufferedRtpPacket> DrainDue(DateTime now, bool force)
+    private IReadOnlyList<BufferedRtpPacket> DrainDue(long timestamp, bool force)
     {
         if (_disposed || _packets.Count == 0)
         {
@@ -105,7 +110,7 @@ internal sealed class RtpReorderBuffer : IDisposable
             var packet = first.Value;
             var due = force ||
                       _packets.Count > _maxPackets ||
-                      now - packet.ReceivedAt >= _delay;
+                      Stopwatch.GetElapsedTime(packet.ReceivedTimestamp, timestamp) >= _delay;
             if (!due)
             {
                 break;
@@ -118,7 +123,12 @@ internal sealed class RtpReorderBuffer : IDisposable
                 continue;
             }
 
-            _nextSequence = Math.Max(_nextSequence, packet.Sequence + 1);
+            if (_hasReleased)
+            {
+                MissingSequences += packet.Sequence - _nextSequence;
+            }
+
+            _nextSequence = packet.Sequence + 1;
             _hasReleased = true;
             ready.Add(packet);
         }
@@ -160,6 +170,8 @@ internal sealed class RtpReorderBuffer : IDisposable
         }
 
         _packets.Clear();
+        MissingSequences = 0;
+        OldPackets = 0;
         _referenceSequence = 0;
         _nextSequence = 0;
         _initialized = false;

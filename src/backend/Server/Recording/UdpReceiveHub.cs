@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
@@ -11,6 +12,7 @@ internal sealed class UdpDatagram : IDisposable
 {
     public required byte[] Buffer { get; init; }
     public required int Length { get; init; }
+    public required long ReceivedTimestamp { get; init; }
     public IPAddress? SourceAddress { get; init; }
     public int SourcePort { get; init; }
     public ReadOnlyMemory<byte> Payload => Buffer.AsMemory(0, Length);
@@ -29,7 +31,8 @@ internal sealed class UdpSubscription : IAsyncDisposable
     private readonly Action<UdpSubscription> _onDispose;
     private int _disposed;
 
-    internal UdpSubscription(IPAddress? groupAddress, int capacity, Action<UdpSubscription> onDispose)
+    internal UdpSubscription(
+        IPAddress? groupAddress, int capacity, Action<UdpSubscription> onDispose, Action<UdpSubscription> onDrop)
     {
         GroupAddress = groupAddress;
         _onDispose = onDispose;
@@ -39,6 +42,10 @@ internal sealed class UdpSubscription : IAsyncDisposable
             SingleReader = true,
             SingleWriter = true,
             AllowSynchronousContinuations = false
+        }, dropped =>
+        {
+            dropped.Dispose();
+            onDrop(this);
         });
     }
 
@@ -109,7 +116,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
                 _groupRefs[groupAddress] = count + 1;
             }
 
-            var subscription = new UdpSubscription(groupAddress, capacity, onDispose);
+            var subscription = new UdpSubscription(groupAddress, capacity, onDispose, ReportDrop);
             _subscriptions.Add(subscription);
             _snapshot = _subscriptions.ToArray();
             return subscription;
@@ -224,6 +231,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
 
                 var destination = received.PacketInformation.Address;
                 var source = received.RemoteEndPoint as IPEndPoint;
+                var receivedTimestamp = Stopwatch.GetTimestamp();
                 foreach (var target in Volatile.Read(ref _snapshot))
                 {
                     if (!ShouldDeliver(target.GroupAddress, destination))
@@ -237,6 +245,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
                     {
                         Buffer = copy,
                         Length = received.ReceivedBytes,
+                        ReceivedTimestamp = receivedTimestamp,
                         SourceAddress = source?.Address,
                         SourcePort = source?.Port ?? 0
                     };
@@ -244,7 +253,6 @@ internal sealed class UdpEndpointReceiver : IDisposable
                     if (!target.TryWrite(datagram))
                     {
                         datagram.Dispose();
-                        ReportDrop(target);
                     }
                 }
             }
@@ -306,6 +314,14 @@ internal sealed class UdpEndpointReceiver : IDisposable
             try
             {
                 socket.ReceiveBufferSize = ReceiveBufferBytes;
+                var reportedBuffer = socket.ReceiveBufferSize;
+                // Linux SO_RCVBUF 汇报的值包含内核记账空间，是实际设置值的两倍。
+                if (OperatingSystem.IsLinux() && reportedBuffer / 2 < ReceiveBufferBytes)
+                {
+                    Log.Warning(
+                        "UDP Socket 接收缓冲受系统限制: 端口 {Port}，请求 {Requested} 字节，SO_RCVBUF 返回 {Actual} 字节，请检查 net.core.rmem_max",
+                        port, ReceiveBufferBytes, reportedBuffer);
+                }
             }
             catch (SocketException ex)
             {
