@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, FileText, Loader2, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ArrowDownToLine, Download, FileText, Loader2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { getLogContent, getLogs } from '../../services/api'
@@ -18,13 +18,24 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
+const BOTTOM_THRESHOLD = 2
+
 const LogsPage = () => {
   const [files, setFiles] = useState<LogFileInfo[]>([])
   const [selectedFile, setSelectedFile] = useState('')
   const [content, setContent] = useState<LogFileContent | null>(null)
   const [loading, setLoading] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [following, setFollowing] = useState(true)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const followingRef = useRef(true)
+  const latestContent = useRef<LogFileContent | null>(null)
+  const contentRequest = useRef<AbortController | null>(null)
+
+  const updateFollowing = useCallback((value: boolean) => {
+    followingRef.current = value
+    setFollowing(value)
+  }, [])
 
   const loadFiles = useCallback(async () => {
     try {
@@ -42,24 +53,29 @@ const LogsPage = () => {
   }, [])
 
   const loadContent = useCallback(async (fileName: string, silent = false) => {
-    if (!fileName) {
-      setContent(null)
-      return
-    }
+    if (!fileName || (silent && contentRequest.current)) return
 
-    if (!silent) {
+    contentRequest.current?.abort()
+    const request = new AbortController()
+    contentRequest.current = request
+    if (!silent && !latestContent.current) {
       setLoading(true)
     }
 
     try {
-      const data = await getLogContent(fileName)
-      setContent(data)
+      const data = await getLogContent(fileName, request.signal)
+      if (request.signal.aborted) return
+
+      latestContent.current = data
+      // 向上翻阅时固定当前内容，避免日志尾部滑动后把正在读的行换掉。
+      if (followingRef.current) setContent(data)
     } catch {
-      if (!silent) {
+      if (!silent && !request.signal.aborted) {
         toast.error('加载日志内容失败')
       }
     } finally {
-      if (!silent) {
+      if (contentRequest.current === request) {
+        contentRequest.current = null
         setLoading(false)
       }
     }
@@ -70,8 +86,17 @@ const LogsPage = () => {
   }, [loadFiles])
 
   useEffect(() => {
-    void loadContent(selectedFile)
-  }, [loadContent, selectedFile])
+    latestContent.current = null
+    updateFollowing(true)
+    setContent(null)
+    setLoading(Boolean(selectedFile))
+    if (selectedFile) void loadContent(selectedFile)
+
+    return () => {
+      contentRequest.current?.abort()
+      contentRequest.current = null
+    }
+  }, [loadContent, selectedFile, updateFollowing])
 
   useEffect(() => {
     if (!autoRefresh || !selectedFile) {
@@ -85,12 +110,30 @@ const LogsPage = () => {
     return () => window.clearInterval(timer)
   }, [autoRefresh, loadContent, selectedFile])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = viewportRef.current
-    if (viewport && autoRefresh) {
+    if (viewport && content && followingRef.current) {
       viewport.scrollTop = viewport.scrollHeight
     }
-  }, [content, autoRefresh])
+  }, [content])
+
+  const handleScroll = () => {
+    const viewport = viewportRef.current
+    if (!viewport || !content) return
+
+    const atBottom = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= BOTTOM_THRESHOLD
+    if (atBottom === followingRef.current) return
+    updateFollowing(atBottom)
+    if (atBottom) setContent(latestContent.current)
+  }
+
+  const jumpToLatest = () => {
+    updateFollowing(true)
+    setContent(latestContent.current)
+    const viewport = viewportRef.current
+    if (viewport) viewport.scrollTop = viewport.scrollHeight
+    void loadContent(selectedFile, true)
+  }
 
   const selectedInfo = files.find((file) => file.fileName === selectedFile)
 
@@ -133,11 +176,17 @@ const LogsPage = () => {
             {content?.truncated && <Badge variant="outline" className="text-[10px]">仅显示尾部</Badge>}
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
               自动刷新
             </label>
+            {content && !following && (
+              <Button variant="outline" size="sm" onClick={jumpToLatest}>
+                <ArrowDownToLine className="mr-2 h-4 w-4" />
+                跳到最新
+              </Button>
+            )}
             {selectedFile && (
               <Button asChild variant="outline" size="sm">
                 <a href={`/api/logs/${encodeURIComponent(selectedFile)}/download`}>
@@ -152,6 +201,10 @@ const LogsPage = () => {
         <CardContent className="p-0">
           <div
             ref={viewportRef}
+            onScroll={handleScroll}
+            role="region"
+            aria-label="运行日志内容"
+            tabIndex={0}
             className="min-h-[360px] max-h-[65vh] overflow-auto rounded-b-xl bg-slate-950 text-slate-100"
           >
             {loading ? (

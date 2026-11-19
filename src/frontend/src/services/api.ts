@@ -264,8 +264,8 @@ export const getRecordingMediaInfo = (filePath: string) =>
 
 export const getLogs = () => fetchJson<LogFileInfo[]>('/api/logs', { silent: true })
 
-export const getLogContent = (fileName: string) =>
-  fetchJson<LogFileContent>(`/api/logs/${encodeURIComponent(fileName)}`, { silent: true })
+export const getLogContent = (fileName: string, signal?: AbortSignal) =>
+  fetchJson<LogFileContent>(`/api/logs/${encodeURIComponent(fileName)}`, { silent: true, cache: 'no-store', signal })
 
 export const getConfig = () => fetchJson<AppConfig>('/api/config', { silent: true })
 
