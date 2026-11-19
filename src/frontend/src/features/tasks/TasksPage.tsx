@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, RefreshCw, CalendarClock, ChevronLeft, ChevronRight, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -289,6 +290,9 @@ const TaskProgress = ({
 
 const TasksPage = () => {
   const { tasks, channels, reloadTasks, stopTask, stopTasks, updateTaskEndTime, deleteTask, deleteTasks, getTaskMediaInfo, now, totalBitrateKbps } = useAppContext()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const linkedTaskId = searchParams.get('task')
+  const linkedTask = linkedTaskId === null ? undefined : tasks.find((task) => String(task.id) === linkedTaskId)
   const [createOpen, setCreateOpen] = useState(false)
   const [rescheduleTask, setRescheduleTask] = useState<RecordingTaskDto | null>(null)
   const [retryTarget, setRetryTarget] = useState<RecordingTaskDto | null>(null)
@@ -303,7 +307,9 @@ const TasksPage = () => {
   const detailsRequest = useRef(0)
   const [logModal, setLogModal] = useState<{ title: string; content: string; truncated: boolean } | null>(null)
   const [logLoading, setLogLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<TaskTab>('active')
+  const [selectedTab, setActiveTab] = useState<TaskTab>('active')
+  const activeTab = linkedTask ? getTaskTab(normalizeStatus(linkedTask.status)) : selectedTab
+  const emptyMessage = linkedTaskId === null ? taskTabs[activeTab].empty : '未找到该录制任务'
   const [page, setPage] = useState(1)
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set())
   const [bulkStopConfirmOpen, setBulkStopConfirmOpen] = useState(false)
@@ -344,6 +350,7 @@ const TasksPage = () => {
   }, [hasActiveTasks])
 
   const visibleTasks = useMemo(() => {
+    if (linkedTaskId !== null) return linkedTask ? [linkedTask] : []
     const filtered = tasks.filter((task) => getTaskTab(normalizeStatus(task.status)) === activeTab)
     return [...filtered].sort((left, right) => {
       if (activeTab === 'active') {
@@ -371,7 +378,7 @@ const TasksPage = () => {
       }
       return right.id - left.id
     })
-  }, [tasks, activeTab])
+  }, [tasks, activeTab, linkedTask, linkedTaskId])
 
   const totalPages = Math.max(1, Math.ceil(visibleTasks.length / PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
@@ -383,8 +390,8 @@ const TasksPage = () => {
   const rangeEnd = Math.min(currentPage * PAGE_SIZE, visibleTasks.length)
 
   const selectedTasks = useMemo(
-    () => tasks.filter((task) => selectedTaskIds.has(task.id)),
-    [tasks, selectedTaskIds],
+    () => (linkedTaskId === null ? tasks : visibleTasks).filter((task) => selectedTaskIds.has(task.id)),
+    [linkedTaskId, tasks, visibleTasks, selectedTaskIds],
   )
   const selectedRecordingIds = useMemo(
     () => selectedTasks.filter((task) => normalizeStatus(task.status) === 'Recording').map((task) => task.id),
@@ -426,6 +433,12 @@ const TasksPage = () => {
   const clearSelection = useCallback(() => {
     setSelectedTaskIds(new Set())
   }, [])
+
+  useEffect(() => {
+    clearSelection()
+    setBulkStopConfirmOpen(false)
+    setBulkDeleteConfirmOpen(false)
+  }, [clearSelection, linkedTaskId])
 
   useEffect(() => {
     setSelectedTaskIds((previous) => {
@@ -472,12 +485,13 @@ const TasksPage = () => {
 
     setRetrySubmitting(true)
     try {
-      await retryTask(retryTarget.id)
+      const task = await retryTask(retryTarget.id)
       toast.success('已创建重试任务')
       setRetryTarget(null)
       setActiveTab('active')
       setPage(1)
       clearSelection()
+      setSearchParams({ task: String(task.id) })
       void reloadTasks()
     } catch {
       // 请求层会提示失败原因，保留弹窗供用户继续操作。
@@ -701,6 +715,7 @@ const TasksPage = () => {
           value={activeTab}
           onValueChange={(value) => {
             setActiveTab(value as TaskTab)
+            if (linkedTaskId !== null) setSearchParams({})
             setPage(1)
             setSelectedTaskIds(new Set())
           }}
@@ -734,6 +749,13 @@ const TasksPage = () => {
             <TabsContent value={activeTab} className="m-0">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2">
                 <div className="flex items-center gap-3">
+                  {linkedTaskId !== null && (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setActiveTab(activeTab)
+                      clearSelection()
+                      setSearchParams({})
+                    }}>返回全部任务</Button>
+                  )}
                   <label className="flex items-center gap-2 text-xs text-muted-foreground md:hidden">
                     <input
                       type="checkbox"
@@ -819,7 +841,7 @@ const TasksPage = () => {
                     {pagedTasks.length === 0 ? (
                         <TableRow>
                             <TableCell colSpan={10} className="h-24 text-center">
-                                {taskTabs[activeTab].empty}
+                                {emptyMessage}
                             </TableCell>
                         </TableRow>
                     ) : (
@@ -1112,7 +1134,7 @@ const TasksPage = () => {
           <div className="md:hidden">
             {pagedTasks.length === 0 ? (
               <div className="flex h-28 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-                {taskTabs[activeTab].empty}
+                {emptyMessage}
               </div>
             ) : (
               <div className="divide-y">

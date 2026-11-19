@@ -1,11 +1,13 @@
-import { useCallback, useMemo, useState } from 'react'
-import { Info, Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { ClipboardList, Info, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 
 import { useAppContext } from '../../app/context'
 import { formatBytes, formatDateTime } from '../shared/format'
 import PlayLinkMenu from '../shared/play-link-menu'
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Card,
   CardContent,
@@ -48,13 +50,32 @@ type DeleteTarget = { fileNames: string[]; totalBytes: number }
 
 const getRecordingPlayPath = (fileName: string) => `/api/recordings/play/${encodeURIComponent(fileName)}`
 
+const recordingPathKey = (path: string) => /^[a-z]:[/\\]|^\\\\/i.test(path)
+  ? path.replaceAll('\\', '/').toLowerCase()
+  : path
+
+const RecordingTaskLink = ({ taskId }: { taskId?: number }) => taskId === undefined ? null : (
+  <Button asChild variant="ghost" size="sm">
+    <Link to={`/?task=${taskId}`}>
+      <ClipboardList className="mr-1.5 h-4 w-4" />
+      查看任务
+    </Link>
+  </Button>
+)
+
 const RecordingsPage = () => {
   const { recordings, reloadRecordings, getRecordingMediaInfo, tasks, deleteRecordings } = useAppContext()
   const [infoModal, setInfoModal] = useState<{ title: string; content: string } | null>(null)
   const [infoLoading, setInfoLoading] = useState(false)
   const [selectedNames, setSelectedNames] = useState<Set<string>>(() => new Set())
+  const [fileSearch, setFileSearch] = useState('')
+  const [recordedDate, setRecordedDate] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    void reloadRecordings()
+  }, [reloadRecordings])
 
   const onViewInfo = useCallback(
     async (filePath: string, fileName: string) => {
@@ -72,30 +93,34 @@ const RecordingsPage = () => {
     [getRecordingMediaInfo],
   )
 
-  const visibleRecordings = useMemo(() => {
-    const normalizeName = (value: string) => value.split(/[/\\]/).pop() ?? value
-    const isTsFile = (value: string) => value.toLowerCase().endsWith('.ts')
-    const activeNames = new Set(
-      tasks
-        .filter((task) => task.status === 'Recording')
-        .flatMap((task) => {
-          const names: string[] = []
-          if (task.filePath) {
-            names.push(normalizeName(task.filePath))
-          }
-          if (task.taskName) {
-            names.push(task.taskName.endsWith('.ts') ? task.taskName : `${task.taskName}.ts`)
-          }
-          return names
-        }),
-    )
-    return recordings.filter(
-      (record) =>
-        isTsFile(record.fileName) &&
-        !activeNames.has(record.fileName) &&
-        !activeNames.has(normalizeName(record.filePath)),
-    )
+  const { availableRecordings, taskIdByPath } = useMemo(() => {
+    const activePaths = new Set<string>()
+    const taskIdByPath = new Map<string, number>()
+    for (const task of tasks) {
+      if (!task.filePath) continue
+      const path = recordingPathKey(task.filePath)
+      if (task.status === 'Recording' || task.status === 1) {
+        activePaths.add(path)
+      } else if (task.id > (taskIdByPath.get(path) ?? 0)) {
+        taskIdByPath.set(path, task.id)
+      }
+    }
+    return {
+      availableRecordings: recordings.filter((record) =>
+        record.fileName.toLowerCase().endsWith('.ts') && !activePaths.has(recordingPathKey(record.filePath))),
+      taskIdByPath,
+    }
   }, [recordings, tasks])
+
+  const visibleRecordings = useMemo(() => {
+    const query = fileSearch.trim().toLowerCase()
+    return availableRecordings.filter((record) =>
+      (!query || record.fileName.toLowerCase().includes(query)) &&
+      (!recordedDate || formatDateTime(new Date(record.recordedAt)).slice(0, 10) === recordedDate))
+  }, [availableRecordings, fileSearch, recordedDate])
+
+  const hasFilters = Boolean(fileSearch.trim() || recordedDate)
+  const emptyMessage = hasFilters ? '没有符合条件的录像' : '暂无录制文件'
 
   const selectedRecordings = useMemo(
     () => visibleRecordings.filter((record) => selectedNames.has(record.fileName)),
@@ -164,13 +189,40 @@ const RecordingsPage = () => {
           </Button>
         </div>
         <div className="text-sm text-muted-foreground bg-muted/50 px-3 py-1 rounded-md">
-          已录文件: <span className="font-mono font-medium text-foreground">{visibleRecordings.length}</span>
+          显示 <span className="font-mono font-medium text-foreground">{visibleRecordings.length} / {availableRecordings.length}</span> 个文件
         </div>
       </div>
 
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="gap-3 pb-3">
           <CardTitle className="text-lg font-medium">录制文件</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="search"
+              aria-label="搜索录像文件名"
+              placeholder="搜索文件名"
+              value={fileSearch}
+              onChange={(event) => {
+                setFileSearch(event.target.value)
+                setSelectedNames(new Set())
+              }}
+              className="h-8 w-full sm:w-52"
+            />
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              录制日期
+              <Input type="date" value={recordedDate} onChange={(event) => {
+                setRecordedDate(event.target.value)
+                setSelectedNames(new Set())
+              }} className="h-8 w-auto" />
+            </label>
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={() => {
+                setFileSearch('')
+                setRecordedDate('')
+                setSelectedNames(new Set())
+              }}>清除筛选</Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2">
@@ -231,7 +283,7 @@ const RecordingsPage = () => {
                 {visibleRecordings.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="h-24 text-center">
-                      暂无录制文件
+                      {emptyMessage}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -261,6 +313,7 @@ const RecordingsPage = () => {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <PlayLinkMenu path={getRecordingPlayPath(record.fileName)} name={record.fileName} className="h-8 w-8" />
+                          <RecordingTaskLink taskId={taskIdByPath.get(recordingPathKey(record.filePath))} />
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -310,7 +363,7 @@ const RecordingsPage = () => {
             )}
             <div className="space-y-2 p-3">
               {visibleRecordings.length === 0 ? (
-                <div className="py-8 text-center text-sm text-muted-foreground">暂无录制文件</div>
+                <div className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
               ) : (
                 visibleRecordings.map((record) => (
                   <div
@@ -337,8 +390,9 @@ const RecordingsPage = () => {
                         </div>
                       </div>
                     </div>
-                    <div className="flex justify-end gap-1">
+                    <div className="flex flex-wrap justify-end gap-1">
                       <PlayLinkMenu path={getRecordingPlayPath(record.fileName)} name={record.fileName} withLabel />
+                      <RecordingTaskLink taskId={taskIdByPath.get(recordingPathKey(record.filePath))} />
                       <Button variant="ghost" size="sm" onClick={() => onViewInfo(record.filePath, record.fileName)}>
                         <Info className="mr-1.5 h-4 w-4" />
                         信息
