@@ -1,6 +1,5 @@
 import { Folder } from 'lucide-react'
 import { useEpgContext } from '../context/useEpgContext'
-import Loading from '../../shared/Loading'
 
 import {
   Card,
@@ -10,11 +9,7 @@ import {
 } from "@/components/ui/card"
 
 export default function EpgCategoriesPage() {
-  const { categories, loading } = useEpgContext()
-
-  if (loading && categories.length === 0) {
-    return <Loading tip="正在加载分类列表..." />
-  }
+  const { categories } = useEpgContext()
 
   return (
     <div className="space-y-6">

@@ -6,9 +6,9 @@ export interface EpgContextType {
   currentPrograms: CurrentProgramInfo[]
   categories: string[]
   loading: boolean
+  refreshing: boolean
   error: string | null
   refresh: () => Promise<void>
-  loadAllData: () => Promise<void>
   getChannelPrograms: (channelId: string) => Promise<EpgProgram[]>
   getCategoryChannels: (category: string) => Promise<EpgChannel[]>
   now: number // 提供全局统一的系统时间戳，用于 UI 自动刷新

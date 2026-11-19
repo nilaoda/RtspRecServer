@@ -2,8 +2,8 @@ import { lazy } from 'react'
 import type { RouteObject } from 'react-router-dom'
 
 import { EpgProvider } from '../context/EpgContext'
+import { EpgLayout } from '../layout/EpgLayout'
 
-const EpgLayout = lazy(() => import('../layout/EpgLayout').then(module => ({ default: module.EpgLayout })))
 const EpgOverviewPage = lazy(() => import('../pages/EpgOverviewPage'))
 const EpgChannelsPage = lazy(() => import('../pages/EpgChannelsPage'))
 const EpgChannelPage = lazy(() => import('../pages/EpgChannelPage'))

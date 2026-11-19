@@ -1,6 +1,5 @@
 import { PlayCircle } from 'lucide-react'
 import { useEpgContext } from '../context/useEpgContext'
-import Loading from '../../shared/Loading'
 import RecordProgramButton from '../components/RecordProgramButton'
 
 import {
@@ -13,11 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 
 export default function EpgCurrentPage() {
-  const { currentPrograms, loading, now } = useEpgContext()
-
-  if (loading && currentPrograms.length === 0) {
-    return <Loading tip="正在加载当前节目..." />
-  }
+  const { currentPrograms, now } = useEpgContext()
 
   const getProgress = (startTime: Date, endTime: Date) => {
     const start = startTime.getTime()

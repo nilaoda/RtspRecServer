@@ -1,5 +1,7 @@
+import { Suspense } from 'react'
 import { CalendarDays, RefreshCw, ArrowLeft } from 'lucide-react'
 import { useEpgContext } from '../context/useEpgContext'
+import Loading from '../../shared/Loading'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { Button } from "@/components/ui/button"
 import {
@@ -15,11 +17,12 @@ import {
 } from "@/components/ui/alert-dialog"
 
 export const EpgLayout: React.FC = () => {
-  const { refresh, loading } = useEpgContext()
+  const { refresh, loading, refreshing } = useEpgContext()
   const location = useLocation()
   const navigate = useNavigate()
 
   const isDetailPage = location.pathname.includes('/epg/channels/')
+  const loadingIndicator = <Loading tip="正在加载节目表..." />
 
   return (
     <div className="flex flex-col h-[calc(100vh-112px)] space-y-6">
@@ -40,9 +43,9 @@ export const EpgLayout: React.FC = () => {
           ) : (
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button disabled={loading}>
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                    刷新节目表
+                <Button disabled={loading || refreshing}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {refreshing ? '正在刷新节目表...' : '刷新节目表'}
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
@@ -62,18 +65,14 @@ export const EpgLayout: React.FC = () => {
         </div>
       </div>
       
-      <div className="flex-1 flex flex-col min-h-0">
-        {loading && (
-             <div className="absolute inset-0 bg-background/50 z-50 flex items-center justify-center">
-                 <div className="flex flex-col items-center gap-2">
-                    <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-                    <span className="text-sm font-medium">节目表更新中...</span>
-                 </div>
-             </div>
+      <div className="flex-1 min-h-0" aria-busy={loading || refreshing}>
+        {loading ? loadingIndicator : (
+          <Suspense fallback={loadingIndicator}>
+            <div className="h-full">
+              <Outlet />
+            </div>
+          </Suspense>
         )}
-        <div className={loading ? "opacity-50 pointer-events-none h-full" : "h-full"}>
-            <Outlet />
-        </div>
       </div>
     </div>
   )

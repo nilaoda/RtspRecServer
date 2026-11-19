@@ -43,7 +43,7 @@ const dayLabel = (value: string, today: string) => {
 export default function EpgChannelPage() {
   const { channelId: urlChannelId } = useParams<{ channelId: string }>()
   const navigate = useNavigate()
-  const { channels, getChannelPrograms, loading: globalLoading, now } = useEpgContext()
+  const { channels, getChannelPrograms, now } = useEpgContext()
 
   const selectedChannelId = urlChannelId ?? channels[0]?.id ?? null
   const [programList, setProgramList] = useState<{ channelId: string; programs: EpgProgram[] } | null>(null)
@@ -88,10 +88,6 @@ export default function EpgChannelPage() {
     const programDate = formatDate(p.startTime)
     return programDate === selectedDate
   })
-
-  if (globalLoading && channels.length === 0) {
-    return <Loading tip="正在加载频道列表..." />
-  }
 
   return (
     <div className="flex h-full bg-background overflow-hidden border rounded-lg">

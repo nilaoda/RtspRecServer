@@ -1,6 +1,5 @@
 import { PlayCircle } from 'lucide-react'
 import { useEpgContext } from '../context/useEpgContext'
-import Loading from '../../shared/Loading'
 
 import {
   Card,
@@ -13,11 +12,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 
 export default function EpgChannelsPage() {
-  const { channels, loading } = useEpgContext()
-
-  if (loading && channels.length === 0) {
-    return <Loading tip="正在加载频道列表..." />
-  }
+  const { channels } = useEpgContext()
 
   return (
     <div className="space-y-6">

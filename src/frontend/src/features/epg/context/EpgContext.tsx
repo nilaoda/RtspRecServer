@@ -11,10 +11,12 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [channels, setChannels] = useState<EpgChannel[]>([])
   const [currentPrograms, setCurrentPrograms] = useState<CurrentProgramInfo[]>([])
   const [categories, setCategories] = useState<string[]>([])
-  const [loading, setLoading] = useState<boolean>(false)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const lastRefreshRef = React.useRef<number>(0)
   const isRefreshingRef = React.useRef<boolean>(false)
+  const initialLoadRef = React.useRef<Promise<unknown> | null>(null)
 
   const mapBackendProgram = (p: BackendEpgProgram): EpgProgram => ({
     ...p,
@@ -62,24 +64,21 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [])
 
-  const loadAllData = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      await Promise.all([
-        fetchChannels(),
-        fetchCategories(),
-        fetchCurrentPrograms()
-      ])
-    } catch {
-      setError('加载EPG数据失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [fetchChannels, fetchCategories, fetchCurrentPrograms])
+  const loadAllData = useCallback(() => Promise.all([
+    fetchChannels(),
+    fetchCategories(),
+    fetchCurrentPrograms(),
+  ]), [fetchChannels, fetchCategories, fetchCurrentPrograms])
 
   useEffect(() => {
-    loadAllData()
+    let active = true
+    initialLoadRef.current ??= loadAllData()
+    void initialLoadRef.current.catch(() => {
+      if (active) setError('加载EPG数据失败')
+    }).finally(() => {
+      if (active) setLoading(false)
+    })
+    return () => { active = false }
   }, [loadAllData])
 
   // 自动刷新正在播放的节目信息
@@ -122,7 +121,7 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [fetchCurrentPrograms, currentPrograms, channels, fetchChannels]); // 移除 now 依赖，靠 setInterval 驱动
 
   const refresh = async () => {
-    setLoading(true)
+    setRefreshing(true)
     setError(null)
     try {
       await api.refreshEpgData()
@@ -130,7 +129,7 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } catch {
       setError('节目表刷新失败')
     } finally {
-      setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -164,9 +163,9 @@ export const EpgProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         currentPrograms,
         categories,
         loading,
+        refreshing,
         error,
         refresh,
-        loadAllData,
         getChannelPrograms,
         getCategoryChannels,
         now
