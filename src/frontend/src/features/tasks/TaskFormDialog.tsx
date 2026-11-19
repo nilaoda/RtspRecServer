@@ -52,17 +52,6 @@ const taskSchema = z
 
 type TaskFormValues = z.infer<typeof taskSchema>
 
-// 日期选择器与频道下拉都 portal 到 body，落在外层 Dialog 内容之外。
-// 交互目标位于这些嵌套弹层内时阻止外层关闭，避免改时间/选频道时弹窗被误 dismiss。
-const isInsideNestedLayer = (event: { target: EventTarget | null; detail?: { originalEvent?: Event } }) => {
-  const targets = [event.target, event.detail?.originalEvent?.target]
-  return targets.some(
-    (target) =>
-      target instanceof Element &&
-      !!target.closest('[data-radix-popper-content-wrapper], [data-radix-select-content], [role="dialog"], [cmdk-root]'),
-  )
-}
-
 export type TaskFormInitialValues = {
   channelId?: number
   startTime?: Date
@@ -98,7 +87,6 @@ export default function TaskFormDialog({
     })
   }, [channels])
   const [openCombobox, setOpenCombobox] = useState(false)
-  const comboboxListRef = useRef<HTMLDivElement>(null)
   const fromEpg = initialValues != null
 
   const activeCount = useMemo(
@@ -157,42 +145,6 @@ export default function TaskFormDialog({
     form.reset({ channelId: preferredChannelId, startTime, endTime, taskName: draft?.taskName ?? '' })
   }, [open, initialValues, channels, form])
 
-  useEffect(() => {
-    if (!openCombobox) {
-      return
-    }
-
-    let list: HTMLDivElement | null = null
-    const handleWheel = (event: WheelEvent) => {
-      if (!list || event.deltaY === 0) {
-        return
-      }
-      const maxScrollTop = list.scrollHeight - list.clientHeight
-      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, list.scrollTop + event.deltaY))
-      if (nextScrollTop === list.scrollTop) {
-        return
-      }
-      event.preventDefault()
-      list.scrollTop = nextScrollTop
-    }
-    // Dialog 的滚动锁定会在 document 层拦截弹窗外的 touchmove，阻断冒泡以保留原生触摸滚动
-    const handleTouchMove = (event: TouchEvent) => {
-      event.stopPropagation()
-    }
-
-    const timer = window.setTimeout(() => {
-      list = comboboxListRef.current
-      list?.addEventListener('wheel', handleWheel, { passive: false })
-      list?.addEventListener('touchmove', handleTouchMove, { passive: false })
-    }, 0)
-
-    return () => {
-      window.clearTimeout(timer)
-      list?.removeEventListener('wheel', handleWheel)
-      list?.removeEventListener('touchmove', handleTouchMove)
-    }
-  }, [openCombobox])
-
   const onSubmit = async (values: TaskFormValues) => {
     if (appConfig && activeCount >= appConfig.maxRecordingTasks) {
       toast.info('当前并发已达上限，任务将进入等待队列')
@@ -228,21 +180,6 @@ export default function TaskFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-[500px]"
-        onPointerDownOutside={(event) => {
-          if (isInsideNestedLayer(event)) {
-            event.preventDefault()
-          }
-        }}
-        onFocusOutside={(event) => {
-          if (isInsideNestedLayer(event)) {
-            event.preventDefault()
-          }
-        }}
-        onInteractOutside={(event) => {
-          if (isInsideNestedLayer(event)) {
-            event.preventDefault()
-          }
-        }}
       >
         <DialogHeader>
           <DialogTitle>{fromEpg ? '预约录制' : '新建录制任务'}</DialogTitle>
@@ -265,7 +202,7 @@ export default function TaskFormDialog({
                 return (
                   <FormItem className="flex flex-col">
                     <FormLabel>频道</FormLabel>
-                    <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
+                    <Popover modal open={openCombobox} onOpenChange={setOpenCombobox}>
                       <PopoverTrigger asChild>
                         <FormControl>
                           <Button
@@ -293,7 +230,7 @@ export default function TaskFormDialog({
                         </FormControl>
                       </PopoverTrigger>
                       <PopoverContent
-                        className="w-[var(--radix-popover-trigger-width)] p-0"
+                        className="flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden p-0"
                         align="start"
                         sideOffset={4}
                         collisionPadding={16}
@@ -304,9 +241,9 @@ export default function TaskFormDialog({
                           }
                         }}
                       >
-                        <Command>
+                        <Command className="min-h-0 [&_[cmdk-input-wrapper]]:shrink-0">
                           <CommandInput placeholder="搜索频道..." />
-                          <CommandList ref={comboboxListRef}>
+                          <CommandList className="min-h-0 overscroll-contain">
                             <CommandEmpty>未找到频道</CommandEmpty>
                             {channelGroups.map(([group, groupChannels]) => (
                               <CommandGroup key={group} heading={group}>
@@ -358,7 +295,7 @@ export default function TaskFormDialog({
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
                     <FormLabel>开始时间</FormLabel>
-                    <DateTimePicker date={field.value} setDate={field.onChange} forcePopover />
+                    <DateTimePicker date={field.value} setDate={field.onChange} />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -369,7 +306,7 @@ export default function TaskFormDialog({
                 render={({ field }) => (
                   <FormItem className="flex flex-col">
                     <FormLabel>结束时间</FormLabel>
-                    <DateTimePicker date={field.value} setDate={field.onChange} forcePopover />
+                    <DateTimePicker date={field.value} setDate={field.onChange} />
                     <FormMessage />
                   </FormItem>
                 )}

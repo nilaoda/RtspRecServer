@@ -70,16 +70,6 @@ const timerSchema = z
 
 type TimerFormValues = z.infer<typeof timerSchema>
 
-// 频道下拉与日期输入都可能落在嵌套弹层，阻止外层弹窗被误 dismiss
-const isInsideNestedLayer = (event: { target: EventTarget | null; detail?: { originalEvent?: Event } }) => {
-  const targets = [event.target, event.detail?.originalEvent?.target]
-  return targets.some(
-    (target) =>
-      target instanceof Element &&
-      !!target.closest('[data-radix-popper-content-wrapper], [data-radix-select-content], [role="dialog"], [cmdk-root]'),
-  )
-}
-
 export default function TimerFormDialog({
   open,
   onOpenChange,
@@ -108,7 +98,6 @@ export default function TimerFormDialog({
     })
   }, [channels])
   const [openCombobox, setOpenCombobox] = useState(false)
-  const comboboxListRef = useRef<HTMLDivElement>(null)
   const isEditing = editing != null
 
   const form = useForm<TimerFormValues>({
@@ -168,42 +157,6 @@ export default function TimerFormDialog({
     )
   }, [open, editing, channels, form])
 
-  useEffect(() => {
-    if (!openCombobox) {
-      return
-    }
-
-    let list: HTMLDivElement | null = null
-    const handleWheel = (event: WheelEvent) => {
-      if (!list || event.deltaY === 0) {
-        return
-      }
-      const maxScrollTop = list.scrollHeight - list.clientHeight
-      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, list.scrollTop + event.deltaY))
-      if (nextScrollTop === list.scrollTop) {
-        return
-      }
-      event.preventDefault()
-      list.scrollTop = nextScrollTop
-    }
-    // Dialog 的滚动锁定会在 document 层拦截弹窗外的 touchmove，阻断冒泡以保留原生触摸滚动
-    const handleTouchMove = (event: TouchEvent) => {
-      event.stopPropagation()
-    }
-
-    const timer = window.setTimeout(() => {
-      list = comboboxListRef.current
-      list?.addEventListener('wheel', handleWheel, { passive: false })
-      list?.addEventListener('touchmove', handleTouchMove, { passive: false })
-    }, 0)
-
-    return () => {
-      window.clearTimeout(timer)
-      list?.removeEventListener('wheel', handleWheel)
-      list?.removeEventListener('touchmove', handleTouchMove)
-    }
-  }, [openCombobox])
-
   const onSubmit = async (values: TimerFormValues) => {
     const payload: TimerUpsertPayload = {
       name: values.name.trim(),
@@ -233,21 +186,6 @@ export default function TimerFormDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-h-[90dvh] max-w-[calc(100vw-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-[520px]"
-        onPointerDownOutside={(event) => {
-          if (isInsideNestedLayer(event)) {
-            event.preventDefault()
-          }
-        }}
-        onFocusOutside={(event) => {
-          if (isInsideNestedLayer(event)) {
-            event.preventDefault()
-          }
-        }}
-        onInteractOutside={(event) => {
-          if (isInsideNestedLayer(event)) {
-            event.preventDefault()
-          }
-        }}
       >
         <DialogHeader>
           <DialogTitle>{isEditing ? '编辑定时规则' : '新建定时规则'}</DialogTitle>
@@ -281,7 +219,7 @@ export default function TimerFormDialog({
                 return (
                   <FormItem className="flex flex-col">
                     <FormLabel>频道</FormLabel>
-                    <Popover open={openCombobox} onOpenChange={setOpenCombobox}>
+                    <Popover modal open={openCombobox} onOpenChange={setOpenCombobox}>
                       <PopoverTrigger asChild>
                         <FormControl>
                           <Button
@@ -309,7 +247,7 @@ export default function TimerFormDialog({
                         </FormControl>
                       </PopoverTrigger>
                       <PopoverContent
-                        className="w-[var(--radix-popover-trigger-width)] p-0"
+                        className="flex max-h-[var(--radix-popover-content-available-height)] w-[var(--radix-popover-trigger-width)] flex-col overflow-hidden p-0"
                         align="start"
                         sideOffset={4}
                         collisionPadding={16}
@@ -320,9 +258,9 @@ export default function TimerFormDialog({
                           }
                         }}
                       >
-                        <Command>
+                        <Command className="min-h-0 [&_[cmdk-input-wrapper]]:shrink-0">
                           <CommandInput placeholder="搜索频道..." />
-                          <CommandList ref={comboboxListRef}>
+                          <CommandList className="min-h-0 overscroll-contain">
                             <CommandEmpty>未找到频道</CommandEmpty>
                             {channelGroups.map(([group, groupChannels]) => (
                               <CommandGroup key={group} heading={group}>
@@ -367,7 +305,7 @@ export default function TimerFormDialog({
                 )
               }}
             />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
                 control={form.control}
                 name="startTime"
@@ -458,7 +396,7 @@ export default function TimerFormDialog({
                 )}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
                 control={form.control}
                 name="startDate"

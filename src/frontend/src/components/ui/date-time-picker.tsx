@@ -1,7 +1,7 @@
 import * as React from "react"
 import { format } from "date-fns"
 import { zhCN } from "date-fns/locale"
-import { Calendar as CalendarIcon, Clock } from "lucide-react"
+import { Calendar as CalendarIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
@@ -18,246 +18,197 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 
+const compactPicker = "(max-width: 639px), (max-height: 560px), (pointer: coarse)"
+
+function TimeColumn({ label, count, value, onChange }: {
+  label: string
+  count: number
+  value: number
+  onChange: (value: number) => void
+}) {
+  const listRef = React.useRef<HTMLUListElement>(null)
+
+  React.useLayoutEffect(() => {
+    const list = listRef.current
+    const selected = list?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')
+    if (list && selected) {
+      list.scrollTop = selected.offsetTop - (list.clientHeight - selected.offsetHeight) / 2
+    }
+  }, [value])
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+    let next: number
+    switch (event.key) {
+      case "ArrowUp":
+        next = Math.max(0, value - 1)
+        break
+      case "ArrowDown":
+        next = Math.min(count - 1, value + 1)
+        break
+      case "Home":
+        next = 0
+        break
+      case "End":
+        next = count - 1
+        break
+      default:
+        return
+    }
+
+    event.preventDefault()
+    onChange(next)
+    listRef.current?.children[next]?.querySelector('button')?.focus({ preventScroll: true })
+  }
+
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="border-b py-2 text-center text-sm font-medium">{label}</div>
+      <ul
+        ref={listRef}
+        aria-label={label}
+        className="relative h-44 touch-pan-y select-none overflow-y-auto overscroll-contain py-[66px] scrollbar-hide"
+        onKeyDown={handleKeyDown}
+      >
+        {Array.from({ length: count }, (_, option) => (
+          <li key={option} className="px-1">
+            <button
+              type="button"
+              aria-pressed={option === value}
+              tabIndex={option === value ? 0 : -1}
+              className={cn(
+                "h-11 w-full rounded-sm text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                option === value ? "bg-primary text-primary-foreground" : "hover:bg-muted",
+              )}
+              onClick={() => onChange(option)}
+            >
+              {option.toString().padStart(2, "0")}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export function DateTimePicker({
   date,
   setDate,
-  forcePopover = false,
 }: {
   date?: Date
   setDate: (date: Date | undefined) => void
-  forcePopover?: boolean
 }) {
   const [open, setOpen] = React.useState(false)
-  const [isMobile, setIsMobile] = React.useState(false)
-  const [selectedDate, setSelectedDate] = React.useState<Date | undefined>(date)
-  const hourRef = React.useRef<HTMLUListElement>(null)
-  const minuteRef = React.useRef<HTMLUListElement>(null)
-  const secondRef = React.useRef<HTMLUListElement>(null)
+  const [compact, setCompact] = React.useState(() => window.matchMedia(compactPicker).matches)
+  const [selectedDate, setSelectedDate] = React.useState(() => date ?? new Date())
+  const [month, setMonth] = React.useState(selectedDate)
 
   React.useEffect(() => {
-    const update = () => setIsMobile(window.innerWidth <= 640)
-    update()
-    window.addEventListener("resize", update)
-    return () => window.removeEventListener("resize", update)
+    const media = window.matchMedia(compactPicker)
+    const update = () => setCompact(media.matches)
+    media.addEventListener("change", update)
+    return () => media.removeEventListener("change", update)
   }, [])
 
-  // 同步外部状态到内部
-  React.useEffect(() => {
-    if (open) {
-      setSelectedDate(date || new Date())
+  const handleOpenChange = (next: boolean) => {
+    if (next) {
+      const current = date ?? new Date()
+      setSelectedDate(current)
+      setMonth(current)
     }
-  }, [open, date])
-
-  // 自动滚动到选中时间
-  React.useEffect(() => {
-    if (open && selectedDate) {
-        // 使用 setTimeout 确保渲染完成后滚动
-        const timer = setTimeout(() => {
-            const scrollTo = (ref: React.RefObject<HTMLUListElement | null>, value: number) => {
-                if (ref.current) {
-                    const buttonHeight = 28 // h-7
-                    ref.current.scrollTop = value * buttonHeight
-                }
-            }
-            scrollTo(hourRef, selectedDate.getHours())
-            scrollTo(minuteRef, selectedDate.getMinutes())
-            scrollTo(secondRef, selectedDate.getSeconds())
-        }, 0)
-        return () => clearTimeout(timer)
-    }
-  }, [open, selectedDate])
-
-  React.useEffect(() => {
-    if (!open) {
-      return
-    }
-
-    const attached: Array<{ list: HTMLUListElement; handler: (event: WheelEvent) => void }> = []
-    const timer = window.setTimeout(() => {
-      const lists = [hourRef.current, minuteRef.current, secondRef.current]
-      const handleWheel = (event: WheelEvent) => {
-        const list = event.currentTarget as HTMLUListElement
-        if (event.deltaY === 0) {
-          return
-        }
-
-        const maxScrollTop = list.scrollHeight - list.clientHeight
-        const nextScrollTop = Math.max(0, Math.min(maxScrollTop, list.scrollTop + event.deltaY))
-        if (nextScrollTop === list.scrollTop) {
-          return
-        }
-
-        event.preventDefault()
-        list.scrollTop = nextScrollTop
-      }
-
-      for (const list of lists) {
-        if (!list) {
-          continue
-        }
-
-        list.addEventListener("wheel", handleWheel, { passive: false })
-        attached.push({ list, handler: handleWheel })
-      }
-    }, 0)
-
-    return () => {
-      window.clearTimeout(timer)
-      attached.forEach(({ list, handler }) => list.removeEventListener("wheel", handler))
-    }
-  }, [isMobile, open])
-
-  const handleDateSelect = (d: Date | undefined) => {
-    if (!d) return
-    const newDate = new Date(d)
-    const current = selectedDate || new Date()
-    newDate.setHours(current.getHours())
-    newDate.setMinutes(current.getMinutes())
-    newDate.setSeconds(current.getSeconds())
-    setSelectedDate(newDate)
-  }
-
-  const handleTimeChange = (type: 'hour' | 'minute' | 'second', value: number) => {
-      const current = selectedDate || new Date()
-      const newDate = new Date(current)
-      
-      if (type === 'hour') newDate.setHours(value)
-      if (type === 'minute') newDate.setMinutes(value)
-      if (type === 'second') newDate.setSeconds(value)
-      
-      setSelectedDate(newDate)
+    setOpen(next)
   }
 
   const handleNow = () => {
-      const now = new Date()
-      setSelectedDate(now)
+    const now = new Date()
+    setSelectedDate(now)
+    setMonth(now)
   }
 
   const handleConfirm = () => {
-      setDate(selectedDate)
-      setOpen(false)
+    setDate(selectedDate)
+    setOpen(false)
+  }
+
+  const handleDateSelect = (day: Date | undefined) => {
+    if (!day) return
+    const next = new Date(day)
+    next.setHours(selectedDate.getHours(), selectedDate.getMinutes(), selectedDate.getSeconds())
+    setSelectedDate(next)
+  }
+
+  const handleTimeChange = (part: "hour" | "minute" | "second", value: number) => {
+    const next = new Date(selectedDate)
+    if (part === "hour") next.setHours(value)
+    if (part === "minute") next.setMinutes(value)
+    if (part === "second") next.setSeconds(value)
+    setSelectedDate(next)
   }
 
   const triggerButton = (
     <Button
-      variant={"outline"}
+      type="button"
+      variant="outline"
       className={cn(
         "w-full min-w-0 justify-start text-left font-normal",
-        !date && "text-muted-foreground"
+        !date && "text-muted-foreground",
       )}
     >
       <CalendarIcon className="mr-2 h-4 w-4 shrink-0" />
-      {date
-        ? <span className="truncate">{format(date, "yyyy-MM-dd HH:mm:ss", { locale: zhCN })}</span>
-        : <span className="truncate">选择日期和时间</span>}
+      <span className="truncate">{date ? format(date, "yyyy-MM-dd HH:mm:ss") : "选择日期和时间"}</span>
     </Button>
   )
 
   const pickerContent = (
     <>
-      <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x">
-        <Calendar
-          mode="single"
-          selected={selectedDate}
-          onSelect={handleDateSelect}
-          initialFocus
-          locale={zhCN}
-        />
-        <div className="flex flex-col sm:w-[150px]">
-          <div className="flex items-center justify-center py-3 border-b text-sm font-medium">
-            <Clock className="mr-2 h-4 w-4" />
-            时间选择
-          </div>
-          <div className="flex h-[220px] divide-x relative">
-            <ul ref={hourRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px]">
-              {Array.from({ length: 24 }, (_, i) => i).map((hour) => (
-                <li
-                  key={hour}
-                  className={cn(
-                    "h-7 flex items-center justify-center text-xs cursor-pointer rounded-sm mx-1",
-                    selectedDate && selectedDate.getHours() === hour 
-                      ? "bg-primary text-primary-foreground" 
-                      : "hover:bg-muted text-foreground"
-                  )}
-                  onClick={() => handleTimeChange('hour', hour)}
-                >
-                  {hour.toString().padStart(2, '0')}
-                </li>
-              ))}
-            </ul>
-            <ul ref={minuteRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px]">
-              {Array.from({ length: 60 }, (_, i) => i).map((minute) => (
-                <li
-                  key={minute}
-                  className={cn(
-                    "h-7 flex items-center justify-center text-xs cursor-pointer rounded-sm mx-1",
-                    selectedDate && selectedDate.getMinutes() === minute 
-                      ? "bg-primary text-primary-foreground" 
-                      : "hover:bg-muted text-foreground"
-                  )}
-                  onClick={() => handleTimeChange('minute', minute)}
-                >
-                  {minute.toString().padStart(2, '0')}
-                </li>
-              ))}
-            </ul>
-            <ul ref={secondRef} className="flex-1 h-full overflow-y-auto scrollbar-hide py-[96px]">
-              {Array.from({ length: 60 }, (_, i) => i).map((second) => (
-                <li
-                  key={second}
-                  className={cn(
-                    "h-7 flex items-center justify-center text-xs cursor-pointer rounded-sm mx-1",
-                    selectedDate && selectedDate.getSeconds() === second 
-                      ? "bg-primary text-primary-foreground" 
-                      : "hover:bg-muted text-foreground"
-                  )}
-                  onClick={() => handleTimeChange('second', second)}
-                >
-                  {second.toString().padStart(2, '0')}
-                </li>
-              ))}
-            </ul>
+      <div className="min-h-0 overflow-y-auto overscroll-contain">
+        <div className="flex flex-col divide-y sm:flex-row sm:divide-x sm:divide-y-0">
+          <Calendar
+            className="mx-auto shrink-0"
+            mode="single"
+            selected={selectedDate}
+            month={month}
+            onMonthChange={setMonth}
+            onSelect={handleDateSelect}
+            locale={zhCN}
+          />
+          <div className="flex shrink-0 divide-x sm:w-44">
+            <TimeColumn label="小时" count={24} value={selectedDate.getHours()} onChange={(value) => handleTimeChange("hour", value)} />
+            <TimeColumn label="分钟" count={60} value={selectedDate.getMinutes()} onChange={(value) => handleTimeChange("minute", value)} />
+            <TimeColumn label="秒" count={60} value={selectedDate.getSeconds()} onChange={(value) => handleTimeChange("second", value)} />
           </div>
         </div>
       </div>
-      <div className="p-3 border-t flex justify-between items-center bg-muted/20">
-        <Button type="button" variant="ghost" size="sm" onClick={handleNow} className="text-xs h-8">
-          此刻
-        </Button>
-        <Button type="button" size="sm" onClick={handleConfirm} className="text-xs h-8">
-          确定
-        </Button>
+      <div className="flex shrink-0 items-center justify-between border-t bg-muted/20 p-3">
+        <Button type="button" variant="ghost" onClick={handleNow}>此刻</Button>
+        <Button type="button" onClick={handleConfirm}>确定</Button>
       </div>
     </>
   )
 
-  if (isMobile && !forcePopover) {
+  if (compact) {
     return (
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogTrigger asChild>
-          {triggerButton}
-        </DialogTrigger>
-        <DialogContent className="max-h-[90dvh] max-w-[calc(100vw-2rem)] p-0 overflow-hidden">
-          <DialogHeader className="px-4 pt-4">
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogTrigger asChild>{triggerButton}</DialogTrigger>
+        <DialogContent
+          aria-describedby={undefined}
+          className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md flex-col gap-0 overflow-hidden rounded-lg p-0"
+        >
+          <DialogHeader className="shrink-0 border-b px-10 py-4">
             <DialogTitle>选择日期和时间</DialogTitle>
           </DialogHeader>
-          <div className="px-4 pb-4 overflow-y-auto">
-            {pickerContent}
-          </div>
+          {pickerContent}
         </DialogContent>
       </Dialog>
     )
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        {triggerButton}
-      </PopoverTrigger>
+    <Popover modal open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
       <PopoverContent
-        className="w-auto max-h-[calc(100dvh-2rem)] overflow-y-auto p-0"
+        aria-label="选择日期和时间"
+        className="flex max-h-[var(--radix-popover-content-available-height)] w-auto flex-col overflow-hidden p-0"
         align="start"
-        sideOffset={4}
         collisionPadding={16}
       >
         {pickerContent}
