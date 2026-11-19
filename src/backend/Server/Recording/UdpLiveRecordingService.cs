@@ -187,7 +187,7 @@ public sealed class UdpLiveRecordingService : IRecordingService
             await using var ownedFile = output is null
                 ? new FileStream(
                     outputPath,
-                    FileMode.Create,
+                    FileMode.CreateNew,
                     FileAccess.Write,
                     FileShare.Read,
                     64 * 1024,

@@ -39,7 +39,6 @@ public sealed class RecordingBackgroundService : BackgroundService
             try
             {
                 var now = DateTimeOffset.UtcNow;
-                var tasks = _manager.GetAllTasks();
                 var config = _configurationService.GetAppConfig();
 
                 _manager.StopSessionsDue(now);
@@ -47,6 +46,7 @@ public sealed class RecordingBackgroundService : BackgroundService
                 // 扫描定时规则，命中窗口则自动生成录制任务
                 await _timerService.ScanAndGenerateAsync(now, stoppingToken);
 
+                var tasks = _manager.GetAllTasks();
                 _logger.LogDebug("录制调度循环开始，当前任务数: {TaskCount}", tasks.Count);
 
                 // 推送系统状态（每 5 秒）
@@ -63,26 +63,19 @@ public sealed class RecordingBackgroundService : BackgroundService
 
                 foreach (var task in pending)
                 {
-                    if (_manager.ActiveCount >= config.MaxRecordingTasks)
+                    if (task.IsLive && task.EndTime <= now)
                     {
-                        _logger.LogDebug("达到最大录制任务数限制，当前活跃任务数: {ActiveCount}, 最大限制: {MaxTasks}", 
-                            _manager.ActiveCount, config.MaxRecordingTasks);
-                        break;
+                        await _manager.FailMissedTaskAsync(task, stoppingToken);
+                        continue;
+                    }
+
+                    if (now < task.StartTime || _manager.ActiveCount >= config.MaxRecordingTasks)
+                    {
+                        continue;
                     }
 
                     if (task.IsLive)
                     {
-                        if (now < task.StartTime)
-                        {
-                            continue;
-                        }
-
-                        if (task.EndTime <= now)
-                        {
-                            await _manager.FailMissedTaskAsync(task, stoppingToken);
-                            continue;
-                        }
-
                         await _manager.TryStartTaskAsync(task, stoppingToken);
                         continue;
                     }
@@ -97,27 +90,6 @@ public sealed class RecordingBackgroundService : BackgroundService
 
                     _logger.LogInformation("准备启动录制任务，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
                         task.Id, task.TaskName, task.ChannelName);
-
-                    // 允许30秒内的延迟启动（仅针对未来任务变成了过去任务的情况，作为一种过载保护）
-                    // 但对于回放录制（StartTime本身就是过去的），不应有此限制。
-                    // 现在的逻辑简化为：只要是 Pending 且 Now >= StartTime，就启动。
-                    // 无论是直播（延迟了30秒也应该尽力录）还是回放（随时可以开始）。
-                    // 用户明确指出“30延迟只针对未来时间”，如果需要严格限制直播超时，可以在后续通过任务类型区分。
-                    // 目前按照“主要用于回放录制”的需求，移除超时检查。
-
-                    if (task.EndTime <= now)
-                    {
-                        // 即使结束时间已过，如果是回放录制，也应该允许启动（下载历史视频）。
-                        // 除非我们确定这是“直播录制”。
-                        // 根据用户反馈“用户输入的时间一般都是过去的”，那么 EndTime <= Now 也是常态（比如下载昨天10点到11点的录像，现在是今天）。
-                        // 所以这里也不应该直接失败，应该尝试启动。
-                        // 但是，如果 StartTime 和 EndTime 都在过去，TryStartTaskAsync 启动后，
-                        // 具体的录制逻辑（ffmpeg/rtsp client）需要能处理“下载并退出”的情况。
-                        // 假设 RecordingService 能够处理回放流下载。
-                        
-                        // 唯一的例外是：如果任务确实无法执行（例如流不支持回放），那会由 TryStartTaskAsync 内部或录制过程报错。
-                        // 调度器层应该尽可能宽容。
-                    }
 
                     await _manager.TryStartTaskAsync(task, stoppingToken);
                 }

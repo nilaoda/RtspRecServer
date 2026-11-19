@@ -11,21 +11,26 @@ type WebSocketHandlers = {
 export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onTaskErrorLog, onConnectionStatus }: WebSocketHandlers) => {
   let cancelled = false
   let socket: WebSocket | null = null
+  let reconnectTimer: number | undefined
   let reconnectAttempts = 0
   let notified = false
 
   const connect = () => {
+    if (cancelled) return
     onConnectionStatus?.(reconnectAttempts === 0 ? 'connecting' : 'reconnecting')
     const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    socket = new WebSocket(`${scheme}://${window.location.host}/ws`)
+    const connection = new WebSocket(`${scheme}://${window.location.host}/ws`)
+    socket = connection
 
-    socket.onopen = () => {
+    connection.onopen = () => {
+      if (cancelled) return
       reconnectAttempts = 0
       notified = false
       onConnectionStatus?.('connected')
     }
 
-    socket.onmessage = (event) => {
+    connection.onmessage = (event) => {
+      if (cancelled) return
       try {
         const message = JSON.parse(event.data) as WebSocketMessage
         if (message.type === 'taskUpdated') {
@@ -44,7 +49,8 @@ export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onTaskErrorLog,
       }
     }
 
-    socket.onclose = () => {
+    connection.onclose = () => {
+      socket = null
       if (!cancelled) {
         reconnectAttempts += 1
         onConnectionStatus?.(reconnectAttempts >= 10 ? 'disconnected' : 'reconnecting')
@@ -52,13 +58,14 @@ export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onTaskErrorLog,
           toast.error('连接服务端失败，请检查服务是否可用')
           notified = true
         }
-        window.setTimeout(connect, 2000)
+        reconnectTimer = window.setTimeout(connect, 2000)
       }
     }
 
-    socket.onerror = () => {
+    connection.onerror = () => {
+      if (cancelled) return
       onConnectionStatus?.(reconnectAttempts >= 10 ? 'disconnected' : 'reconnecting')
-      socket?.close()
+      connection.close()
     }
   }
 
@@ -66,7 +73,7 @@ export const connectWebSocket = ({ onTaskUpdate, onSystemStatus, onTaskErrorLog,
 
   return () => {
     cancelled = true
-    onConnectionStatus?.('disconnected')
+    window.clearTimeout(reconnectTimer)
     socket?.close()
   }
 }

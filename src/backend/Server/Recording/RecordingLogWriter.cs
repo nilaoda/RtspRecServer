@@ -17,7 +17,8 @@ internal sealed class RecordingLogWriter : IDisposable
 
     private RecordingLogWriter(string logPath)
     {
-        _writer = new StreamWriter(logPath, append: false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+        var stream = new FileStream(logPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        _writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
         {
             AutoFlush = true
         };

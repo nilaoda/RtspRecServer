@@ -41,7 +41,7 @@ public sealed class RecordingManager
         
         foreach (var task in tasks)
         {
-            if (_activeSessions.TryGetValue(task.Id, out var session))
+            if (task.Status == RecordingStatus.Recording && _activeSessions.TryGetValue(task.Id, out var session))
             {
                 mergedTasks.Add(task with 
                 { 
@@ -61,7 +61,7 @@ public sealed class RecordingManager
     public RecordingTask? GetTask(long id)
     {
         var task = _taskStore.GetById(id);
-        if (task != null && _activeSessions.TryGetValue(id, out var session))
+        if (task?.Status == RecordingStatus.Recording && _activeSessions.TryGetValue(id, out var session))
         {
             return task with 
             { 
@@ -74,6 +74,11 @@ public sealed class RecordingManager
 
     public async Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, CancellationToken cancellationToken)
     {
+        if (request.EndTime <= request.StartTime)
+        {
+            throw new InvalidOperationException("结束时间必须大于开始时间");
+        }
+
         _logger.LogInformation("开始创建录制任务，频道ID: {ChannelId}, 开始时间: {StartTime}, 结束时间: {EndTime}", 
             request.ChannelId, request.StartTime, request.EndTime);
 
@@ -83,20 +88,6 @@ public sealed class RecordingManager
         {
             _logger.LogError("创建录制任务失败：频道不存在，频道ID: {ChannelId}", request.ChannelId);
             throw new InvalidOperationException("频道不存在");
-        }
-
-        // 检查是否存在相同参数的任务
-        var existingTasks = _taskStore.GetAll()
-            .Where(t => t.ChannelId == request.ChannelId && 
-                       t.StartTime == request.StartTime && 
-                       t.EndTime == request.EndTime)
-            .ToList();
-
-        if (existingTasks.Any())
-        {
-            _logger.LogWarning("创建录制任务被拒绝：存在相同参数的任务，频道ID: {ChannelId}, 开始时间: {StartTime}, 结束时间: {EndTime}", 
-                request.ChannelId, request.StartTime, request.EndTime);
-            throw new InvalidOperationException("已存在相同参数的录制任务");
         }
 
         var isLive = LiveSourceClassifier.IsLive(channel.Url);
@@ -126,7 +117,18 @@ public sealed class RecordingManager
         };
 
         var prepared = task with { Url = isLive ? task.Url : RecordingUrlBuilder.Build(task) };
-        var created = _taskStore.Add(prepared);
+        RecordingTask created;
+        lock (_taskTransitionLock)
+        {
+            if (_taskStore.GetAll().Any(t => t.ChannelId == request.ChannelId &&
+                                             t.StartTime == request.StartTime &&
+                                             t.EndTime == request.EndTime))
+            {
+                throw new InvalidOperationException("已存在相同参数的录制任务");
+            }
+
+            created = _taskStore.Add(prepared);
+        }
         _logger.LogInformation("录制任务创建成功，任务ID: {TaskId}, 任务名称: {TaskName}, 频道: {ChannelName}", 
             created.Id, created.TaskName, created.ChannelName);
         
@@ -175,10 +177,9 @@ public sealed class RecordingManager
         RecordingSession? session = null;
         lock (_taskTransitionLock)
         {
-            if (_activeSessions.TryRemove(id, out session))
+            if (!_activeSessions.TryGetValue(id, out session) || !session.RequestManualStop())
             {
-                session.ManualStopRequested = true;
-                session.Cancellation.Cancel();
+                session = null;
             }
         }
 
@@ -205,10 +206,8 @@ public sealed class RecordingManager
         {
             foreach (var id in distinctIds)
             {
-                if (_activeSessions.TryRemove(id, out var session))
+                if (_activeSessions.TryGetValue(id, out var session) && session.RequestManualStop())
                 {
-                    session.ManualStopRequested = true;
-                    session.Cancellation.Cancel();
                     sessions.Add((id, session));
                 }
             }
@@ -275,9 +274,10 @@ public sealed class RecordingManager
 
         lock (_taskTransitionLock)
         {
-            if (_activeSessions.TryGetValue(id, out session) && session.ScheduledStopRequested)
+            if (_activeSessions.TryGetValue(id, out session) &&
+                (session.ScheduledStopRequested || session.ManualStopRequested))
             {
-                throw new InvalidOperationException("任务已到结束时间并开始停止，无法延长");
+                throw new InvalidOperationException("任务正在停止，无法修改结束时间");
             }
 
             updated = _taskStore.TryUpdate(id, current =>
@@ -435,11 +435,7 @@ public sealed class RecordingManager
                 return false;
             }
 
-            var recordPath = ResolveRecordPath(config.RecordPath);
-            var fileName = currentTask.TaskName.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
-                ? currentTask.TaskName
-                : $"{currentTask.TaskName}.ts";
-            outputPath = Path.Combine(recordPath, fileName);
+            outputPath = GetAvailableOutputPath(ResolveRecordPath(config.RecordPath), currentTask.TaskName);
 
             _logger.LogInformation("录制任务输出路径: {OutputPath}", outputPath);
 
@@ -503,14 +499,14 @@ public sealed class RecordingManager
         {
             var lastUpdate = DateTimeOffset.UtcNow;
             var lastBytes = 0L;
-            using var recordingLog = RecordingLogWriter.Create(outputPath, config.WriteRecordingLog);
-            recordingLog?.WriteStart(
-                started,
-                outputPath,
-                LiveSourceClassifier.GetTransportDescription(started.Url, config.RecordingTransport),
-                started.StartedAt ?? DateTimeOffset.Now);
+            var recordingLog = RecordingLogWriter.Create(outputPath, config.WriteRecordingLog);
             try
             {
+                recordingLog?.WriteStart(
+                    started,
+                    outputPath,
+                    LiveSourceClassifier.GetTransportDescription(started.Url, config.RecordingTransport),
+                    started.StartedAt ?? DateTimeOffset.Now);
                 var result = await _recordingService.RecordAsync(started, outputPath, duration, config.RecordingTransport, (progress) =>
                 {
                     session.BytesWritten = progress.BytesWritten;
@@ -545,16 +541,19 @@ public sealed class RecordingManager
                     }
                 }, session.Cancellation.Token);
 
-                var finalStatus = session.Cancellation.IsCancellationRequested
-                    ? session.ManualStopRequested
-                        ? RecordingStatus.Stopped
-                        : RecordingStatus.Completed
-                    : result.Success
+                var finishedOnSchedule = session.ScheduledStopRequested && result.ErrorMessage is null && result.BytesWritten > 0;
+                var finalStatus = session.ManualStopRequested
+                    ? RecordingStatus.Stopped
+                    : result.Success || finishedOnSchedule
                         ? RecordingStatus.Completed
                         : RecordingStatus.Failed;
 
                 // 增加 PCR 时长校验逻辑：如果录制状态不是手动停止或已失败，则检查 PCR 时长
                 var finalErrorMessage = result.ErrorMessage;
+                if (finalStatus == RecordingStatus.Failed && session.ScheduledStopRequested && finalErrorMessage is null)
+                {
+                    finalErrorMessage = "到达计划结束时间，未录到数据";
+                }
                 if (finalStatus == RecordingStatus.Completed && !started.IsLive)
                 {
                     var plannedDurationSeconds = (started.EndTime - started.StartTime).TotalSeconds;
@@ -646,8 +645,15 @@ public sealed class RecordingManager
             }
             finally
             {
-                _activeSessions.TryRemove(started.Id, out _);
-                sessionCompletion.TrySetResult(null);
+                try
+                {
+                    recordingLog?.Dispose();
+                }
+                finally
+                {
+                    _activeSessions.TryRemove(started.Id, out _);
+                    sessionCompletion.TrySetResult(null);
+                }
             }
         }, CancellationToken.None);
 
@@ -680,10 +686,36 @@ public sealed class RecordingManager
         {
             foreach (var session in _activeSessions.Values)
             {
-                session.ManualStopRequested = true;
-                session.Cancellation.Cancel();
+                session.RequestManualStop();
             }
         }
+    }
+
+    private string GetAvailableOutputPath(string directory, string taskName)
+    {
+        // 频道和任务名称可以包含 Windows 禁用的字符（如节目标题里的冒号）。
+        const string invalidCharacters = "<>:\"/\\|?*";
+        var name = new string(taskName.Select(c => char.IsControl(c) || invalidCharacters.Contains(c) ? '_' : c).ToArray());
+        var hasExtension = name.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
+        var extension = hasExtension ? name[^3..] : ".ts";
+        var stem = hasExtension ? name[..^3] : name;
+        var firstDot = stem.IndexOf('.');
+        var firstPart = (firstDot < 0 ? stem : stem[..firstDot]).TrimEnd().ToUpperInvariant();
+        if (firstPart is "CON" or "PRN" or "AUX" or "NUL" ||
+            (firstPart.Length == 4 && (firstPart.StartsWith("COM", StringComparison.Ordinal) || firstPart.StartsWith("LPT", StringComparison.Ordinal)) &&
+             "123456789¹²³".Contains(firstPart[3])))
+        {
+            stem = "_" + stem;
+        }
+
+        var activePaths = GetActiveOutputPaths();
+        var path = Path.Combine(directory, stem + extension);
+        for (var suffix = 2; activePaths.Contains(path) || Path.Exists(path) || Path.Exists(Path.ChangeExtension(path, ".log")); suffix++)
+        {
+            path = Path.Combine(directory, $"{stem}_{suffix}{extension}");
+        }
+
+        return path;
     }
 
     private static string ResolveRecordPath(string recordPath)
@@ -734,8 +766,9 @@ public sealed class RecordingManager
         public CancellationTokenSource Cancellation { get; } = new();
         public Task Completion { get; set; } = Task.CompletedTask;
         public long BytesWritten { get; set; }
-        public bool ManualStopRequested { get; set; }
+        public bool ManualStopRequested => _manualStopRequested;
 
+        private volatile bool _manualStopRequested;
         private long _endTimeUtcTicks;
         private int _scheduledStopRequested;
 
@@ -750,6 +783,18 @@ public sealed class RecordingManager
         public bool IsDue(DateTimeOffset now)
         {
             return IsLive && EndTime <= now;
+        }
+
+        public bool RequestManualStop()
+        {
+            if (ManualStopRequested)
+            {
+                return false;
+            }
+
+            _manualStopRequested = true;
+            Cancellation.Cancel();
+            return true;
         }
 
         public bool RequestScheduledStop()

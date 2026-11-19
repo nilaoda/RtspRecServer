@@ -12,60 +12,48 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
+const emptyPrograms: EpgProgram[] = []
+
+const formatDate = (date: Date) => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+// 'yyyy-MM-dd' 用本地时区构造，避免 UTC 解析在负时区偏移下偏移一天。
+const parseDay = (value: string) => {
+  const [year, month, day] = value.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+const dayLabel = (value: string, today: string) => {
+  const difference = Math.round((parseDay(value).getTime() - parseDay(today).getTime()) / 86400000)
+  switch (difference) {
+    case 0: return '今天'
+    case 1: return '明天'
+    case 2: return '后天'
+    case -1: return '昨天'
+    case -2: return '前天'
+    case -3: return '大前天'
+    default: return value
+  }
+}
+
 export default function EpgChannelPage() {
   const { channelId: urlChannelId } = useParams<{ channelId: string }>()
   const navigate = useNavigate()
   const { channels, getChannelPrograms, loading: globalLoading, now } = useEpgContext()
-  
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(urlChannelId || null)
-  const [programs, setPrograms] = useState<EpgProgram[]>([])
-  const [loadingPrograms, setLoadingPrograms] = useState(false)
-  const [currentProgramId, setCurrentProgramId] = useState<string | null>(null)
-  const [selectedDate, setSelectedDate] = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  })
 
-  const formatDate = (date: Date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
-  // 'yyyy-MM-dd' 用本地时区构造，避免 new Date(str) 的 UTC 解析在负时区偏移下偏移一天
-  const parseDay = (value: string) => {
-    const [y, m, d] = value.split('-').map(Number);
-    return new Date(y, m - 1, d);
-  }
-
-  const dayDiff = (value: string) => {
-    const today = parseDay(formatDate(new Date()));
-    return Math.round((parseDay(value).getTime() - today.getTime()) / 86400000);
-  }
-
-  const dayLabel = (value: string) => {
-    switch (dayDiff(value)) {
-      case 0: return '今天';
-      case 1: return '明天';
-      case 2: return '后天';
-      case -1: return '昨天';
-      case -2: return '前天';
-      case -3: return '大前天';
-      default: return value;
-    }
-  }
+  const selectedChannelId = urlChannelId ?? channels[0]?.id ?? null
+  const [programList, setProgramList] = useState<{ channelId: string; programs: EpgProgram[] } | null>(null)
+  const today = formatDate(new Date(now))
+  const [selectedDate, setSelectedDate] = useState(today)
+  const programs = programList?.channelId === selectedChannelId ? programList.programs : emptyPrograms
+  const loadingPrograms = selectedChannelId !== null && programList?.channelId !== selectedChannelId
+  const currentProgramId = programs.find(p => p.startTime.getTime() <= now && p.endTime.getTime() > now)?.id
 
   const currentProgramRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (programs.length > 0) {
-      const current = programs.find(p => p.startTime.getTime() <= now && p.endTime.getTime() > now)
-      if (current?.id !== currentProgramId) {
-        setCurrentProgramId(current?.id || null)
-      }
-    }
-  }, [now, programs, currentProgramId])
 
   useEffect(() => {
     if (currentProgramId && !loadingPrograms) {
@@ -77,38 +65,24 @@ export default function EpgChannelPage() {
   }, [currentProgramId, loadingPrograms])
 
   useEffect(() => {
-    if (urlChannelId) {
-      setSelectedChannelId(urlChannelId)
-    } else if (channels.length > 0 && !selectedChannelId) {
-      setSelectedChannelId(channels[0].id)
-    }
-  }, [urlChannelId, channels, selectedChannelId])
-
-  useEffect(() => {
-    if (selectedChannelId) {
-      const fetchPrograms = async () => {
-        setLoadingPrograms(true)
-        try {
-          const data = await getChannelPrograms(selectedChannelId)
-          setPrograms(data)
-        } finally {
-          setLoadingPrograms(false)
-        }
-      }
-      fetchPrograms()
-    }
+    if (!selectedChannelId) return
+    let active = true
+    void getChannelPrograms(selectedChannelId).then((programs) => {
+      if (active) setProgramList({ channelId: selectedChannelId, programs })
+    })
+    return () => { active = false }
   }, [selectedChannelId, getChannelPrograms])
 
   const selectedChannel = channels.find(c => c.id === selectedChannelId)
 
   // 日期选项根据当前频道节目数据的实际范围动态生成（始终包含今天），源的覆盖天数不同也能自动适配
   const dateOptions = useMemo(() => {
-    const dates = new Set<string>([formatDate(new Date())])
+    const dates = new Set<string>([today])
     for (const p of programs) {
       dates.add(formatDate(p.startTime))
     }
-    return [...dates].sort().map((value) => ({ label: dayLabel(value), value }))
-  }, [programs])
+    return [...dates].sort().map((value) => ({ label: dayLabel(value, today), value }))
+  }, [programs, today])
 
   const filteredPrograms = programs.filter(p => {
     const programDate = formatDate(p.startTime)
@@ -132,7 +106,6 @@ export default function EpgChannelPage() {
                 <button
                     key={c.id}
                     onClick={() => {
-                        setSelectedChannelId(c.id)
                         navigate(`/epg/channels/${c.id}`)
                     }}
                     className={cn(

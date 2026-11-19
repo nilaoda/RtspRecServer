@@ -153,7 +153,7 @@ try
             return;
         }
 
-        var socket = await context.WebSockets.AcceptWebSocketAsync();
+        using var socket = await context.WebSockets.AcceptWebSocketAsync();
         var manager = context.RequestServices.GetRequiredService<WebSocketConnectionManager>();
         await manager.HandleConnectionAsync(socket, context.RequestAborted);
     });

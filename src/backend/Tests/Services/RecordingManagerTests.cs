@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging.Abstractions;
 using RtspRecServer.Server.Recording;
 using RtspRecServer.Server.Services;
@@ -154,18 +155,19 @@ public class RecordingManagerTests : IDisposable
     [Fact]
     public async Task StopTasks_StopsActiveRecordingTasks()
     {
-        var tasksPath = Path.Combine(Path.GetTempPath(), $"rtsp-bulk-stop-{Guid.NewGuid():N}.json");
-        using var store = new RecordingTaskStore(NullLogger<RecordingTaskStore>.Instance, tasksPath);
-        var service = new BlockingRecordingService();
+        var directory = Directory.CreateTempSubdirectory("rtsp-bulk-stop-");
+        var configuration = new ConfigurationService(directory.FullName);
+        configuration.UpdateAppConfig(new AppConfigUpdateRequest { RecordPath = directory.FullName });
+        var service = new BlockingRecordingService(pauseOnStop: true);
         var manager = new RecordingManager(
-            store,
-            new ConfigurationService(),
+            _store,
+            configuration,
             service,
             _notifier,
             new TaskErrorLogService(_notifier),
             NullLogger<RecordingManager>.Instance);
         var start = DateTimeOffset.UtcNow.AddHours(-1);
-        var task = store.Add(new RecordingTask
+        var task = _store.Add(new RecordingTask
         {
             ChannelId = 1,
             ChannelName = "CCTV-1",
@@ -177,27 +179,120 @@ public class RecordingManagerTests : IDisposable
             EndTime = start.AddHours(1)
         });
 
+        Task<RecordingTaskBulkResult>? stopping = null;
         try
         {
             Assert.True(await manager.TryStartTaskAsync(task, CancellationToken.None));
             await service.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-            var result = await manager.StopTasksAsync([task.Id], CancellationToken.None);
+            stopping = manager.StopTasksAsync([task.Id], CancellationToken.None);
+            await service.Stopping.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(manager.IsActive(task.Id));
+            Assert.Contains(Path.Combine(directory.FullName, "bulk-stop.ts"), manager.GetActiveOutputPaths());
+            Assert.False(manager.DeleteTask(task.Id));
+
+            service.FinishStopping.TrySetResult();
+            var result = await stopping.WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.Equal(1, result.Succeeded);
             Assert.Equal(0, result.Failed);
             Assert.Equal([task.Id], result.SucceededIds);
-            Assert.Equal(RecordingStatus.Stopped, store.GetById(task.Id)!.Status);
+            Assert.Equal(RecordingStatus.Stopped, _store.GetById(task.Id)!.Status);
+            Assert.False(manager.IsActive(task.Id));
         }
         finally
         {
-            if (File.Exists(tasksPath))
+            service.FinishStopping.TrySetResult();
+            if (stopping is not null)
             {
-                File.Delete(tasksPath);
+                await stopping.WaitAsync(TimeSpan.FromSeconds(2));
             }
+            else
+            {
+                await manager.StopTaskAsync(task.Id, CancellationToken.None);
+            }
+            directory.Delete(recursive: true);
         }
     }
 
+    [Fact]
+    public async Task StartTask_UsesDifferentFilesForExistingAndActiveRecordings()
+    {
+        var directory = Directory.CreateTempSubdirectory("rtsp-recording-name-");
+        var config = new ConfigurationService(directory.FullName);
+        config.UpdateAppConfig(new AppConfigUpdateRequest { RecordPath = directory.FullName, WriteRecordingLog = false });
+        var manager = new RecordingManager(_store, config, new BlockingRecordingService(), _notifier,
+            new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
+        var start = DateTimeOffset.UtcNow;
+        var task = new RecordingTask { TaskName = "CON.同名/节目:4K", IsLive = true, StartTime = start, EndTime = start.AddHours(1) };
+        var first = _store.Add(task);
+        var second = _store.Add(task with { EndTime = start.AddHours(2) });
+        var originalPath = Path.Combine(directory.FullName, "_CON.同名_节目_4K.ts");
+
+        try
+        {
+            await File.WriteAllTextAsync(originalPath, "已有录像");
+            Assert.True(await manager.TryStartTaskAsync(first, CancellationToken.None));
+            Assert.True(await manager.TryStartTaskAsync(second, CancellationToken.None));
+
+            Assert.Equal(Path.Combine(directory.FullName, "_CON.同名_节目_4K_2.ts"), _store.GetById(first.Id)!.FilePath);
+            Assert.Equal(Path.Combine(directory.FullName, "_CON.同名_节目_4K_3.ts"), _store.GetById(second.Id)!.FilePath);
+            Assert.Equal("已有录像", await File.ReadAllTextAsync(originalPath));
+        }
+        finally
+        {
+            await manager.StopTasksAsync([first.Id, second.Id], CancellationToken.None);
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CreateTask_RejectsEndTimeAtStartTime()
+    {
+        var start = DateTimeOffset.UtcNow;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => _manager.CreateTaskAsync(
+            new RecordingTaskCreateRequest { StartTime = start, EndTime = start }, CancellationToken.None));
+
+        Assert.Contains("结束时间必须大于开始时间", error.Message);
+        Assert.Empty(_store.GetAll());
+    }
+
+    [Fact]
+    public async Task TimerScan_SkipsOnlyWindowsFullyCoveredByAnotherTask()
+    {
+        var directory = Directory.CreateTempSubdirectory("rtsp-timer-overlap-");
+        try
+        {
+            var config = new ConfigurationService(directory.FullName);
+            var channel = config.AddChannel(new ChannelConfig { Name = "Test", Url = "udp://239.1.1.1:8000" });
+            var manager = new RecordingManager(_store, config, new NoopRecordingService(), _notifier,
+                new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
+            using var timers = new RecordingTimerStore(NullLogger<RecordingTimerStore>.Instance, Path.Combine(directory.FullName, "timers.json"));
+            var service = new RecordingTimerService(timers, config, manager, NullLogger<RecordingTimerService>.Instance);
+            var first = timers.Add(new RecordingTimer
+            {
+                ChannelId = channel.Id,
+                Name = "First",
+                StartTime = "10:00",
+                EndTime = "11:00",
+                StartDate = "2026-11-19",
+                EndDate = "2026-11-19",
+                Weekdays = [true, true, true, true, true, true, true]
+            });
+            timers.Add(first with { Name = "Covered", StartTime = "10:10", EndTime = "10:40" });
+            timers.Add(first with { Name = "Overlap", StartTime = "10:30", EndTime = "12:00" });
+            var localNow = new DateTime(2026, 11, 19, 9, 0, 0);
+            var now = new DateTimeOffset(localNow, TimeZoneInfo.Local.GetUtcOffset(localNow));
+
+            await service.ScanAndGenerateAsync(now, CancellationToken.None);
+
+            Assert.Equal(["First", "Overlap"], manager.GetAllTasks().Select(task => task.DisplayName));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
     public void Dispose()
     {
         _store.Dispose();
@@ -229,25 +324,27 @@ public class RecordingManagerTests : IDisposable
 
     private sealed class RecordingNotifierFake : IRecordingNotifier
     {
-        public List<RecordingTaskDto> Tasks { get; } = new();
-        public List<TaskErrorLogMessage> ErrorLogMessages { get; } = new();
+        public ConcurrentQueue<RecordingTaskDto> Tasks { get; } = new();
+        public ConcurrentQueue<TaskErrorLogMessage> ErrorLogMessages { get; } = new();
 
         public Task NotifyTaskUpdateAsync(RecordingTaskDto task, CancellationToken cancellationToken)
         {
-            Tasks.Add(task);
+            Tasks.Enqueue(task);
             return Task.CompletedTask;
         }
 
         public Task NotifyTaskErrorLogAsync(TaskErrorLogMessage message, CancellationToken cancellationToken)
         {
-            ErrorLogMessages.Add(message);
+            ErrorLogMessages.Enqueue(message);
             return Task.CompletedTask;
         }
     }
 
-    private sealed class BlockingRecordingService : IRecordingService
+    private sealed class BlockingRecordingService(bool pauseOnStop = false) : IRecordingService
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource FinishStopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<RecordingResult> RecordAsync(
             RecordingTask task,
@@ -265,6 +362,11 @@ public class RecordingManagerTests : IDisposable
             }
             catch (OperationCanceledException)
             {
+                Stopping.TrySetResult();
+                if (pauseOnStop)
+                {
+                    await FinishStopping.Task;
+                }
             }
 
             return new RecordingResult

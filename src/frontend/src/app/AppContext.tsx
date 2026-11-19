@@ -62,6 +62,7 @@ const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
 
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [tasks, setTasks] = useState<RecordingTaskDto[]>([])
+  const taskUpdatesDuringReload = useRef<Map<number, RecordingTaskDto> | null>(null)
   const [channels, setChannels] = useState<ChannelConfig[]>([])
   const [channelProfiles, setChannelProfiles] = useState<Record<number, ChannelProbeResult>>({})
   const [recordings, setRecordings] = useState<RecordingFileInfo[]>([])
@@ -96,11 +97,25 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   // Theme effect handled by ThemeProvider
 
   const reloadTasks = useCallback(async () => {
+    const updates = new Map<number, RecordingTaskDto>()
+    taskUpdatesDuringReload.current = updates
     try {
       const data = await getTasks()
-      setTasks(data)
+      if (taskUpdatesDuringReload.current === updates) {
+        const byId = new Map(data.map((task) => [task.id, task]))
+        for (const [id, task] of updates) {
+          byId.set(id, task)
+        }
+        setTasks(Array.from(byId.values()))
+      }
     } catch {
-      notifyError('加载任务失败')
+      if (taskUpdatesDuringReload.current === updates) {
+        notifyError('加载任务失败')
+      }
+    } finally {
+      if (taskUpdatesDuringReload.current === updates) {
+        taskUpdatesDuringReload.current = null
+      }
     }
   }, [notifyError])
 
@@ -287,6 +302,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     const disconnect = connectWebSocket({
       onTaskUpdate: (task) => {
+        taskUpdatesDuringReload.current?.set(task.id, task)
         setTasks((prev) => {
           const index = prev.findIndex((item) => item.id === task.id)
           if (index >= 0) {
@@ -309,10 +325,11 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     if (wsConnectionStatus === 'connected') {
-      // 重连后补齐断线期间可能错过的错误日志
+      // 补齐连接建立前和断线期间错过的更新。
+      void reloadTasks()
       void reloadTaskErrorLog()
     }
-  }, [wsConnectionStatus, reloadTaskErrorLog])
+  }, [wsConnectionStatus, reloadTasks, reloadTaskErrorLog])
 
   const createTaskAction = useCallback(
     async (payload: { channelId: number; startTime: string; endTime: string; taskName: string | null }) => {

@@ -81,14 +81,16 @@ public sealed class RecordingTimerService
     /// </summary>
     public async Task ScanAndGenerateAsync(DateTimeOffset now, CancellationToken cancellationToken)
     {
-        var timers = _timerStore.GetAll().Where(t => t.Enabled).ToList();
+        var timers = _timerStore.GetAll().Where(t => t.Enabled).OrderBy(t => t.Id).ToList();
         if (timers.Count == 0)
         {
             return;
         }
 
         var channels = _configurationService.GetChannels();
-        var allTasks = _recordingManager.GetAllTasks();
+        var activeTasks = _recordingManager.GetAllTasks()
+            .Where(t => t.Status is RecordingStatus.Pending or RecordingStatus.Recording)
+            .ToList();
         var lookAheadEnd = now.AddDays(LookAheadDays);
         var todayLocal = TimeZoneInfo.ConvertTime(now, TimeZoneInfo.Local).Date;
 
@@ -113,22 +115,19 @@ public sealed class RecordingTimerService
                     continue;
                 }
 
-                // 已被同频道的活跃任务覆盖（如用户手动预约过），本窗口视为已处理
-                if (allTasks.Any(t =>
-                        t.ChannelId == timer.ChannelId &&
-                        (t.Status == RecordingStatus.Pending || t.Status == RecordingStatus.Recording) &&
-                        t.StartTime < window.WindowEnd && t.EndTime > window.WindowStart))
-                {
-                    MarkTriggered(timer.Id, window);
-                    continue;
-                }
-
                 var start = window.EffectiveStart;
                 var end = window.EffectiveEnd;
                 // 直播频道错过窗口开头时从当前时间起录剩余部分；未来窗口保持完整时间，由调度器准点启动
                 if (start < now && LiveSourceClassifier.IsLive(channel.Url))
                 {
                     start = now;
+                }
+
+                // 已有任务完整覆盖所需的时间段时，才跳过这次录制。
+                if (activeTasks.Any(t => t.ChannelId == timer.ChannelId && t.StartTime <= start && t.EndTime >= end))
+                {
+                    MarkTriggered(timer.Id, window);
+                    continue;
                 }
 
                 try
@@ -141,6 +140,7 @@ public sealed class RecordingTimerService
                         TaskName = timer.Name,
                         TimerId = timer.Id
                     }, cancellationToken);
+                    activeTasks.Add(created);
 
                     _logger.LogInformation("定时规则 {TimerId} 已生成录制任务，任务ID: {TaskId}, 窗口: {Start} ~ {End}",
                         timer.Id, created.Id, start, end);

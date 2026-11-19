@@ -165,7 +165,7 @@ internal sealed class RtspStreamRecorder
             EnsureOutputPath(_outputPath);
         }
         await using var ownedFile = _output is null
-            ? new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous)
+            ? new FileStream(_outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 64 * 1024, FileOptions.Asynchronous)
             : null;
         await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 64 * 1024);
         var sink = _output ?? buffered!;

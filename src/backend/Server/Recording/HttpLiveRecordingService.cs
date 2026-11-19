@@ -57,7 +57,7 @@ public sealed class HttpLiveRecordingService : IRecordingService
 
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
             await using var ownedFile = output is null
-                ? new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.Read, 32 * 1024, FileOptions.Asynchronous)
+                ? new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 32 * 1024, FileOptions.Asynchronous)
                 : null;
             var sink = output ?? ownedFile!;
             var pipe = new Pipe(new PipeOptions(
