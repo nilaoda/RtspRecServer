@@ -427,9 +427,8 @@ try
     });
 
     app.MapGet("/api/tasks/runtime", (RecordingManager manager, SharedLiveRecordingService sources) =>
-        Results.Ok(new RecordingTaskRuntimeSnapshot
+        Results.Ok(manager.GetTaskRuntime(DateTimeOffset.UtcNow) with
         {
-            PendingReasons = manager.GetPendingTaskReasons(DateTimeOffset.UtcNow),
             SharedTaskCounts = sources.GetSharedTaskCounts()
         }));
 
@@ -676,7 +675,7 @@ try
     app.MapGet("/api/system/status", (ConfigurationService configurationService) =>
     {
         var config = configurationService.GetAppConfig();
-        var disk = GetDiskStatus(config.RecordPath);
+        var disk = RecordingDiskStatus.Read(config.RecordPath);
         var status = new SystemStatus
         {
             CurrentUser = Environment.UserName,
@@ -816,37 +815,6 @@ static RecordingTaskDto ToDto(RecordingTask task)
         TsCheck = task.TsCheck,
         TimerId = task.TimerId
     };
-}
-
-static DiskStatus GetDiskStatus(string recordPath)
-{
-    try
-    {
-        var fullPath = ResolveRecordPath(recordPath);
-        var drives = DriveInfo.GetDrives().Where(d => d.IsReady).ToList();
-        
-        // 寻找最长匹配的根路径
-        var match = drives
-            .Select(d => new { Drive = d, Root = d.RootDirectory.FullName })
-            .Where(d => fullPath.StartsWith(d.Root, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(d => d.Root.Length)
-            .FirstOrDefault();
-
-        if (match != null)
-        {
-            return new DiskStatus
-            {
-                TotalBytes = match.Drive.TotalSize,
-                FreeBytes = match.Drive.AvailableFreeSpace
-            };
-        }
-    }
-    catch
-    {
-        // 忽略错误，返回默认的0
-    }
-
-    return new DiskStatus(); // 获取不到直接返回0
 }
 
 static async Task<string> GetMediaInfoAsync(string filePath)

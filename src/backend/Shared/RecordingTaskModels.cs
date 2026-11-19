@@ -41,6 +41,10 @@ public sealed record RecordingTaskEndTimeUpdateRequest
 
 public sealed record RecordingTaskRuntimeSnapshot
 {
+    public int ActiveSourceCount { get; init; }
+    public int SourceLimit { get; init; }
+    public int ActiveWriterCount { get; init; }
+    public int WriterLimit { get; init; }
     public Dictionary<long, string> PendingReasons { get; init; } = [];
     public Dictionary<long, int> SharedTaskCounts { get; init; } = [];
 }

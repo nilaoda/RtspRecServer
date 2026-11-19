@@ -90,7 +90,7 @@ public sealed class RecordingBackgroundService : BackgroundService
     {
         try
         {
-            var disk = GetDiskStatus(config.RecordPath);
+            var disk = RecordingDiskStatus.Read(config.RecordPath);
             var status = new SystemStatus
             {
                 CurrentUser = Environment.UserName,
@@ -103,43 +103,5 @@ public sealed class RecordingBackgroundService : BackgroundService
         {
             _logger.LogError(ex, "推送系统状态失败");
         }
-    }
-
-    private static DiskStatus GetDiskStatus(string recordPath)
-    {
-        try
-        {
-            var fullPath = ResolveRecordPath(recordPath);
-            var drives = DriveInfo.GetDrives().Where(d => d.IsReady).ToList();
-            
-            var match = drives
-                .Select(d => new { Drive = d, Root = d.RootDirectory.FullName })
-                .Where(d => fullPath.StartsWith(d.Root, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(d => d.Root.Length)
-                .FirstOrDefault();
-
-            if (match != null)
-            {
-                return new DiskStatus
-                {
-                    TotalBytes = match.Drive.TotalSize,
-                    FreeBytes = match.Drive.AvailableFreeSpace
-                };
-            }
-        }
-        catch
-        {
-            // Ignore
-        }
-
-        return new DiskStatus();
-    }
-
-    private static string ResolveRecordPath(string recordPath)
-    {
-        var basePath = AppContext.BaseDirectory;
-        var safePath = string.IsNullOrWhiteSpace(recordPath) ? "./records" : recordPath;
-        var combined = Path.IsPathRooted(safePath) ? safePath : Path.Combine(basePath, safePath);
-        return Path.GetFullPath(combined);
     }
 }

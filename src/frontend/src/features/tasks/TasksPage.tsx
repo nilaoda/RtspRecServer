@@ -4,9 +4,11 @@ import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, RefreshCw, Cale
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import { getTaskLog, getTaskRuntime, retryTask } from '../../services/api'
-import type { RecordingStatus, RecordingTaskDto, RecordingTaskRuntimeSnapshot, TaskWaitReason } from '../../types'
+import { getTaskLog, retryTask } from '../../services/api'
+import type { RecordingTaskDto, RecordingTaskRuntimeSnapshot } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
+import { normalizeStatus, waitReasonLabel, type RecordingStatusKey } from '../shared/recording-task'
+import { useRecordingRuntime } from '../shared/useRecordingRuntime'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import TaskFormDialog from './TaskFormDialog'
 import TsCheckDialog from './TsCheckDialog'
@@ -62,20 +64,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-
-type RecordingStatusKey = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped'
-
-const statusKeys: RecordingStatusKey[] = ['Pending', 'Recording', 'Completed', 'Failed', 'Stopped']
-
-const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
-  if (typeof value === 'number') {
-    return statusKeys[value] ?? 'Pending'
-  }
-  if (statusKeys.includes(value as RecordingStatusKey)) {
-    return value as RecordingStatusKey
-  }
-  return 'Pending'
-}
 
 // 录制中即使还没有检测数据也可打开详情，弹窗会随 WebSocket 推送实时刷新
 const canOpenTsCheck = (task: RecordingTaskDto, status: RecordingStatusKey) =>
@@ -234,14 +222,6 @@ const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
   </Badge>
 )
 
-const waitReasonLabel: Record<TaskWaitReason, string> = {
-  scheduled: '未到开始时间',
-  catchup: '等待回看片段生成',
-  sourceLimit: '等待收流名额',
-  writerLimit: '等待写盘名额',
-  dispatch: '等待调度',
-}
-
 const TaskStatusDetail = ({ task, status, runtime, onViewFailure }: {
   task: RecordingTaskDto
   status: RecordingStatusKey
@@ -297,7 +277,6 @@ const TasksPage = () => {
   const [rescheduleTask, setRescheduleTask] = useState<RecordingTaskDto | null>(null)
   const [retryTarget, setRetryTarget] = useState<RecordingTaskDto | null>(null)
   const [retrySubmitting, setRetrySubmitting] = useState(false)
-  const [runtime, setRuntime] = useState<RecordingTaskRuntimeSnapshot | null>(null)
   const [tsDialogTaskId, setTsDialogTaskId] = useState<number | null>(null)
   const tsDialogTask =
     tsDialogTaskId == null ? null : (tasks.find((task) => task.id === tsDialogTaskId) ?? null)
@@ -323,31 +302,7 @@ const TasksPage = () => {
     return counts
   }, [tasks])
 
-  const hasActiveTasks = taskCounts.active > 0
-  useEffect(() => {
-    if (!hasActiveTasks) return
-
-    const controller = new AbortController()
-    let timer: number | undefined
-    const refresh = async () => {
-      try {
-        if (!document.hidden) {
-          const snapshot = await getTaskRuntime(controller.signal)
-          if (!controller.signal.aborted) setRuntime(snapshot)
-        }
-      } catch {
-        if (!controller.signal.aborted) setRuntime(null)
-      } finally {
-        if (!controller.signal.aborted) timer = window.setTimeout(refresh, 2000)
-      }
-    }
-    void refresh()
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-      setRuntime(null)
-    }
-  }, [hasActiveTasks])
+  const runtime = useRecordingRuntime(taskCounts.active > 0)
 
   const visibleTasks = useMemo(() => {
     if (linkedTaskId !== null) return linkedTask ? [linkedTask] : []

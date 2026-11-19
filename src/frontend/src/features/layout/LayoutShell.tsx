@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import {
+  LayoutDashboard,
   LayoutList,
   Tv,
   Video,
@@ -27,7 +28,8 @@ import {
 } from "@/components/ui/sheet"
 
 const navItems = [
-  { key: 'tasks', label: '任务管理', path: '/', icon: LayoutList },
+  { key: 'overview', label: '录制概览', path: '/', icon: LayoutDashboard },
+  { key: 'tasks', label: '任务管理', path: '/tasks', icon: LayoutList },
   { key: 'timers', label: '定时规则', path: '/timers', icon: Clock },
   { key: 'channels', label: '频道配置', path: '/channels', icon: Tv },
   { key: 'recordings', label: '录制管理', path: '/recordings', icon: Video },
@@ -47,8 +49,8 @@ const LayoutShell = () => {
 
   // Helper to determine if a route is active
   const isActive = (path: string) => {
-    if (path === '/') return location.pathname === '/'
-    return location.pathname.startsWith(path)
+    if (path === '/') return ['/', '/overview', '/overview/'].includes(location.pathname)
+    return location.pathname === path || location.pathname.startsWith(`${path}/`)
   }
 
   const currentTitle = navItems.find(item => isActive(item.path))?.label || 'RTSP Playback Hub'
@@ -144,7 +146,7 @@ const LayoutShell = () => {
               <AppRoutes />
             </div>
         </div>
-        {location.pathname === '/' && <TaskErrorLogPanel />}
+        {isActive('/tasks') && <TaskErrorLogPanel />}
       </main>
     </div>
   )

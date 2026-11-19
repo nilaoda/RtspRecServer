@@ -56,7 +56,7 @@ const recordingPathKey = (path: string) => /^[a-z]:[/\\]|^\\\\/i.test(path)
 
 const RecordingTaskLink = ({ taskId }: { taskId?: number }) => taskId === undefined ? null : (
   <Button asChild variant="ghost" size="sm">
-    <Link to={`/?task=${taskId}`}>
+    <Link to={`/tasks?task=${taskId}`}>
       <ClipboardList className="mr-1.5 h-4 w-4" />
       查看任务
     </Link>

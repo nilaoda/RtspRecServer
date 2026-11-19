@@ -470,7 +470,7 @@ public sealed class RecordingManager
             }
 
             var sourceKey = LiveRecordingSourceKey.FromTask(currentTask);
-            if (GetCapacityWaitReason(config, sourceKey) is not null)
+            if (GetRecordingCapacity(config).GetWaitReason(sourceKey) is not null)
             {
                 return false;
             }
@@ -706,14 +706,22 @@ public sealed class RecordingManager
         return _activeSessions.ContainsKey(id);
     }
 
-    internal Dictionary<long, string> GetPendingTaskReasons(DateTimeOffset now)
+    internal RecordingTaskRuntimeSnapshot GetTaskRuntime(DateTimeOffset now)
     {
         var config = _configurationService.GetAppConfig();
         lock (_taskTransitionLock)
         {
-            return _taskStore.GetAll().Where(task => task.Status == RecordingStatus.Pending).ToDictionary(
-                task => task.Id,
-                task => GetTimeWaitReason(task, now) ?? GetCapacityWaitReason(config, LiveRecordingSourceKey.FromTask(task)) ?? "dispatch");
+            var capacity = GetRecordingCapacity(config);
+            return new RecordingTaskRuntimeSnapshot
+            {
+                ActiveSourceCount = capacity.SourceCount,
+                SourceLimit = capacity.SourceLimit,
+                ActiveWriterCount = capacity.WriterCount,
+                WriterLimit = capacity.WriterLimit,
+                PendingReasons = _taskStore.GetAll().Where(task => task.Status == RecordingStatus.Pending).ToDictionary(
+                    task => task.Id,
+                    task => GetTimeWaitReason(task, now) ?? capacity.GetWaitReason(LiveRecordingSourceKey.FromTask(task)) ?? "dispatch")
+            };
         }
     }
 
@@ -730,30 +738,15 @@ public sealed class RecordingManager
             : null;
     }
 
-    // 与任务启动一起判断，避免同时到期的任务抢占同一个收流或写盘名额。
-    private string? GetCapacityWaitReason(AppConfig config, LiveRecordingSourceKey? sourceKey)
+    private RecordingCapacity GetRecordingCapacity(AppConfig config)
     {
-        var writerLimit = config.MaxRecordingWriters > 0 ? config.MaxRecordingWriters : Math.Max(2, config.MaxRecordingTasks);
-        if (_activeSessions.Count >= writerLimit)
-        {
-            return "writerLimit";
-        }
-
-        if (_activeSessions.Count < config.MaxRecordingTasks)
-        {
-            return null;
-        }
-
+        var activeSessions = _activeSessions.Values;
         var sharedSources = new HashSet<LiveRecordingSourceKey>();
         var exclusiveSources = 0;
-        foreach (var session in _activeSessions.Values)
+        foreach (var session in activeSessions)
         {
             if (session.SourceKey is { } activeSource)
             {
-                if (activeSource == sourceKey)
-                {
-                    return null;
-                }
                 sharedSources.Add(activeSource);
             }
             else
@@ -763,7 +756,26 @@ public sealed class RecordingManager
             }
         }
 
-        return sharedSources.Count + exclusiveSources < config.MaxRecordingTasks ? null : "sourceLimit";
+        var writerLimit = config.MaxRecordingWriters > 0 ? config.MaxRecordingWriters : Math.Max(2, config.MaxRecordingTasks);
+        return new RecordingCapacity(activeSessions.Count, writerLimit, config.MaxRecordingTasks, exclusiveSources, sharedSources);
+    }
+
+    private readonly record struct RecordingCapacity(
+        int WriterCount, int WriterLimit, int SourceLimit, int ExclusiveSourceCount, HashSet<LiveRecordingSourceKey> SharedSources)
+    {
+        public int SourceCount => ExclusiveSourceCount + SharedSources.Count;
+
+        public string? GetWaitReason(LiveRecordingSourceKey? source)
+        {
+            if (WriterCount >= WriterLimit)
+            {
+                return "writerLimit";
+            }
+
+            return SourceCount >= SourceLimit && (source is null || !SharedSources.Contains(source.Value))
+                ? "sourceLimit"
+                : null;
+        }
     }
 
     public IReadOnlySet<string> GetActiveOutputPaths()

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import type { AppConfig, ChannelConfig, ChannelProbeResult, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, RecordingStatus, TaskErrorLogEntry, TaskErrorLogMessage, TimerUpsertPayload } from '../types'
+import type { AppConfig, ChannelConfig, ChannelProbeResult, RecordingFileDeleteResult, RecordingFileInfo, RecordingTaskDto, RecordingTimer, SystemStatus, TaskErrorLogEntry, TaskErrorLogMessage, TimerUpsertPayload } from '../types'
 import {
   addChannel,
   clearTaskErrorLog as clearTaskErrorLogApi,
@@ -32,10 +32,7 @@ import type { UpdateConfigPayload } from '../services/api'
 import { connectWebSocket } from '../services/ws'
 import { AppContext, type AppContextValue } from './context'
 import { useTheme } from '@/components/theme-context'
-
-type RecordingStatusKey = 'Pending' | 'Recording' | 'Completed' | 'Failed' | 'Stopped'
-
-const statusKeys: RecordingStatusKey[] = ['Pending', 'Recording', 'Completed', 'Failed', 'Stopped']
+import { getRecordingBitrateKbps, normalizeStatus } from '../features/shared/recording-task'
 
 const CLIENT_ERROR_LOG_LIMIT = 50_000
 
@@ -48,16 +45,6 @@ const mergeTaskErrorEntries = (previous: TaskErrorLogEntry[], incoming: TaskErro
     }
   }
   return Array.from(byId.values()).sort((left, right) => left.id - right.id).slice(-CLIENT_ERROR_LOG_LIMIT)
-}
-
-const normalizeStatus = (value: RecordingStatus): RecordingStatusKey => {
-  if (typeof value === 'number') {
-    return statusKeys[value] ?? 'Pending'
-  }
-  if (statusKeys.includes(value as RecordingStatusKey)) {
-    return value as RecordingStatusKey
-  }
-  return 'Pending'
 }
 
 export const AppProvider = ({ children }: { children: React.ReactNode }) => {
@@ -550,22 +537,7 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const totalBitrateKbps = useMemo(() => {
     return tasks
       .filter(task => normalizeStatus(task.status) === 'Recording')
-      .reduce((total, task) => {
-        // 优先使用后端提供的实时码率
-        if (task.currentBitrateKbps !== undefined && task.currentBitrateKbps > 0) {
-          return total + task.currentBitrateKbps
-        }
-        
-        // 如果没有实时码率，使用之前的平均码率计算作为备选
-        const startedAt = task.startedAt ? new Date(task.startedAt).getTime() : Number.NaN
-        if (!Number.isFinite(startedAt) || task.bytesWritten === 0) {
-          return total
-        }
-        
-        const durationSeconds = Math.max(1, (now.getTime() - startedAt) / 1000)
-        const bitrateKbps = (task.bytesWritten * 8) / (durationSeconds * 1000)
-        return total + bitrateKbps
-      }, 0)
+      .reduce((total, task) => total + getRecordingBitrateKbps(task, now.getTime()), 0)
   }, [tasks, now])
 
   // 防抖处理实时码率，避免频繁变化

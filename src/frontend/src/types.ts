@@ -70,6 +70,10 @@ export type RecordingTaskDto = {
 export type TaskWaitReason = 'scheduled' | 'catchup' | 'sourceLimit' | 'writerLimit' | 'dispatch'
 
 export type RecordingTaskRuntimeSnapshot = {
+  activeSourceCount: number
+  sourceLimit: number
+  activeWriterCount: number
+  writerLimit: number
   pendingReasons: Record<number, TaskWaitReason>
   sharedTaskCounts: Record<number, number>
 }
