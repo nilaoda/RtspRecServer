@@ -39,6 +39,12 @@ public sealed record RecordingTaskEndTimeUpdateRequest
     public DateTimeOffset EndTime { get; init; }
 }
 
+public sealed record RecordingTaskRuntimeSnapshot
+{
+    public Dictionary<long, string> PendingReasons { get; init; } = [];
+    public Dictionary<long, int> SharedTaskCounts { get; init; } = [];
+}
+
 public sealed record RecordingTaskBulkRequest
 {
     public long[] TaskIds { get; init; } = [];

@@ -426,6 +426,13 @@ try
         return task is null ? Results.NotFound(ApiResponse.Create("任务不存在")) : Results.Ok(ToDto(task));
     });
 
+    app.MapGet("/api/tasks/runtime", (RecordingManager manager, SharedLiveRecordingService sources) =>
+        Results.Ok(new RecordingTaskRuntimeSnapshot
+        {
+            PendingReasons = manager.GetPendingTaskReasons(DateTimeOffset.UtcNow),
+            SharedTaskCounts = sources.GetSharedTaskCounts()
+        }));
+
     app.MapPost("/api/tasks", async (RecordingManager manager, RecordingTaskCreateRequest request, CancellationToken cancellationToken) =>
     {
         try

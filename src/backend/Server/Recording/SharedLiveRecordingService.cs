@@ -85,17 +85,30 @@ internal sealed class SharedLiveRecordingService(
         lock (_sync)
         {
             _sources.TryGetValue(key, out var previous);
-            if (previous?.TrySubscribe() is { } existing)
+            if (previous?.TrySubscribe(task.Id) is { } existing)
             {
                 return existing;
             }
 
             var source = new SourceSession();
-            var subscription = source.TrySubscribe()!;
+            var subscription = source.TrySubscribe(task.Id)!;
             _sources[key] = source;
             _ = Task.Run(() => ReceiveAsync(key, task, source, previous?.Completion.Task ?? Task.CompletedTask));
             return subscription;
         }
+    }
+
+    public Dictionary<long, int> GetSharedTaskCounts()
+    {
+        var counts = new Dictionary<long, int>();
+        lock (_sync)
+        {
+            foreach (var source in _sources.Values)
+            {
+                source.AddSharedTaskCounts(counts);
+            }
+        }
+        return counts;
     }
 
     private async Task ReceiveAsync(LiveRecordingSourceKey key, RecordingTask task, SourceSession source, Task previous)
@@ -156,7 +169,7 @@ internal sealed class SharedLiveRecordingService(
         public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task StopCompletion { get; private set; } = Task.CompletedTask;
 
-        public Subscription? TrySubscribe()
+        public Subscription? TrySubscribe(long taskId)
         {
             lock (Output.SyncRoot)
             {
@@ -172,9 +185,25 @@ internal sealed class SharedLiveRecordingService(
                     return null;
                 }
 
-                var subscription = new Subscription(this);
+                var subscription = new Subscription(this, taskId);
                 _subscriptions.Add(subscription);
                 return subscription;
+            }
+        }
+
+        public void AddSharedTaskCounts(Dictionary<long, int> counts)
+        {
+            lock (Output.SyncRoot)
+            {
+                if (_closed || _subscriptions.Count < 2)
+                {
+                    return;
+                }
+
+                foreach (var subscription in _subscriptions)
+                {
+                    counts[subscription.TaskId] = _subscriptions.Count;
+                }
             }
         }
 
@@ -249,8 +278,9 @@ internal sealed class SharedLiveRecordingService(
         }
     }
 
-    private sealed class Subscription(SourceSession source) : IAsyncDisposable
+    private sealed class Subscription(SourceSession source, long taskId) : IAsyncDisposable
     {
+        public long TaskId { get; } = taskId;
         public Channel<ReadOnlyMemory<byte>> Queue { get; } = Channel.CreateBounded<ReadOnlyMemory<byte>>(
             new BoundedChannelOptions(QueueCapacity) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
 

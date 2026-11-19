@@ -3,8 +3,8 @@ import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, RefreshCw, Cale
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import { getTaskLog, retryTask } from '../../services/api'
-import type { RecordingStatus, RecordingTaskDto } from '../../types'
+import { getTaskLog, getTaskRuntime, retryTask } from '../../services/api'
+import type { RecordingStatus, RecordingTaskDto, RecordingTaskRuntimeSnapshot, TaskWaitReason } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import TaskFormDialog from './TaskFormDialog'
@@ -113,8 +113,8 @@ type TaskTab = 'active' | 'completed'
 const PAGE_SIZE = 20
 
 const taskTabs: Record<TaskTab, { label: string; empty: string }> = {
-  active: { label: '正在录制', empty: '暂无正在录制或等待中的任务' },
-  completed: { label: '已完成录制', empty: '暂无已完成录制' },
+  active: { label: '录制与计划', empty: '暂无正在录制或等待中的任务' },
+  completed: { label: '历史任务', empty: '暂无历史任务' },
 }
 
 const getTaskTab = (status: RecordingStatusKey): TaskTab => {
@@ -233,9 +233,18 @@ const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
   </Badge>
 )
 
-const TaskStatusDetail = ({ task, status, onViewFailure }: {
+const waitReasonLabel: Record<TaskWaitReason, string> = {
+  scheduled: '未到开始时间',
+  catchup: '等待回看片段生成',
+  sourceLimit: '等待收流名额',
+  writerLimit: '等待写盘名额',
+  dispatch: '等待调度',
+}
+
+const TaskStatusDetail = ({ task, status, runtime, onViewFailure }: {
   task: RecordingTaskDto
   status: RecordingStatusKey
+  runtime: RecordingTaskRuntimeSnapshot | null
   onViewFailure: (task: RecordingTaskDto) => void
 }) => {
   if (status === 'Failed' && task.errorMessage) {
@@ -246,7 +255,11 @@ const TaskStatusDetail = ({ task, status, onViewFailure }: {
     )
   }
 
-  return null
+  const reason = runtime?.pendingReasons[task.id]
+  const sharedCount = runtime?.sharedTaskCounts[task.id] ?? 0
+  const detail = status === 'Pending' && reason ? waitReasonLabel[reason]
+    : status === 'Recording' && sharedCount > 1 ? `共享收流 · ${sharedCount} 个任务` : null
+  return detail && <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
 }
 
 const TaskProgress = ({
@@ -280,6 +293,7 @@ const TasksPage = () => {
   const [rescheduleTask, setRescheduleTask] = useState<RecordingTaskDto | null>(null)
   const [retryTarget, setRetryTarget] = useState<RecordingTaskDto | null>(null)
   const [retrySubmitting, setRetrySubmitting] = useState(false)
+  const [runtime, setRuntime] = useState<RecordingTaskRuntimeSnapshot | null>(null)
   const [tsDialogTaskId, setTsDialogTaskId] = useState<number | null>(null)
   const tsDialogTask =
     tsDialogTaskId == null ? null : (tasks.find((task) => task.id === tsDialogTaskId) ?? null)
@@ -302,6 +316,32 @@ const TasksPage = () => {
     }
     return counts
   }, [tasks])
+
+  const hasActiveTasks = taskCounts.active > 0
+  useEffect(() => {
+    if (!hasActiveTasks) return
+
+    const controller = new AbortController()
+    let timer: number | undefined
+    const refresh = async () => {
+      try {
+        if (!document.hidden) {
+          const snapshot = await getTaskRuntime(controller.signal)
+          if (!controller.signal.aborted) setRuntime(snapshot)
+        }
+      } catch {
+        if (!controller.signal.aborted) setRuntime(null)
+      } finally {
+        if (!controller.signal.aborted) timer = window.setTimeout(refresh, 2000)
+      }
+    }
+    void refresh()
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+      setRuntime(null)
+    }
+  }, [hasActiveTasks])
 
   const visibleTasks = useMemo(() => {
     const filtered = tasks.filter((task) => getTaskTab(normalizeStatus(task.status)) === activeTab)
@@ -814,7 +854,7 @@ const TasksPage = () => {
                                     <TableCell className="font-mono text-xs">{task.id}</TableCell>
                                     <TableCell>
                                         <TaskStatusBadge status={normalizedStatus} />
-                                        <TaskStatusDetail task={task} status={normalizedStatus} onViewFailure={onViewFailure} />
+                                        <TaskStatusDetail task={task} status={normalizedStatus} runtime={runtime} onViewFailure={onViewFailure} />
                                     </TableCell>
                                     <TableCell>
                                         <div className="font-medium truncate max-w-full" title={task.displayName || '--'}>
@@ -1099,7 +1139,7 @@ const TasksPage = () => {
                                 {task.displayName || '--'}
                               </span>
                             </div>
-                            <TaskStatusDetail task={task} status={normalizedStatus} onViewFailure={onViewFailure} />
+                            <TaskStatusDetail task={task} status={normalizedStatus} runtime={runtime} onViewFailure={onViewFailure} />
                             <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
                               <span className="truncate">{task.channelId} - {task.channelName}</span>
                               {channel && <ChannelProtocolBadge url={channel.url} />}

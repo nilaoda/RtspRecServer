@@ -67,6 +67,13 @@ export type RecordingTaskDto = {
   timerId?: number
 }
 
+export type TaskWaitReason = 'scheduled' | 'catchup' | 'sourceLimit' | 'writerLimit' | 'dispatch'
+
+export type RecordingTaskRuntimeSnapshot = {
+  pendingReasons: Record<number, TaskWaitReason>
+  sharedTaskCounts: Record<number, number>
+}
+
 // 定时录制规则：按频道 + 每周几 + 每日时间窗口自动生成录制任务
 export type RecordingTimer = {
   id: number

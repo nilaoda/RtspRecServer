@@ -31,7 +31,7 @@ public class SharedLiveRecordingServiceTests
         try
         {
             var service = CreateService();
-            var task = new RecordingTask { ChannelId = 1, Url = $"{app.Urls.Single()}/rtp/source", IsLive = true };
+            var task = new RecordingTask { Id = 1, ChannelId = 1, Url = $"{app.Urls.Single()}/rtp/source", IsLive = true };
             var key = LiveRecordingSourceKey.FromTask(task)!.Value;
             var beforeOverlap = CreatePayload(1);
             var overlap = CreatePayload(2);
@@ -42,11 +42,14 @@ public class SharedLiveRecordingServiceTests
             await firstOutput.WaitForBytesAsync(beforeOverlap.Length, deadline.Token);
 
             // 用不同频道 ID 验证共享依据是源地址。HTTP 分块停在 TS 包中间时也能正确拼回整包。
-            var second = service.RecordAsync(task with { ChannelId = 2 }, key, string.Empty, _ => { }, secondStop.Token, secondOutput);
+            var second = service.RecordAsync(task with { Id = 2, ChannelId = 2 }, key, string.Empty, _ => { }, secondStop.Token, secondOutput);
             Assert.True(input.Writer.TryWrite(overlap[..211]));
             await secondOutput.WaitForBytesAsync(TsPacketBuilder.PacketSize, deadline.Token);
             Assert.True(input.Writer.TryWrite(overlap[211..]));
             await secondOutput.WaitForBytesAsync(overlap.Length, deadline.Token);
+            var sharedCounts = service.GetSharedTaskCounts();
+            Assert.Equal(2, sharedCounts[1]);
+            Assert.Equal(2, sharedCounts[2]);
 
             firstStop.Cancel();
             var firstResult = await first.WaitAsync(deadline.Token);
@@ -54,6 +57,7 @@ public class SharedLiveRecordingServiceTests
             Assert.Equal((byte[])[.. beforeOverlap, .. overlap], firstOutput.ToArray());
             Assert.Null(firstResult.ErrorMessage);
             Assert.False(upstreamClosed.Task.IsCompleted);
+            Assert.Empty(service.GetSharedTaskCounts());
 
             Assert.True(input.Writer.TryWrite(afterOverlap));
             await secondOutput.WaitForBytesAsync(overlap.Length + afterOverlap.Length, deadline.Token);

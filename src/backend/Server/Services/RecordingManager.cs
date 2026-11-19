@@ -470,7 +470,7 @@ public sealed class RecordingManager
             }
 
             var sourceKey = LiveRecordingSourceKey.FromTask(currentTask);
-            if (!HasRecordingCapacity(config, sourceKey))
+            if (GetCapacityWaitReason(config, sourceKey) is not null)
             {
                 return false;
             }
@@ -706,18 +706,42 @@ public sealed class RecordingManager
         return _activeSessions.ContainsKey(id);
     }
 
+    internal Dictionary<long, string> GetPendingTaskReasons(DateTimeOffset now)
+    {
+        var config = _configurationService.GetAppConfig();
+        lock (_taskTransitionLock)
+        {
+            return _taskStore.GetAll().Where(task => task.Status == RecordingStatus.Pending).ToDictionary(
+                task => task.Id,
+                task => GetTimeWaitReason(task, now) ?? GetCapacityWaitReason(config, LiveRecordingSourceKey.FromTask(task)) ?? "dispatch");
+        }
+    }
+
+    internal static string? GetTimeWaitReason(RecordingTask task, DateTimeOffset now)
+    {
+        if (now < task.StartTime)
+        {
+            return "scheduled";
+        }
+
+        // 近实时回放从节目开始后一分钟起录，给回放片段留出生成时间。
+        return !task.IsLive && task.StartTime >= task.CreatedAt.AddMinutes(-1) && now < task.StartTime.AddMinutes(1)
+            ? "catchup"
+            : null;
+    }
+
     // 与任务启动一起判断，避免同时到期的任务抢占同一个收流或写盘名额。
-    private bool HasRecordingCapacity(AppConfig config, LiveRecordingSourceKey? sourceKey)
+    private string? GetCapacityWaitReason(AppConfig config, LiveRecordingSourceKey? sourceKey)
     {
         var writerLimit = config.MaxRecordingWriters > 0 ? config.MaxRecordingWriters : Math.Max(2, config.MaxRecordingTasks);
         if (_activeSessions.Count >= writerLimit)
         {
-            return false;
+            return "writerLimit";
         }
 
         if (_activeSessions.Count < config.MaxRecordingTasks)
         {
-            return true;
+            return null;
         }
 
         var sharedSources = new HashSet<LiveRecordingSourceKey>();
@@ -728,7 +752,7 @@ public sealed class RecordingManager
             {
                 if (activeSource == sourceKey)
                 {
-                    return true;
+                    return null;
                 }
                 sharedSources.Add(activeSource);
             }
@@ -739,7 +763,7 @@ public sealed class RecordingManager
             }
         }
 
-        return sharedSources.Count + exclusiveSources < config.MaxRecordingTasks;
+        return sharedSources.Count + exclusiveSources < config.MaxRecordingTasks ? null : "sourceLimit";
     }
 
     public IReadOnlySet<string> GetActiveOutputPaths()
@@ -822,7 +846,8 @@ public sealed class RecordingManager
             StartedAt = task.StartedAt,
             FinishedAt = task.FinishedAt,
             PcrElapsedSeconds = task.PcrElapsedSeconds,
-            TsCheck = task.TsCheck
+            TsCheck = task.TsCheck,
+            TimerId = task.TimerId
         };
     }
 

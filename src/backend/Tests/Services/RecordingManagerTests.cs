@@ -269,8 +269,12 @@ public class RecordingManagerTests : IDisposable
         {
             Assert.True(await manager.TryStartTaskAsync(first, CancellationToken.None));
             Assert.False(await manager.TryStartTaskAsync(otherInterface, CancellationToken.None));
+            var reasons = manager.GetPendingTaskReasons(now);
+            Assert.Equal("sourceLimit", reasons[otherInterface.Id]);
+            Assert.Equal("dispatch", reasons[equivalent.Id]);
             Assert.True(await manager.TryStartTaskAsync(equivalent, CancellationToken.None));
             Assert.False(await manager.TryStartTaskAsync(third, CancellationToken.None));
+            Assert.Equal("writerLimit", manager.GetPendingTaskReasons(now)[third.Id]);
             Assert.Equal(2, manager.ActiveCount);
 
             Assert.True(await manager.StopTaskAsync(first.Id, CancellationToken.None));

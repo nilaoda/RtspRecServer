@@ -13,6 +13,7 @@ import type {
   RecordingFileInfo,
   RecordingFileDeleteResult,
   RecordingTaskDto,
+  RecordingTaskRuntimeSnapshot,
   RecordingTimer,
   SystemStatus,
   TaskErrorLogSnapshot,
@@ -100,6 +101,9 @@ const fetchJson = async <T>(url: string, options?: FetchOptions) => {
 export const getSystemStatus = () => fetchJson<SystemStatus>('/api/system/status', { silent: true })
 
 export const getTasks = () => fetchJson<RecordingTaskDto[]>('/api/tasks', { silent: true })
+
+export const getTaskRuntime = (signal: AbortSignal) =>
+  fetchJson<RecordingTaskRuntimeSnapshot>('/api/tasks/runtime', { silent: true, cache: 'no-store', signal })
 
 export const getTaskErrorLog = () => fetchJson<TaskErrorLogSnapshot>('/api/task-errors', { silent: true })
 
