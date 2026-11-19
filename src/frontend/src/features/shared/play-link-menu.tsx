@@ -4,6 +4,7 @@ import { Copy, ExternalLink, ListVideo, Play, Settings2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
+import { downloadM3u, toAbsolutePlaybackUrl } from './m3u-download'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -116,8 +117,6 @@ const readCustomTemplate = () => {
   }
 }
 
-const toAbsoluteUrl = (path: string) => new URL(path, window.location.origin).href
-
 const openScheme = (schemeUrl: string) => {
   const anchor = document.createElement('a')
   anchor.href = schemeUrl
@@ -131,28 +130,6 @@ const applyTemplate = (template: string, absoluteUrl: string) =>
   template
     .replaceAll('{url}', encodeURIComponent(absoluteUrl))
     .replaceAll('{rawUrl}', absoluteUrl)
-
-const buildM3uFileName = (name: string) => {
-  const base = name
-    .replace(/\.ts$/i, '')
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .trim()
-  return `${base || 'play'}.m3u`
-}
-
-const downloadM3u = (absoluteUrl: string, name: string) => {
-  const displayName = name.replace(/[\r\n]+/g, ' ').trim() || name
-  const content = `#EXTM3U\n#EXTINF:-1,${displayName}\n${absoluteUrl}\n`
-  const blob = new Blob([content], { type: 'audio/x-mpegurl' })
-  const objectUrl = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = objectUrl
-  anchor.download = buildM3uFileName(name)
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
-}
 
 export default function PlayLinkMenu({
   path,
@@ -189,7 +166,7 @@ export default function PlayLinkMenu({
   }
 
   const openPlayer = (player: PlayerDefinition) => {
-    const scheme = player.buildScheme(toAbsoluteUrl(path))
+    const scheme = player.buildScheme(toAbsolutePlaybackUrl(path))
     if (!scheme) {
       return
     }
@@ -198,7 +175,7 @@ export default function PlayLinkMenu({
   }
 
   const handleCopy = async () => {
-    const url = toAbsoluteUrl(path)
+    const url = toAbsolutePlaybackUrl(path)
     const ok = await copy(url)
     if (ok) {
       toast.success('播放链接已复制')
@@ -223,12 +200,12 @@ export default function PlayLinkMenu({
   }
 
   const handleM3u = () => {
-    downloadM3u(toAbsoluteUrl(path), name)
+    downloadM3u(name, [{ name, url: toAbsolutePlaybackUrl(path) }])
     toast.success('已生成 .m3u 播放列表')
   }
 
   const handleOpenCustom = () => {
-    openScheme(applyTemplate(customTemplate, toAbsoluteUrl(path)))
+    openScheme(applyTemplate(customTemplate, toAbsolutePlaybackUrl(path)))
   }
 
   const openCustomDialog = () => {

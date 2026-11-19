@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Activity, AlertCircle, CheckCircle2, CircleDot, FileUp, FlaskConical, Info, Loader2, Plus, Save, Settings2, Square, Tags, Trash2 } from 'lucide-react'
+import { Activity, AlertCircle, CheckCircle2, CircleDot, FileDown, FileUp, FlaskConical, Info, Loader2, Plus, Save, Settings2, Square, Tags, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -12,6 +12,7 @@ import type { ChannelBulkEditItem, ChannelConfig, ChannelProbeResult } from '../
 import { formatDateTime } from '../shared/format'
 import { formatProbeBitrate } from '../shared/channel-probe'
 import PlayLinkMenu from '../shared/play-link-menu'
+import { downloadM3u, toAbsolutePlaybackUrl } from '../shared/m3u-download'
 import { getRecordingSourceMode } from '../shared/recording-source'
 import TaskFormDialog from '../tasks/TaskFormDialog'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
@@ -80,6 +81,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 const PROBE_CONCURRENCY_KEY = 'rtsp_probe_concurrency'
 const PROBE_RETRIES_KEY = 'rtsp_probe_retries'
@@ -113,6 +115,26 @@ type ChannelDraft = { name: string; url: string; group: string }
 const hasChannelChanges = (channel: ChannelConfig, draft?: ChannelDraft) => !!draft && (
   draft.name !== channel.name || draft.url !== channel.url || draft.group !== (channel.group ?? '')
 )
+
+const canPlayChannel = (channel: ChannelConfig) => /^(rtsp|rtp|udp|https?):\/\//i.test(channel.url.trim())
+const channelPlayPath = (id: number) => `/api/channels/${id}/play.ts`
+
+const exportChannels = (channels: readonly ChannelConfig[], fileName: string) => {
+  const entries = new Map<number, { name: string; group?: string | null; url: string }>()
+  for (const channel of channels) {
+    if (!canPlayChannel(channel) || entries.has(channel.id)) continue
+    entries.set(channel.id, { name: channel.name, group: channel.group, url: toAbsolutePlaybackUrl(channelPlayPath(channel.id)) })
+  }
+
+  if (entries.size === 0) {
+    toast.error('没有支持转发播放的频道可导出')
+    return
+  }
+
+  downloadM3u(fileName, [...entries.values()])
+  const omitted = channels.length - entries.size
+  toast.success(`已导出 ${entries.size} 个频道${omitted > 0 ? `，跳过 ${omitted} 个不可导出的条目` : ''}`)
+}
 
 const trackLabels = (tracks: ChannelProbeResult['videoTracks']) => {
   const labels = tracks.map((track) => track.label).filter(Boolean)
@@ -655,6 +677,25 @@ const ChannelsPage = () => {
                         导入 M3U
                     </Link>
                 </Button>
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="outline" disabled={channels.length === 0}>
+                            <FileDown className="mr-2 h-4 w-4" />
+                            导出 M3U
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={() => exportChannels(channels, '全部频道')}>全部频道</DropdownMenuItem>
+                        {(groupFilter !== ALL_GROUPS || channelSearch.trim()) && (
+                            <DropdownMenuItem disabled={filteredChannels.length === 0} onSelect={() => exportChannels(filteredChannels, '筛选频道')}>
+                                当前筛选
+                            </DropdownMenuItem>
+                        )}
+                        {selectedCount > 0 && (
+                            <DropdownMenuItem onSelect={() => exportChannels(selectedChannels, '选中频道')}>选中频道</DropdownMenuItem>
+                        )}
+                    </DropdownMenuContent>
+                </DropdownMenu>
                 <Select value={groupFilter} onValueChange={onGroupFilterChange}>
                     <SelectTrigger className="h-8 w-[140px] text-xs" aria-label="按分组筛选">
                         <SelectValue />
@@ -1090,9 +1131,9 @@ const ChannelsPage = () => {
                                                         <CircleDot className="h-4 w-4" />
                                                     </Button>
                                                 )}
-                                                {/^(rtsp|rtp|udp|https?):\/\//i.test(channel.url.trim()) && (
+                                                {canPlayChannel(channel) && (
                                                     <PlayLinkMenu
-                                                        path={`/api/channels/${channel.id}/play.ts`}
+                                                        path={channelPlayPath(channel.id)}
                                                         name={channel.name}
                                                         disabled={hasChanged}
                                                     />
