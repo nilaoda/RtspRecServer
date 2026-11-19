@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -423,7 +422,7 @@ internal sealed class UdpEndpointReceiver : IDisposable
 internal sealed class UdpReceiveHub
 {
     private readonly object _sync = new();
-    private readonly ConcurrentDictionary<UdpReceiverKey, UdpEndpointReceiver> _receivers = new();
+    private readonly Dictionary<UdpReceiverKey, UdpEndpointReceiver> _receivers = [];
 
     public UdpSubscription Subscribe(
         IPAddress? groupAddress,
@@ -432,31 +431,30 @@ internal sealed class UdpReceiveHub
         int capacity = 8192)
     {
         var key = new UdpReceiverKey(localAddress ?? IPAddress.Any, port);
-        UdpEndpointReceiver receiver;
         lock (_sync)
         {
-            if (!_receivers.TryGetValue(key, out receiver!))
+            if (!_receivers.TryGetValue(key, out var receiver))
             {
                 receiver = new UdpEndpointReceiver(localAddress, port);
                 _receivers[key] = receiver;
             }
-        }
-
-        try
-        {
-            return receiver.Subscribe(
-                groupAddress,
-                capacity,
-                subscription => RemoveSubscription(key, receiver, subscription));
-        }
-        catch
-        {
-            if (receiver.IsEmpty)
+            try
             {
-                RemoveReceiverIfEmpty(key, receiver);
+                return receiver.Subscribe(
+                    groupAddress,
+                    capacity,
+                    subscription => RemoveSubscription(key, receiver, subscription));
             }
+            catch
+            {
+                if (receiver.IsEmpty)
+                {
+                    _receivers.Remove(key);
+                    receiver.Dispose();
+                }
 
-            throw;
+                throw;
+            }
         }
     }
 
@@ -465,32 +463,14 @@ internal sealed class UdpReceiveHub
         UdpEndpointReceiver receiver,
         UdpSubscription subscription)
     {
-        if (!receiver.Remove(subscription))
-        {
-            return;
-        }
-
         lock (_sync)
         {
-            if (_receivers.TryGetValue(key, out var current) && ReferenceEquals(current, receiver))
+            // 与订阅串行处理，避免关闭已经被新任务复用的 socket。
+            if (receiver.Remove(subscription))
             {
-                _receivers.TryRemove(key, out _);
+                _receivers.Remove(key);
+                receiver.Dispose();
             }
         }
-
-        receiver.Dispose();
-    }
-
-    private void RemoveReceiverIfEmpty(UdpReceiverKey key, UdpEndpointReceiver receiver)
-    {
-        lock (_sync)
-        {
-            if (_receivers.TryGetValue(key, out var current) && ReferenceEquals(current, receiver))
-            {
-                _receivers.TryRemove(key, out _);
-            }
-        }
-
-        receiver.Dispose();
     }
 }

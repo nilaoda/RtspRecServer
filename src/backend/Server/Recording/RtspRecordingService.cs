@@ -48,7 +48,7 @@ public sealed class RtspRecordingService : IRecordingService
             return new RecordingResult
             {
                 Success = false,
-                ErrorMessage = ex.Message,
+                ErrorMessage = ex is OperationCanceledException && cancellationToken.IsCancellationRequested ? null : ex.Message,
                 BytesWritten = recorder.BytesWritten,
                 OutputPath = outputPath,
                 TsCheck = recorder.CompleteTsCheck()
@@ -56,7 +56,7 @@ public sealed class RtspRecordingService : IRecordingService
         }
         finally
         {
-            recorder.Close();
+            await recorder.CloseAsync();
             recorder.DisposeTsCheck();
         }
     }
@@ -88,10 +88,10 @@ internal sealed class RtspStreamRecorder
     public async Task<RecordingResult> RunAsync(TimeSpan? targetDuration, Action<RecordingProgress> onProgress, CancellationToken cancellationToken)
     {
         _analysis = new TsLiveAnalysisSession(_displayName);
-        Connect();
+        await ConnectAsync(cancellationToken);
         var stream = _client!.GetStream();
-        stream.ReadTimeout = 300000;
-        stream.WriteTimeout = 300000;
+        // 握手和媒体共用读取缓冲，避免丢掉与 PLAY 响应同批到达的数据。
+        using var reader = new BufferedStream(new NetworkStream(_client.Client, ownsSocket: false));
         
         var startTime = DateTime.UtcNow;
         var packetCount = 0;
@@ -103,15 +103,11 @@ internal sealed class RtspStreamRecorder
         long? lastPcrTicks = null;
         var stoppedByPcr = false;
         
-        // 性能优化：批量写入和每秒进度上报
-        const int BatchSize = 64 * 1024; // 64KB批处理
-        var batchBuffer = ArrayPool<byte>.Shared.Rent(BatchSize);
-        var batchOffset = 0;
         var lastProgressTime = DateTime.UtcNow; // 记录上次进度上报时间
 
         var describe = RtspMessage.BuildDescribe(_url, _seq++);
         await SendAsync(stream, describe, cancellationToken);
-        var resp = ReceiveHead(stream);
+        var resp = await ReceiveHeadAsync(reader, cancellationToken);
 
         if (Regex.IsMatch(resp, "Location: (.*)"))
         {
@@ -122,7 +118,18 @@ internal sealed class RtspStreamRecorder
             _seq = 2;
             _analysis?.Dispose();
             _analysis = null;
-            return await new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName, _output).RunAsync(targetDuration, onProgress, cancellationToken);
+            var redirected = new RtspStreamRecorder(newUrl, _outputPath, _recordingTransport, _displayName, _output);
+            try
+            {
+                return await redirected.RunAsync(targetDuration, onProgress, cancellationToken);
+            }
+            finally
+            {
+                BytesWritten = redirected.BytesWritten;
+                _analysis = redirected._analysis;
+                redirected._analysis = null;
+                await redirected.CloseAsync();
+            }
         }
 
         if (!resp.Contains("200 OK"))
@@ -134,7 +141,7 @@ internal sealed class RtspStreamRecorder
 
         var setup = RtspMessage.BuildSetup(_url, _seq++, _recordingTransport);
         await SendAsync(stream, setup, cancellationToken);
-        var setupResp = ReceiveHead(stream);
+        var setupResp = await ReceiveHeadAsync(reader, cancellationToken);
 
         if (!setupResp.Contains("200 OK"))
         {
@@ -145,7 +152,7 @@ internal sealed class RtspStreamRecorder
 
         var play = RtspMessage.BuildPlay(_url, _seq++);
         await SendAsync(stream, play, cancellationToken);
-        var playResp = ReceiveHead(stream);
+        var playResp = await ReceiveHeadAsync(reader, cancellationToken);
 
         if (!playResp.Contains("200 OK"))
         {
@@ -153,8 +160,6 @@ internal sealed class RtspStreamRecorder
             Log.Error("RTSP PLAY失败。状态行: {StatusLine}, URL: {Url}, 响应内容: {Response}", statusLine, _url, playResp);
             throw new InvalidOperationException($"RTSP PLAY失败 ({statusLine})，服务器拒绝播放请求");
         }
-        _ = ReceiveHead(stream);
-
         if (_output is null)
         {
             EnsureOutputPath(_outputPath);
@@ -165,20 +170,36 @@ internal sealed class RtspStreamRecorder
         await using var buffered = ownedFile is null ? null : new BufferedStream(ownedFile, 64 * 1024);
         var sink = _output ?? buffered!;
 
+        const int BatchSize = 64 * 1024;
+        using var batch = MemoryPool<byte>.Shared.Rent(BatchSize);
+        var batchBuffer = batch.Memory;
+        var batchOffset = 0;
         var header = new byte[4];
         while (!cancellationToken.IsCancellationRequested)
         {
-            if (!await TryReadExactlyAsync(stream, header, cancellationToken))
+            if (await reader.ReadAsync(header.AsMemory(0, 1), cancellationToken) == 0)
             {
                 Log.Warning("RTSP录制：读取头数据失败，录制停止。已录制 {BytesWritten} 字节，耗时 {Duration} 秒", 
                     BytesWritten, (DateTime.UtcNow - startTime).TotalSeconds);
                 break;
             }
 
+            if (header[0] == 'R')
+            {
+                // 部分 IPTV 源在 PLAY 后还会发送一段 RTSP 响应。
+                await ReceiveHeadAsync(reader, cancellationToken, header[0]);
+                continue;
+            }
+
             if (header[0] != 0x24)
             {
                 errorCount++;
                 continue;
+            }
+
+            if (!await TryReadExactlyAsync(reader, header.AsMemory(1), cancellationToken))
+            {
+                break;
             }
 
             var length = (header[2] << 8) | header[3];
@@ -191,7 +212,7 @@ internal sealed class RtspStreamRecorder
             var payload = ArrayPool<byte>.Shared.Rent(length);
             try
             {
-                if (!await TryReadExactlyAsync(stream, payload.AsMemory(0, length), cancellationToken))
+                if (!await TryReadExactlyAsync(reader, payload.AsMemory(0, length), cancellationToken))
                 {
                     Log.Warning("RTSP录制：读取负载数据失败，录制停止。已录制 {BytesWritten} 字节，耗时 {Duration} 秒", 
                         BytesWritten, (DateTime.UtcNow - startTime).TotalSeconds);
@@ -211,7 +232,7 @@ internal sealed class RtspStreamRecorder
                     {
                         if (batchOffset > 0)
                         {
-                            await sink.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                            await sink.WriteAsync(batchBuffer[..batchOffset], cancellationToken);
                             batchOffset = 0;
                         }
                         await sink.WriteAsync(payloadMemory.Slice(dataOffset, dataLength), cancellationToken);
@@ -222,11 +243,11 @@ internal sealed class RtspStreamRecorder
                     {
                         if (batchOffset + dataLength > BatchSize)
                         {
-                            await sink.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+                            await sink.WriteAsync(batchBuffer[..batchOffset], cancellationToken);
                             batchOffset = 0;
                         }
 
-                        payloadMemory.Span.Slice(dataOffset, dataLength).CopyTo(batchBuffer.AsSpan(batchOffset));
+                        payloadMemory.Span.Slice(dataOffset, dataLength).CopyTo(batchBuffer.Span[batchOffset..]);
                         batchOffset += dataLength;
                         BytesWritten += dataLength;
                         _analysis?.Append(payloadMemory.Span.Slice(dataOffset, dataLength));
@@ -266,9 +287,8 @@ internal sealed class RtspStreamRecorder
         // 写入剩余数据
         if (batchOffset > 0)
         {
-            await sink.WriteAsync(batchBuffer.AsMemory(0, batchOffset), cancellationToken);
+            await sink.WriteAsync(batchBuffer[..batchOffset], cancellationToken);
         }
-        ArrayPool<byte>.Shared.Return(batchBuffer);
         
         await sink.FlushAsync(cancellationToken);
         
@@ -315,40 +335,39 @@ internal sealed class RtspStreamRecorder
         _analysis = null;
     }
 
-    public void Close()
+    public async Task CloseAsync()
     {
-        if (_client != null && _client.Connected)
+        using var client = _client;
+        _client = null;
+        if (client?.Connected == true)
         {
             try
             {
-                var stream = _client.GetStream();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                 var teardown = RtspMessage.BuildTeardown(_url, _seq);
-                stream.Write(Encoding.UTF8.GetBytes(teardown));
+                await SendAsync(client.GetStream(), teardown, timeout.Token);
             }
             catch
             {
             }
-            finally
-            {
-                _client.Close();
-            }
         }
     }
 
-    private void Connect()
+    private async Task ConnectAsync(CancellationToken cancellationToken)
     {
+        var uri = new Uri(_url);
+        _client = new TcpClient();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
         try
         {
-            var uri = new Uri(_url);
-            _client = new TcpClient();
-            // 设置连接超时
-            var connectTask = _client.ConnectAsync(uri.Host, uri.Port > 0 ? uri.Port : 554);
-            if (!connectTask.Wait(10000)) // 10秒超时
-            {
-                throw new TimeoutException($"连接到 RTSP 服务器 {uri.Host} 超时 (10s)");
-            }
+            await _client.ConnectAsync(uri.Host, uri.Port > 0 ? uri.Port : 554, timeout.Token);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"连接到 RTSP 服务器 {uri.Host} 超时 (10s)");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Error(ex, "连接 RTSP 服务器失败: {Url}", _url);
             throw new InvalidOperationException($"无法连接到 RTSP 服务器: {ex.Message}", ex);
@@ -361,27 +380,54 @@ internal sealed class RtspStreamRecorder
         await stream.WriteAsync(data, cancellationToken);
     }
 
-    private static string ReceiveHead(Stream stream)
+    private static async Task<string> ReceiveHeadAsync(Stream stream, CancellationToken cancellationToken, byte? firstByte = null)
     {
-        var builder = new StringBuilder();
-        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
-        string? line;
-        while ((line = reader.ReadLine()) != null && line.Length > 0)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(5));
+        const int MaxHeaderBytes = 64 * 1024;
+        const int MaxBodyBytes = 1024 * 1024;
+        using var header = new MemoryStream();
+        if (firstByte.HasValue)
         {
-            builder.AppendLine(line);
+            header.WriteByte(firstByte.Value);
         }
 
-        var contentMatch = Regex.Match(builder.ToString(), "Content-Length: (.*)");
-        if (contentMatch.Success)
+        var next = new byte[1];
+        var lineHasContent = firstByte.HasValue;
+        while (header.Length < MaxHeaderBytes)
         {
-            var size = Convert.ToInt32(contentMatch.Groups[1].Value);
-            var buffer = new char[size];
-            reader.ReadBlock(buffer, 0, size);
-            builder.AppendLine();
-            builder.Append(buffer);
+            await stream.ReadExactlyAsync(next.AsMemory(), timeout.Token);
+            header.WriteByte(next[0]);
+            if (next[0] == '\n')
+            {
+                if (!lineHasContent)
+                {
+                    var response = Encoding.UTF8.GetString(header.GetBuffer(), 0, (int)header.Length);
+                    var match = Regex.Match(response, @"^Content-Length:[ \t]*(\d+)", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+                    if (!match.Success)
+                    {
+                        return response;
+                    }
+
+                    if (!int.TryParse(match.Groups[1].Value, out var bodyLength) || bodyLength > MaxBodyBytes)
+                    {
+                        throw new InvalidDataException("RTSP 响应体长度无效");
+                    }
+
+                    var body = new byte[bodyLength];
+                    await stream.ReadExactlyAsync(body.AsMemory(), timeout.Token);
+                    return response + Encoding.UTF8.GetString(body);
+                }
+
+                lineHasContent = false;
+            }
+            else if (next[0] != '\r')
+            {
+                lineHasContent = true;
+            }
         }
 
-        return builder.ToString();
+        throw new InvalidDataException("RTSP 响应头超过最大长度");
     }
 
     private static void EnsureOutputPath(string outputPath)
@@ -391,23 +437,6 @@ internal sealed class RtspStreamRecorder
         {
             Directory.CreateDirectory(directory);
         }
-    }
-
-    private static async Task<bool> TryReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
-    {
-        var offset = 0;
-        while (offset < buffer.Length)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), cancellationToken);
-            if (read == 0)
-            {
-                return false;
-            }
-
-            offset += read;
-        }
-
-        return true;
     }
 
     private static async Task<bool> TryReadExactlyAsync(Stream stream, Memory<byte> buffer, CancellationToken cancellationToken)

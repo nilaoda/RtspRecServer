@@ -39,6 +39,35 @@ public sealed record ChannelProbeResult
     public int Attempts { get; init; } = 1;
 }
 
+public sealed record ChannelRecordingSimulationUpdate
+{
+    public Guid Id { get; init; }
+    public int ChannelId { get; init; }
+    public int DurationSeconds { get; init; }
+    public string Status { get; init; } = "running";
+    public double ElapsedSeconds { get; init; }
+    public long BytesReceived { get; init; }
+    public TsCheckSummary? TsCheck { get; init; }
+    public string? ErrorMessage { get; init; }
+}
+
+public sealed record ChannelProbeScan
+{
+    public Guid Id { get; init; }
+    public int Total { get; init; }
+    public int Done { get; init; }
+    public bool Stopping { get; init; }
+    public int[] ActiveChannelIds { get; init; } = [];
+}
+
+public sealed record ChannelDiagnosticsSnapshot
+{
+    public ChannelProbeScan? Scan { get; init; }
+    public string ProbeRevision { get; init; } = string.Empty;
+    public List<ChannelProbeResult>? Probes { get; init; }
+    public List<ChannelRecordingSimulationUpdate> Simulations { get; init; } = [];
+}
+
 /// <summary>最近一次成功检测的档案，用于重启后仍能识别频道编码。</summary>
 public sealed record ChannelProbeProfile
 {

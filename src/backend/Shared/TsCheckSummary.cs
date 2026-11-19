@@ -11,6 +11,7 @@ public sealed record TsCheckSummary
     public string Verdict { get; init; } = "unknown";
     public int ErrorCount { get; init; }
     public int WarningCount { get; init; }
+    public long? ContinuityErrors { get; init; }
     public long PacketCount { get; init; }
     public long BytesScanned { get; init; }
     public double BitrateKbps { get; init; }

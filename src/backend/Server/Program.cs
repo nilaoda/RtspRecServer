@@ -62,6 +62,7 @@ try
     builder.Services.AddSingleton<RecordingManager>();
     builder.Services.AddSingleton<TaskErrorLogService>();
     builder.Services.AddSingleton<ChannelProbeService>();
+    builder.Services.AddSingleton<ChannelRecordingSimulation>();
     builder.Services.AddSingleton<RecordingTimerStore>();
     builder.Services.AddSingleton<RecordingTimerService>();
     builder.Services.AddHostedService<RecordingBackgroundService>();
@@ -186,6 +187,9 @@ try
         return Results.Ok(ApiResponse.Create("已清空任务错误日志"));
     });
 
+    // 频道写入和诊断状态变更必须一起完成，避免失效操作取消新地址启动的任务。
+    var channelOperations = new object();
+
     app.MapGet("/api/channels", (ConfigurationService service) =>
     {
         return Results.Ok(service.GetChannels());
@@ -193,29 +197,38 @@ try
 
     app.MapPost("/api/channels", (ConfigurationService service, ChannelConfig channel) =>
     {
-        return Results.Ok(service.AddChannel(channel));
+        lock (channelOperations)
+        {
+            return Results.Ok(service.AddChannel(channel));
+        }
     });
 
     app.MapPost("/api/channels/import", (ConfigurationService service, ChannelImportRequest request) =>
     {
-        try
+        lock (channelOperations)
         {
-            var result = service.AddChannels(request.Channels);
-            return Results.Ok(result);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Results.BadRequest(ApiResponse.Create(ex.Message));
-        }
-        catch (Exception ex)
-        {
-            return Results.Problem(ex.Message);
+            try
+            {
+                var result = service.AddChannels(request.Channels);
+                return Results.Ok(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(ApiResponse.Create(ex.Message));
+            }
+            catch (Exception ex)
+            {
+                return Results.Problem(ex.Message);
+            }
         }
     });
 
     app.MapGet("/api/channels/probes", (ChannelProbeService service) =>
     {
-        return Results.Ok(service.GetResults().ToList());
+        lock (channelOperations)
+        {
+            return Results.Ok(service.GetResults().ToList());
+        }
     });
 
     app.MapGet("/api/channels/profiles", (ChannelProbeService service) =>
@@ -228,89 +241,158 @@ try
         ChannelProbeRequest request,
         CancellationToken cancellationToken) =>
     {
-        var results = await service.ProbeAsync(
-            request.ChannelIds,
-            request.Concurrency,
-            request.Retries,
-            cancellationToken);
-        return Results.Ok(results.ToList());
+        Task<IReadOnlyList<ChannelProbeResult>>? scan;
+        lock (channelOperations)
+        {
+            scan = service.TryStartScan(request.ChannelIds, request.Concurrency, request.Retries, cancellationToken);
+        }
+
+        return scan is null
+            ? Results.Conflict(ApiResponse.Create("已有频道检测正在进行"))
+            : Results.Ok((await scan).ToList());
     });
+
+    app.MapGet("/api/channels/diagnostics", (
+        string? probeRevision,
+        ChannelProbeService probeService,
+        ChannelRecordingSimulation simulation,
+        HttpContext context) =>
+    {
+        lock (channelOperations)
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(probeService.GetSnapshot(probeRevision) with { Simulations = simulation.GetUpdates() });
+        }
+    });
+
+    app.MapPost("/api/channels/scan", (
+        ChannelProbeService service,
+        ChannelProbeRequest request,
+        IHostApplicationLifetime lifetime) =>
+    {
+        lock (channelOperations)
+        {
+            return service.TryStartScan(request.ChannelIds, request.Concurrency, request.Retries, lifetime.ApplicationStopping) is not null
+                ? Results.Accepted()
+                : Results.Conflict(ApiResponse.Create("已有频道检测正在进行"));
+        }
+    });
+
+    app.MapDelete("/api/channels/scan/{id:guid}", (ChannelProbeService service, Guid id) =>
+        service.StopScan(id)
+            ? Results.Accepted()
+            : Results.NotFound(ApiResponse.Create("该频道检测已结束")));
+
+    app.MapPost("/api/channels/{id:int}/simulate-recording", (
+        ChannelRecordingSimulation simulation, int id, int durationSeconds) =>
+    {
+        lock (channelOperations)
+        {
+            return simulation.Start(id, durationSeconds);
+        }
+    });
+
+    app.MapDelete("/api/channels/{id:int}/simulate-recording/{runId:guid}", (
+        ChannelRecordingSimulation simulation, int id, Guid runId) =>
+        simulation.Stop(id, runId)
+            ? Results.Accepted()
+            : Results.NotFound(ApiResponse.Create("该模拟录制已结束")));
 
     app.MapPut("/api/channels/{id:int}", (
         ConfigurationService service,
         ChannelProbeService probeService,
+        ChannelRecordingSimulation simulation,
         int id,
         ChannelConfig channel) =>
     {
-        var existing = service.GetChannels().FirstOrDefault(item => item.Id == id);
-        var updated = service.UpdateChannel(id, channel);
-        if (updated is null)
+        lock (channelOperations)
         {
-            return Results.NotFound(ApiResponse.Create("频道不存在"));
-        }
+            var existing = service.GetChannels().FirstOrDefault(item => item.Id == id);
+            var updated = service.UpdateChannel(id, channel);
+            if (updated is null)
+            {
+                return Results.NotFound(ApiResponse.Create("频道不存在"));
+            }
 
-        if (existing is null || existing.Url != updated.Url)
-        {
-            probeService.InvalidateChannel(id);
+            if (existing is null || existing.Url != updated.Url)
+            {
+                probeService.InvalidateChannel(id);
+                simulation.InvalidateChannels([id]);
+            }
+            return Results.Ok(updated);
         }
-        return Results.Ok(updated);
     });
 
     app.MapDelete("/api/channels/{id:int}", (
         ConfigurationService service,
         ChannelProbeService probeService,
+        ChannelRecordingSimulation simulation,
         int id) =>
     {
-        if (!service.DeleteChannel(id))
+        lock (channelOperations)
         {
-            return Results.NotFound(ApiResponse.Create("频道不存在"));
-        }
+            if (!service.DeleteChannel(id))
+            {
+                return Results.NotFound(ApiResponse.Create("频道不存在"));
+            }
 
-        probeService.InvalidateChannel(id);
-        return Results.Ok(ApiResponse.Create("频道已删除"));
+            probeService.InvalidateChannel(id);
+            simulation.InvalidateChannels([id]);
+            return Results.Ok(ApiResponse.Create("频道已删除"));
+        }
     });
 
     app.MapPost("/api/channels/bulk-delete", (
         ConfigurationService service,
         ChannelProbeService probeService,
+        ChannelRecordingSimulation simulation,
         ChannelBulkRequest request) =>
     {
-        var result = service.DeleteChannels(request.ChannelIds);
-        if (result.SucceededIds.Length > 0)
+        lock (channelOperations)
         {
-            probeService.InvalidateChannels(result.SucceededIds);
+            var result = service.DeleteChannels(request.ChannelIds);
+            if (result.SucceededIds.Length > 0)
+            {
+                probeService.InvalidateChannels(result.SucceededIds);
+                simulation.InvalidateChannels(result.SucceededIds);
+            }
+            return Results.Ok(result);
         }
-        return Results.Ok(result);
     });
 
     app.MapPost("/api/channels/bulk-edit", (
         ConfigurationService service,
         ChannelProbeService probeService,
+        ChannelRecordingSimulation simulation,
         ChannelBulkEditRequest request) =>
     {
-        try
+        lock (channelOperations)
         {
-            var before = service.GetChannels().ToDictionary(channel => channel.Id);
-            var result = service.BulkUpdateChannels(request.Channels);
-            if (result.SucceededIds.Length > 0)
+            try
             {
-                var after = service.GetChannels().ToDictionary(channel => channel.Id);
-                var urlChangedIds = result.SucceededIds
-                    .Where(id =>
-                        before.TryGetValue(id, out var oldChannel)
-                        && after.TryGetValue(id, out var updatedChannel)
-                        && oldChannel.Url != updatedChannel.Url)
-                    .ToArray();
-                if (urlChangedIds.Length > 0)
+                var before = service.GetChannels().ToDictionary(channel => channel.Id);
+                var result = service.BulkUpdateChannels(request.Channels);
+                if (result.SucceededIds.Length > 0)
                 {
-                    probeService.InvalidateChannels(urlChangedIds);
+                    var after = service.GetChannels().ToDictionary(channel => channel.Id);
+                    var urlChangedIds = result.SucceededIds
+                        .Where(id =>
+                            before.TryGetValue(id, out var oldChannel)
+                            && after.TryGetValue(id, out var updatedChannel)
+                            && oldChannel.Url != updatedChannel.Url)
+                        .ToArray();
+                    if (urlChangedIds.Length > 0)
+                    {
+                        probeService.InvalidateChannels(urlChangedIds);
+                        simulation.InvalidateChannels(urlChangedIds);
+                    }
                 }
+                return Results.Ok(result);
             }
-            return Results.Ok(result);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Results.BadRequest(ApiResponse.Create(ex.Message));
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(ApiResponse.Create(ex.Message));
+            }
         }
     });
 

@@ -6,6 +6,7 @@ import type {
   ChannelBulkEditResult,
   ChannelBulkResult,
   ChannelConfig,
+  ChannelDiagnosticsSnapshot,
   ChannelProbeResult,
   LogFileContent,
   LogFileInfo,
@@ -182,24 +183,32 @@ export const addChannel = (payload: { name: string; url: string; group?: string 
     body: JSON.stringify(payload),
   })
 
-export const getChannelProbes = () => fetchJson<ChannelProbeResult[]>('/api/channels/probes', { silent: true })
-
 export const getChannelProfiles = () => fetchJson<ChannelProbeResult[]>('/api/channels/profiles', { silent: true })
 
-export const probeChannels = (
+export const getChannelDiagnostics = (probeRevision: string, signal: AbortSignal) =>
+  fetchJson<ChannelDiagnosticsSnapshot>(`/api/channels/diagnostics?probeRevision=${encodeURIComponent(probeRevision)}`, {
+    signal, cache: 'no-store', silent: true,
+  })
+
+export const startChannelRecordingSimulation = (channelId: number, durationSeconds: number) =>
+  fetchJson<void>(`/api/channels/${channelId}/simulate-recording?durationSeconds=${durationSeconds}`, { method: 'POST' })
+
+export const stopChannelRecordingSimulation = (channelId: number, runId: string) =>
+  fetchJson<void>(`/api/channels/${channelId}/simulate-recording/${runId}`, { method: 'DELETE' })
+
+export const startChannelScan = (
   channelIds: number[],
-  options?: { concurrency?: number; retries?: number; signal?: AbortSignal },
+  concurrency: number,
+  retries: number,
 ) =>
-  fetchJson<ChannelProbeResult[]>('/api/channels/probe', {
+  fetchJson<void>('/api/channels/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      channelIds,
-      concurrency: options?.concurrency,
-      retries: options?.retries,
-    }),
-    signal: options?.signal,
+    body: JSON.stringify({ channelIds, concurrency, retries }),
   })
+
+export const stopChannelScan = (scanId: string) =>
+  fetchJson<void>(`/api/channels/scan/${scanId}`, { method: 'DELETE' })
 
 export const importChannels = (channels: { name: string; url: string; group?: string | null }[]) =>
   fetchJson<{ addedCount: number; channels: ChannelConfig[] }>('/api/channels/import', {

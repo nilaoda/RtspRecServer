@@ -32,6 +32,7 @@ export type TsCheckSummary = {
   verdict: 'pass' | 'warning' | 'error' | 'incomplete' | 'unknown'
   errorCount: number
   warningCount: number
+  continuityErrors?: number | null
   packetCount: number
   bytesScanned: number
   bitrateKbps: number
@@ -121,6 +122,24 @@ export type ChannelProbeResult = {
   checkedAt: string
   elapsedSeconds: number
   attempts?: number
+}
+
+export type ChannelRecordingSimulationUpdate = {
+  id: string
+  channelId: number
+  durationSeconds: number
+  status: 'running' | 'stopping' | 'stopped' | 'completed' | 'failed'
+  elapsedSeconds: number
+  bytesReceived: number
+  tsCheck?: TsCheckSummary | null
+  errorMessage?: string | null
+}
+
+export type ChannelDiagnosticsSnapshot = {
+  scan?: { id: string; total: number; done: number; stopping: boolean; activeChannelIds: number[] } | null
+  probeRevision: string
+  probes?: ChannelProbeResult[] | null
+  simulations: ChannelRecordingSimulationUpdate[]
 }
 
 export type ChannelBulkResult = {

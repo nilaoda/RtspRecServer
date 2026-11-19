@@ -1,5 +1,5 @@
 import { formatBytes } from '../shared/format'
-import type { RecordingTaskDto, TsStreamTrack } from '../../types'
+import type { RecordingTaskDto, TsCheckSummary, TsStreamTrack } from '../../types'
 import { tsTrackText, tsVerdictClass, tsVerdictLabel } from './ts-display'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -48,6 +48,62 @@ function TrackList({ title, tracks, fallback }: { title: string; tracks?: TsStre
   )
 }
 
+export function TsCheckDetails({ tsCheck }: { tsCheck: TsCheckSummary }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Badge variant="outline" className={cn('text-xs', tsVerdictClass(tsCheck.verdict))}>
+          {tsVerdictLabel[tsCheck.verdict] ?? '未知'}
+        </Badge>
+        <span className="text-xs text-muted-foreground">
+          错误 {tsCheck.errorCount} · 警告 {tsCheck.warningCount}
+          {tsCheck.continuityErrors != null && <> · 连续计数缺口 {tsCheck.continuityErrors}</>}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Stat label="码率" value={`${tsCheck.bitrateKbps.toFixed(0)} kbps`} />
+        <Stat label="数据包" value={tsCheck.packetCount.toLocaleString()} />
+        <Stat label="扫描大小" value={formatBytes(tsCheck.bytesScanned)} />
+        <Stat label="PID 数" value={String(tsCheck.pidCount)} />
+      </div>
+
+      <Separator />
+
+      <div className="space-y-2">
+        <TrackList title="视频" tracks={tsCheck.videoTracks} fallback={tsCheck.video} />
+        <TrackList title="音频" tracks={tsCheck.audioTracks} fallback={tsCheck.audio} />
+      </div>
+
+      <Separator />
+
+      <div className="space-y-1.5">
+        <div className="text-xs text-muted-foreground">异常时刻（本地时间 / 相对开始，* 为估算时刻）</div>
+        {tsCheck.anomalyEvents && tsCheck.anomalyEvents.length > 0 ? (
+          <div className="max-h-40 overflow-y-auto rounded-md border bg-muted/30 p-2">
+            {tsCheck.anomalyEvents.map((event, index) => (
+              <div key={index} className="break-all font-mono text-[11px] leading-5">
+                {event}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground">无异常事件</div>
+        )}
+      </div>
+
+      {tsCheck.lastEvent && (
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">最近事件</div>
+          <div className="break-all rounded-md border bg-muted/30 p-2 font-mono text-[11px]">
+            {tsCheck.lastEvent}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function TsCheckDialog({
   task,
   onOpenChange,
@@ -76,56 +132,7 @@ export default function TsCheckDialog({
         </DialogHeader>
 
         {tsCheck ? (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className={cn('text-xs', tsVerdictClass(tsCheck.verdict))}>
-                {tsVerdictLabel[tsCheck.verdict] ?? '未知'}
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                错误 {tsCheck.errorCount} · 警告 {tsCheck.warningCount}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Stat label="码率" value={`${tsCheck.bitrateKbps.toFixed(0)} kbps`} />
-              <Stat label="数据包" value={tsCheck.packetCount.toLocaleString()} />
-              <Stat label="扫描大小" value={formatBytes(tsCheck.bytesScanned)} />
-              <Stat label="PID 数" value={String(tsCheck.pidCount)} />
-            </div>
-
-            <Separator />
-
-            <div className="space-y-2">
-              <TrackList title="视频" tracks={tsCheck.videoTracks} fallback={tsCheck.video} />
-              <TrackList title="音频" tracks={tsCheck.audioTracks} fallback={tsCheck.audio} />
-            </div>
-
-            <Separator />
-
-            <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">异常时刻（本地时间 / 相对开始，* 为估算时刻）</div>
-              {tsCheck.anomalyEvents && tsCheck.anomalyEvents.length > 0 ? (
-                <div className="max-h-40 overflow-y-auto rounded-md border bg-muted/30 p-2">
-                  {tsCheck.anomalyEvents.map((event, index) => (
-                    <div key={index} className="break-all font-mono text-[11px] leading-5">
-                      {event}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-muted-foreground">无异常事件</div>
-              )}
-            </div>
-
-            {tsCheck.lastEvent && (
-              <div className="space-y-1">
-                <div className="text-xs text-muted-foreground">最近事件</div>
-                <div className="break-all rounded-md border bg-muted/30 p-2 font-mono text-[11px]">
-                  {tsCheck.lastEvent}
-                </div>
-              </div>
-            )}
-          </div>
+          <TsCheckDetails tsCheck={tsCheck} />
         ) : (
           <div className="text-sm text-muted-foreground">
             {isRecording ? '正在等待检测数据…' : '暂无检测数据'}

@@ -316,6 +316,7 @@ public readonly record struct TsCheckProgress(
     TsCheckEvent? NewEvent,
     TsCheckTimelineBucket[] Timeline)
 {
+    public long ContinuityErrors { get; init; }
     public double Percent => FileSize > 0 ? BytesScanned * 100.0 / FileSize : 0;
 }
 

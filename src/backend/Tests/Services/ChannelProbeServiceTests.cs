@@ -8,6 +8,70 @@ namespace RtspRecServer.Tests.Services;
 public class ChannelProbeServiceTests
 {
     [Fact]
+    public async Task ScanDiscardsResultOfAnAddressThatChangedDuringRecording()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var configuration = new ConfigurationService(directory);
+            var channel = configuration.AddChannel(new ChannelConfig { Name = "Test", Url = "udp://239.1.1.1:1234" });
+            var recording = new WaitingRecordingService();
+            var service = CreateService(recording, configuration);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            var scan = service.ProbeAsync([channel.Id], 1, 0, deadline.Token);
+            await recording.Started.Task.WaitAsync(deadline.Token);
+            configuration.UpdateChannel(channel.Id, channel with { Url = "udp://239.1.1.2:1234" });
+            service.InvalidateChannel(channel.Id);
+            recording.Completion.SetResult(new RecordingResult
+            {
+                Success = true,
+                BytesWritten = 1880,
+                TsCheck = new TsCheckSummary { PacketCount = 10 }
+            });
+
+            Assert.Empty(await scan.WaitAsync(deadline.Token));
+            Assert.Empty(service.GetResults());
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task ActiveScanIsVisibleAndCanBeStoppedFromAnotherRequest()
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var configuration = new ConfigurationService(directory);
+            var channel = configuration.AddChannel(new ChannelConfig { Name = "Test", Url = "udp://239.1.1.1:1234" });
+            var recording = new WaitingRecordingService();
+            var service = CreateService(recording, configuration);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+            var scan = service.TryStartScan([channel.Id], 1, 0, deadline.Token);
+            Assert.NotNull(scan);
+            await recording.Started.Task.WaitAsync(deadline.Token);
+
+            var snapshot = service.GetSnapshot();
+            Assert.NotNull(snapshot.Scan);
+            Assert.Equal([channel.Id], snapshot.Scan.ActiveChannelIds);
+            Assert.Null(service.TryStartScan([channel.Id], 1, 0, deadline.Token));
+            Assert.False(service.StopScan(Guid.NewGuid()));
+            Assert.True(service.StopScan(snapshot.Scan.Id));
+
+            Assert.Empty(await scan.WaitAsync(deadline.Token));
+            Assert.Null(service.GetSnapshot().Scan);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public async Task ProbeAsync_RetriesUntilAccessible()
     {
         var directory = CreateTempDirectory();
@@ -261,6 +325,20 @@ public class ChannelProbeServiceTests
                     }
                     : null
             });
+        }
+    }
+
+    private sealed class WaitingRecordingService : IRecordingService
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<RecordingResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<RecordingResult> RecordAsync(
+            RecordingTask task, string outputPath, TimeSpan? targetDuration, string recordingTransport,
+            Action<RecordingProgress> onProgress, CancellationToken cancellationToken, Stream? output = null)
+        {
+            Started.SetResult();
+            return await Completion.Task.WaitAsync(cancellationToken);
         }
     }
 }

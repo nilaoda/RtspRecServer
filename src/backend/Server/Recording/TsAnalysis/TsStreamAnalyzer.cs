@@ -1526,6 +1526,7 @@ public sealed class TsStreamAnalyzer : IDisposable
         // PID 数量通常很少，每 100 ms 复制一次轻量快照可让摘要准确实时更新，且不暴露后台字典给 UI 线程。
         var pidSnapshot = new TsCheckPidProgress[_result.Pids.Count + (_globalErrorCount + _globalWarningCount > 0 ? 1 : 0)];
         var snapshotIndex = 0;
+        long continuityErrors = 0;
         if (_globalErrorCount + _globalWarningCount > 0)
         {
             pidSnapshot[snapshotIndex++] = new TsCheckPidProgress(
@@ -1534,6 +1535,7 @@ public sealed class TsStreamAnalyzer : IDisposable
         }
         foreach (var pid in _result.Pids.Values)
         {
+            continuityErrors += pid.ContinuityErrors;
             pidSnapshot[snapshotIndex++] = new TsCheckPidProgress(
                 pid.Pid, pid.PacketCount, pid.ErrorCount, pid.WarningCount, pid.ProgramNumber,
                 pid.StreamType, pid.MpegAudioLayer, pid.SupplementaryStreamType, pid.Language,
@@ -1542,7 +1544,7 @@ public sealed class TsStreamAnalyzer : IDisposable
         _progress.Report(new TsCheckProgress(
             bytesScanned, _sessionTotalBytes, _packetIndex, _errorCount, _warningCount,
             bytesScanned / Math.Max(0.001, _stopwatch.Elapsed.TotalSeconds), _stopwatch.Elapsed,
-            pidSnapshot, progressEvent, _result.Timeline.ToArray()));
+            pidSnapshot, progressEvent, _result.Timeline.ToArray()) { ContinuityErrors = continuityErrors });
     }
 
     private void CompleteResult(long bytesScanned, bool cancelled)

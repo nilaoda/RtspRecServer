@@ -167,6 +167,7 @@ internal static class TsCheckSummaryMapper
                         : "unknown",
             ErrorCount = progress.ErrorCount,
             WarningCount = progress.WarningCount,
+            ContinuityErrors = progress.ContinuityErrors,
             PacketCount = progress.PacketCount,
             BytesScanned = progress.BytesScanned,
             BitrateKbps = progress.BytesPerSecond * 8 / 1000,
@@ -214,6 +215,7 @@ internal static class TsCheckSummaryMapper
             },
             ErrorCount = result.TotalErrorCount,
             WarningCount = result.TotalWarningCount,
+            ContinuityErrors = result.Pids.Values.Sum(static pid => pid.ContinuityErrors),
             PacketCount = result.PacketCount,
             BytesScanned = result.BytesScanned,
             BitrateKbps = result.Elapsed.TotalSeconds > 0

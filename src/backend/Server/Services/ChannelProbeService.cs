@@ -23,6 +23,9 @@ public sealed class ChannelProbeService
     private readonly ConcurrentDictionary<int, ChannelProbeProfile> _profiles = new();
     private readonly object _profileWriteLock = new();
     private int _profilesDirty;
+    private readonly object _scanLock = new();
+    private ProbeScan? _scan;
+    private string _probeRevision = Guid.NewGuid().ToString("N");
 
     public ChannelProbeService(
         IRecordingService recordingService,
@@ -60,10 +63,17 @@ public sealed class ChannelProbeService
     public void InvalidateChannels(IEnumerable<int> channelIds)
     {
         var removed = false;
-        foreach (var channelId in channelIds)
+        lock (_scanLock)
         {
-            removed |= _profiles.TryRemove(channelId, out _);
-            _results.TryRemove(channelId, out _);
+            foreach (var channelId in channelIds)
+            {
+                _scan?.InvalidatedIds.Add(channelId);
+                removed |= _profiles.TryRemove(channelId, out _);
+                if (_results.TryRemove(channelId, out _))
+                {
+                    _probeRevision = Guid.NewGuid().ToString("N");
+                }
+            }
         }
 
         if (removed)
@@ -72,45 +82,145 @@ public sealed class ChannelProbeService
         }
     }
 
-    public async Task<IReadOnlyList<ChannelProbeResult>> ProbeAsync(
+    public ChannelDiagnosticsSnapshot GetSnapshot(string? probeRevision = null)
+    {
+        lock (_scanLock)
+        {
+            return new ChannelDiagnosticsSnapshot
+            {
+                Scan = _scan is { } scan ? new ChannelProbeScan
+                {
+                    Id = scan.Id,
+                    Total = scan.Total,
+                    Done = scan.Done,
+                    Stopping = scan.Cancellation.IsCancellationRequested,
+                    ActiveChannelIds = scan.ActiveIds.ToArray()
+                } : null,
+                ProbeRevision = _probeRevision,
+                Probes = probeRevision == _probeRevision ? null : GetResults().ToList()
+            };
+        }
+    }
+
+    public bool StopScan(Guid id)
+    {
+        lock (_scanLock)
+        {
+            if (_scan is not { } scan || scan.Id != id)
+            {
+                return false;
+            }
+
+            scan.Cancellation.Cancel();
+            return true;
+        }
+    }
+
+    public Task<IReadOnlyList<ChannelProbeResult>> ProbeAsync(
+        IReadOnlyCollection<int> channelIds,
+        int concurrency,
+        int retries,
+        CancellationToken cancellationToken) =>
+        TryStartScan(channelIds, concurrency, retries, cancellationToken)
+        ?? throw new InvalidOperationException("已有频道检测正在进行");
+
+    public Task<IReadOnlyList<ChannelProbeResult>>? TryStartScan(
         IReadOnlyCollection<int> channelIds,
         int concurrency,
         int retries,
         CancellationToken cancellationToken)
     {
-        var channels = _configurationService.GetChannels();
-        var requested = channelIds.Count == 0
-            ? channels.ToList()
-            : channels.Where(channel => channelIds.Contains(channel.Id)).ToList();
-
-        if (requested.Count == 0)
+        lock (_scanLock)
         {
-            return [];
+            if (_scan is not null)
+            {
+                return null;
+            }
+
+            var ids = channelIds.ToHashSet();
+            var requested = _configurationService.GetChannels()
+                .Where(channel => ids.Count == 0 || ids.Contains(channel.Id))
+                .ToList();
+            if (requested.Count == 0)
+            {
+                return Task.FromResult<IReadOnlyList<ChannelProbeResult>>([]);
+            }
+
+            var scan = new ProbeScan(Guid.NewGuid(), requested.Count, cancellationToken);
+            _scan = scan;
+            return Task.Run(() => RunScanAsync(
+                scan, requested, Math.Clamp(concurrency, MinConcurrency, MaxConcurrency), Math.Clamp(retries, 0, MaxRetries)));
+        }
+    }
+
+    private async Task<IReadOnlyList<ChannelProbeResult>> RunScanAsync(
+        ProbeScan scan, List<ChannelConfig> requested, int concurrency, int retries)
+    {
+        var results = new Dictionary<int, ChannelProbeResult>();
+        try
+        {
+            await Parallel.ForEachAsync(requested, new ParallelOptions
+            {
+                CancellationToken = scan.Cancellation.Token,
+                MaxDegreeOfParallelism = concurrency
+            }, async (channel, token) =>
+            {
+                lock (_scanLock)
+                {
+                    if (scan.InvalidatedIds.Contains(channel.Id))
+                    {
+                        scan.Done++;
+                        return;
+                    }
+
+                    scan.ActiveIds.Add(channel.Id);
+                }
+
+                ChannelProbeResult? result = null;
+                try
+                {
+                    result = await ProbeChannelAsync(channel, retries, token);
+                }
+                finally
+                {
+                    lock (_scanLock)
+                    {
+                        scan.ActiveIds.Remove(channel.Id);
+                        if (result is not null && !token.IsCancellationRequested)
+                        {
+                            scan.Done++;
+                            if (!scan.InvalidatedIds.Contains(channel.Id))
+                            {
+                                results[channel.Id] = result;
+                                StoreResult(channel, result);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        catch (OperationCanceledException) when (scan.Cancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "频道扫描失败");
+        }
+        finally
+        {
+            if (Interlocked.Exchange(ref _profilesDirty, 0) == 1)
+            {
+                SaveProfiles();
+            }
+
+            lock (_scanLock)
+            {
+                _scan = null;
+                scan.Cancellation.Dispose();
+            }
         }
 
-        var effectiveConcurrency = Math.Clamp(concurrency, MinConcurrency, MaxConcurrency);
-        var effectiveRetries = Math.Clamp(retries, 0, MaxRetries);
-        var results = new ChannelProbeResult[requested.Count];
-        using var semaphore = new SemaphoreSlim(effectiveConcurrency);
-        var tasks = requested.Select(async (channel, index) =>
-        {
-            await semaphore.WaitAsync(cancellationToken);
-            try
-            {
-                results[index] = await ProbeChannelAsync(channel, effectiveRetries, cancellationToken);
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-
-        await Task.WhenAll(tasks);
-        if (Interlocked.Exchange(ref _profilesDirty, 0) == 1)
-        {
-            SaveProfiles();
-        }
-        return results;
+        return requested.Where(channel => results.ContainsKey(channel.Id)).Select(channel => results[channel.Id]).ToList();
     }
 
     private async Task<ChannelProbeResult> ProbeChannelAsync(
@@ -136,22 +246,22 @@ public sealed class ChannelProbeService
             }
         }
 
-        var final = result! with
+        return result! with
         {
             Attempts = attempts,
             ElapsedSeconds = Math.Round(startedAt.Elapsed.TotalSeconds, 1)
         };
-        _results[channel.Id] = final;
-        if (final.Accessible && (final.VideoTracks.Length > 0 || final.AudioTracks.Length > 0))
+    }
+
+    private void StoreResult(ChannelConfig channel, ChannelProbeResult result)
+    {
+        _results[channel.Id] = result;
+        _probeRevision = Guid.NewGuid().ToString("N");
+        if (result.Accessible && (result.VideoTracks.Length > 0 || result.AudioTracks.Length > 0))
         {
-            _profiles[channel.Id] = new ChannelProbeProfile
-            {
-                Url = channel.Url,
-                Result = final
-            };
+            _profiles[channel.Id] = new ChannelProbeProfile { Url = channel.Url, Result = result };
             Interlocked.Exchange(ref _profilesDirty, 1);
         }
-        return final;
     }
 
     private async Task<ChannelProbeResult> ProbeOnceAsync(
@@ -328,5 +438,14 @@ public sealed class ChannelProbeService
             CheckedAt = checkedAt,
             ElapsedSeconds = Math.Round(elapsed.TotalSeconds, 1)
         };
+    }
+    private sealed class ProbeScan(Guid id, int total, CancellationToken cancellationToken)
+    {
+        public Guid Id { get; } = id;
+        public int Total { get; } = total;
+        public CancellationTokenSource Cancellation { get; } = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        public HashSet<int> ActiveIds { get; } = [];
+        public HashSet<int> InvalidatedIds { get; } = [];
+        public int Done { get; set; }
     }
 }
