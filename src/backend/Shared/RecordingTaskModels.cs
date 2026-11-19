@@ -23,6 +23,8 @@ public sealed record RecordingTask
 
     // 非空表示该任务由定时规则自动生成
     public long? TimerId { get; init; }
+    public DateTimeOffset? TimerWindowStart { get; init; }
+    public bool IsSkipped { get; init; }
 }
 
 public sealed record RecordingTaskCreateRequest
@@ -52,6 +54,12 @@ public sealed record RecordingTaskRuntimeSnapshot
 public sealed record RecordingTaskBulkRequest
 {
     public long[] TaskIds { get; init; } = [];
+}
+
+public sealed record RecordingTaskBulkExtendRequest
+{
+    public long[] TaskIds { get; init; } = [];
+    public int Minutes { get; init; }
 }
 
 public sealed record RecordingTaskBulkResult
@@ -84,6 +92,7 @@ public sealed record RecordingTaskDto
 
     // 非空表示该任务由定时规则自动生成
     public long? TimerId { get; init; }
+    public bool IsSkipped { get; init; }
 }
 
 public sealed record RecordingTaskStatusUpdate

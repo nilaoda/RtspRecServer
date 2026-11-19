@@ -128,11 +128,21 @@ export const stopTask = (id: number) =>
 export const retryTask = (id: number) =>
   fetchJson<RecordingTaskDto>(`/api/tasks/${id}/retry`, { method: 'POST' })
 
+export const skipTimerTask = (id: number) =>
+  fetchJson<RecordingTaskDto>(`/api/tasks/${id}/skip-once`, { method: 'POST' })
+
 export const stopTasks = (ids: number[]) =>
   fetchJson<BulkTaskResult>('/api/tasks/bulk-stop', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ taskIds: ids }),
+  })
+
+export const extendLiveTasks = (taskIds: number[], minutes: number) =>
+  fetchJson<BulkTaskResult>('/api/tasks/bulk-extend', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskIds, minutes }),
   })
 
 export const updateTaskEndTime = (id: number, endTime: string) =>

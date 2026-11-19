@@ -1,10 +1,14 @@
-import { useMemo, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Activity, ChevronRight, CircleAlert, HardDrive, Radio, TriangleAlert, Video } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
+import { skipTimerTask } from '../../services/api'
 import type { DiskStatus, RecordingTaskDto, TaskErrorLogEntry } from '../../types'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 import { formatBytes, formatDateTime } from '../shared/format'
@@ -92,6 +96,8 @@ const Empty = ({ children }: { children: ReactNode }) => (
 
 export default function OverviewPage() {
   const app = useAppContext()
+  const [skipTarget, setSkipTarget] = useState<RecordingTaskDto | null>(null)
+  const [skipping, setSkipping] = useState(false)
   const runtime = useRecordingRuntime(true)
   const { tasks, channels, taskErrorLog, totalBitrateKbps } = app
   const diskStatus = app.systemStatus?.disk
@@ -105,6 +111,21 @@ export default function OverviewPage() {
   const channelById = useMemo(() => new Map(channels.map(channel => [channel.id, channel])), [channels])
   const diskWarning = alerts[0]?.kind === 'disk'
   const [freeSpace, freeUnit] = disk ? formatBytes(disk.freeBytes).split(' ') : ['—']
+
+  const confirmSkip = async () => {
+    if (!skipTarget || skipping) return
+    setSkipping(true)
+    try {
+      await skipTimerTask(skipTarget.id)
+      setSkipTarget(null)
+      toast.success('已跳过本次定时录制')
+      void app.reloadTasks()
+    } catch {
+      void app.reloadTasks()
+    } finally {
+      setSkipping(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-[1240px] space-y-6 pb-6">
@@ -195,8 +216,8 @@ export default function OverviewPage() {
                 const waitingForCapacity = reason === 'sourceLimit' || reason === 'writerLimit'
                 const onSameDay = start.toDateString() === new Date(now).toDateString()
                 return (
-                  <li key={task.id}>
-                    <OverviewRow to={`/tasks?task=${task.id}`} className="gap-3 sm:gap-4">
+                  <li key={task.id} className="sm:flex sm:items-center">
+                    <OverviewRow to={`/tasks?task=${task.id}`} className="min-w-0 flex-1 gap-3 sm:gap-4">
                       <time dateTime={task.startTime} className="w-12 shrink-0 text-sm font-semibold tabular-nums sm:w-16">
                         {!onSameDay && <span className="block text-[11px] font-normal text-muted-foreground">{formatDateTime(start).slice(5, 10)}</span>}
                         {clock.format(start)}
@@ -209,6 +230,13 @@ export default function OverviewPage() {
                         {reason ? waitReasonLabel[reason] : '待录制'}
                       </span>
                     </OverviewRow>
+                    {task.timerId != null && (
+                      <div className="flex shrink-0 justify-end px-2 pb-2 sm:pb-0">
+                        <Button type="button" variant="outline" size="sm" onClick={() => setSkipTarget(task)}>
+                          跳过本次
+                        </Button>
+                      </div>
+                    )}
                   </li>
                 )
               })}
@@ -245,6 +273,25 @@ export default function OverviewPage() {
           )}
         </section>
       </div>
+      <AlertDialog open={skipTarget !== null} onOpenChange={open => { if (!open && !skipping) setSkipTarget(null) }}>
+        <AlertDialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>仅跳过这一次录制？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将跳过「{skipTarget && taskName(skipTarget)}」这一次录制，后续仍按定时规则执行。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={skipping}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={skipping} onClick={event => {
+              event.preventDefault()
+              void confirmSkip()
+            }}>
+              {skipping ? '正在跳过…' : '确认跳过'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

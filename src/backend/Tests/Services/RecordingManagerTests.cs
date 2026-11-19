@@ -386,6 +386,84 @@ public class RecordingManagerTests : IDisposable
             directory.Delete(recursive: true);
         }
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SkipTimerTask_KeepsFutureOccurrence(bool legacyTask)
+    {
+        var directory = Directory.CreateTempSubdirectory("rtsp-timer-skip-");
+        try
+        {
+            var config = new ConfigurationService(directory.FullName);
+            var channel = config.AddChannel(new ChannelConfig { Name = "Test", Url = "udp://239.1.1.1:8000" });
+            var manager = new RecordingManager(_store, config, new NoopRecordingService(), _notifier,
+                new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
+            using var timers = new RecordingTimerStore(NullLogger<RecordingTimerStore>.Instance, Path.Combine(directory.FullName, "timers.json"));
+            var service = new RecordingTimerService(timers, config, manager, NullLogger<RecordingTimerService>.Instance);
+            var timer = timers.Add(new RecordingTimer
+            {
+                ChannelId = channel.Id, Name = "每日录制", StartTime = "10:00", EndTime = "11:00",
+                StartDate = "2026-11-19", EndDate = "2026-11-20", Weekdays = [true, true, true, true, true, true, true]
+            });
+            var localNow = new DateTime(2026, 11, 19, 9, 0, 0);
+            var now = new DateTimeOffset(localNow, TimeZoneInfo.Local.GetUtcOffset(localNow));
+            await service.ScanAndGenerateAsync(now, CancellationToken.None);
+            var created = manager.GetAllTasks().OrderBy(task => task.StartTime).ToArray();
+            Assert.Equal(2, created.Length);
+            if (legacyTask)
+            {
+                _store.TryUpdate(created[0].Id, task => task with { TimerWindowStart = null });
+            }
+
+            var skipped = await manager.SkipTimerTaskAsync(created[0].Id, CancellationToken.None);
+            Assert.NotNull(skipped);
+            Assert.True(skipped.IsSkipped);
+            Assert.Contains(_notifier.Tasks, task => task.Id == skipped.Id && task.IsSkipped && task.Status == RecordingStatus.Stopped);
+
+            timers.TryUpdate(timer.Id, current => current with { LastTriggeredAt = null });
+            await service.ScanAndGenerateAsync(now, CancellationToken.None);
+            Assert.Equal(2, manager.GetAllTasks().Count);
+            Assert.Equal(RecordingStatus.Pending, manager.GetTask(created[1].Id)!.Status);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExtendLiveTasks_UsesEachCurrentEndTimeAndSkipsPendingTasks()
+    {
+        var directory = Directory.CreateTempSubdirectory("rtsp-bulk-extend-");
+        var config = new ConfigurationService(directory.FullName);
+        config.UpdateAppConfig(new AppConfigUpdateRequest { RecordPath = directory.FullName, WriteRecordingLog = false });
+        var manager = new RecordingManager(_store, config, new BlockingRecordingService(), _notifier,
+            new TaskErrorLogService(_notifier), NullLogger<RecordingManager>.Instance);
+        var now = DateTimeOffset.UtcNow;
+        var first = AddTask(true, now, now.AddMinutes(30));
+        var second = AddTask(true, now, now.AddMinutes(45));
+        var pending = AddTask(true, now.AddMinutes(10), now.AddHours(1));
+        try
+        {
+            Assert.True(await manager.TryStartTaskAsync(first, CancellationToken.None));
+            Assert.True(await manager.TryStartTaskAsync(second, CancellationToken.None));
+            await manager.UpdateTaskEndTimeAsync(first.Id, now.AddMinutes(35), CancellationToken.None);
+
+            var result = await manager.ExtendLiveTasksAsync([first.Id, second.Id, first.Id, pending.Id], 15, CancellationToken.None);
+
+            Assert.Equal([first.Id, second.Id], result.SucceededIds);
+            Assert.Equal([pending.Id], result.FailedIds);
+            Assert.Equal(now.AddMinutes(50), manager.GetTask(first.Id)!.EndTime);
+            Assert.Equal(now.AddMinutes(60), manager.GetTask(second.Id)!.EndTime);
+            Assert.Equal(pending.EndTime, manager.GetTask(pending.Id)!.EndTime);
+        }
+        finally
+        {
+            await manager.StopTasksAsync([first.Id, second.Id], CancellationToken.None);
+            directory.Delete(recursive: true);
+        }
+    }
+
     public void Dispose()
     {
         _store.Dispose();

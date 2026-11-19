@@ -88,9 +88,12 @@ public sealed class RecordingTimerService
         }
 
         var channels = _configurationService.GetChannels();
-        var activeTasks = _recordingManager.GetAllTasks()
-            .Where(t => t.Status is RecordingStatus.Pending or RecordingStatus.Recording)
-            .ToList();
+        var tasks = _recordingManager.GetAllTasks();
+        var activeTasks = tasks.Where(t => t.Status is RecordingStatus.Pending or RecordingStatus.Recording).ToList();
+        // 旧任务未记录规则窗口起点，跳过后以保存的结束时间匹配原窗口。
+        var skippedWindows = tasks.Where(t => t.IsSkipped)
+            .Select(t => (t.TimerId, t.TimerWindowStart, LegacyEnd: t.TimerWindowStart.HasValue ? (DateTimeOffset?)null : t.EndTime))
+            .ToHashSet();
         var lookAheadEnd = now.AddDays(LookAheadDays);
         var todayLocal = TimeZoneInfo.ConvertTime(now, TimeZoneInfo.Local).Date;
 
@@ -106,6 +109,13 @@ public sealed class RecordingTimerService
 
             foreach (var window in windows)
             {
+                if (skippedWindows.Contains((timer.Id, window.WindowStart, null)) ||
+                    skippedWindows.Contains((timer.Id, null, window.EffectiveEnd)))
+                {
+                    MarkTriggered(timer.Id, window);
+                    continue;
+                }
+
                 var channel = channels.FirstOrDefault(c => c.Id == timer.ChannelId);
                 if (channel is null)
                 {
@@ -132,14 +142,14 @@ public sealed class RecordingTimerService
 
                 try
                 {
-                    var created = await _recordingManager.CreateTaskAsync(new RecordingTaskCreateRequest
+                    var created = await _recordingManager.CreateTimerTaskAsync(new RecordingTaskCreateRequest
                     {
                         ChannelId = timer.ChannelId,
                         StartTime = start,
                         EndTime = end,
                         TaskName = timer.Name,
                         TimerId = timer.Id
-                    }, cancellationToken);
+                    }, window.WindowStart, cancellationToken);
                     activeTasks.Add(created);
 
                     _logger.LogInformation("定时规则 {TimerId} 已生成录制任务，任务ID: {TaskId}, 窗口: {Start} ~ {End}",

@@ -73,7 +73,10 @@ public sealed class RecordingManager
     }
 
     public Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, CancellationToken cancellationToken) =>
-        CreateTaskAsync(request, null, cancellationToken);
+        CreateTaskAsync(request, null, null, cancellationToken);
+
+    internal Task<RecordingTask> CreateTimerTaskAsync(RecordingTaskCreateRequest request, DateTimeOffset windowStart, CancellationToken cancellationToken) =>
+        CreateTaskAsync(request, null, windowStart, cancellationToken);
 
     public async Task<RecordingTask?> RetryTaskAsync(long id, CancellationToken cancellationToken)
     {
@@ -89,10 +92,10 @@ public sealed class RecordingManager
             StartTime = original.StartTime,
             EndTime = original.EndTime,
             TaskName = original.DisplayName
-        }, id, cancellationToken);
+        }, id, null, cancellationToken);
     }
 
-    private async Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, long? retryTaskId, CancellationToken cancellationToken)
+    private async Task<RecordingTask> CreateTaskAsync(RecordingTaskCreateRequest request, long? retryTaskId, DateTimeOffset? timerWindowStart, CancellationToken cancellationToken)
     {
         if (request.EndTime <= request.StartTime)
         {
@@ -133,7 +136,8 @@ public sealed class RecordingManager
             EndTime = request.EndTime,
             Status = RecordingStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow,
-            TimerId = request.TimerId
+            TimerId = request.TimerId,
+            TimerWindowStart = timerWindowStart
         };
 
         var prepared = task with { Url = isLive ? task.Url : RecordingUrlBuilder.Build(task) };
@@ -153,7 +157,7 @@ public sealed class RecordingManager
                 }
             }
 
-            if (_taskStore.GetAll().Any(t => t.ChannelId == request.ChannelId &&
+            if (_taskStore.GetAll().Any(t => !t.IsSkipped && t.ChannelId == request.ChannelId &&
                                              t.StartTime == request.StartTime &&
                                              t.EndTime == request.EndTime &&
                                              (!retryTaskId.HasValue || !CanRetry(t))))
@@ -172,6 +176,35 @@ public sealed class RecordingManager
 
     private bool CanRetry(RecordingTask task) =>
         (task.Status is RecordingStatus.Failed or RecordingStatus.Stopped) && !IsActive(task.Id);
+
+    public async Task<RecordingTask?> SkipTimerTaskAsync(long id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RecordingTask? skipped;
+        lock (_taskTransitionLock)
+        {
+            skipped = _taskStore.TryUpdate(id, current =>
+            {
+                if (current.IsSkipped)
+                {
+                    return current;
+                }
+                if (!current.TimerId.HasValue || current.Status != RecordingStatus.Pending)
+                {
+                    throw new InvalidOperationException("只能跳过尚未开始的定时任务");
+                }
+
+                return current with { Status = RecordingStatus.Stopped, IsSkipped = true, FinishedAt = DateTimeOffset.UtcNow };
+            });
+        }
+
+        if (skipped is not null)
+        {
+            _logger.LogInformation("已跳过本次定时录制，规则 {TimerId}，任务 {TaskId}", skipped.TimerId, id);
+            await _notifier.NotifyTaskUpdateAsync(ToDto(skipped), CancellationToken.None);
+        }
+        return skipped;
+    }
 
     public bool DeleteTask(long id)
     {
@@ -305,54 +338,110 @@ public sealed class RecordingManager
 
     public async Task<RecordingTask?> UpdateTaskEndTimeAsync(long id, DateTimeOffset endTime, CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
-        RecordingTask? updated;
-        RecordingSession? session = null;
-
+        (RecordingTask? Task, RecordingSession? Session) update;
         lock (_taskTransitionLock)
         {
-            if (_activeSessions.TryGetValue(id, out session) &&
-                (session.ScheduledStopRequested || session.ManualStopRequested))
-            {
-                throw new InvalidOperationException("任务正在停止，无法修改结束时间");
-            }
+            update = ChangeTaskEndTime(id, _ => endTime, false);
+        }
+        return update.Task is null ? null : await PublishEndTimeAsync(update.Task, update.Session, cancellationToken);
+    }
 
-            updated = _taskStore.TryUpdate(id, current =>
-            {
-                if (!current.IsLive)
-                {
-                    throw new InvalidOperationException("仅直播任务支持修改结束时间");
-                }
-
-                if (current.Status is not (RecordingStatus.Pending or RecordingStatus.Recording))
-                {
-                    throw new InvalidOperationException("仅等待中或录制中的任务可修改结束时间");
-                }
-
-                if (endTime <= current.StartTime)
-                {
-                    throw new InvalidOperationException("结束时间必须大于开始时间");
-                }
-
-                if (endTime <= now)
-                {
-                    throw new InvalidOperationException("结束时间必须晚于当前时间");
-                }
-
-                return current with { EndTime = endTime };
-            });
-
-            if (updated is null)
-            {
-                return null;
-            }
-
-            session?.UpdateEndTime(endTime);
+    public async Task<RecordingTaskBulkResult> ExtendLiveTasksAsync(IReadOnlyCollection<long> taskIds, int minutes, CancellationToken cancellationToken)
+    {
+        if (minutes is not (5 or 15 or 30))
+        {
+            throw new InvalidOperationException("请选择延长 5、15 或 30 分钟");
         }
 
-        var result = session is null
-            ? updated
-            : updated with
+        cancellationToken.ThrowIfCancellationRequested();
+        var updates = new List<(RecordingTask Task, RecordingSession? Session)>();
+        var failed = new List<long>();
+        // 在推送通知之前应用整批修改，避免其他任务在等待通知时达到旧的结束时间。
+        lock (_taskTransitionLock)
+        {
+            foreach (var id in taskIds.Where(id => id > 0).Distinct())
+            {
+                try
+                {
+                    var (task, session) = ChangeTaskEndTime(id, task => task.EndTime.AddMinutes(minutes), true);
+                    if (task is not null)
+                    {
+                        updates.Add((task, session));
+                        continue;
+                    }
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException)
+                {
+                    // 某条任务可能已结束，其他任务仍可延长。
+                }
+                failed.Add(id);
+            }
+        }
+
+        await Task.WhenAll(updates.Select(update => PublishEndTimeAsync(update.Task, update.Session, CancellationToken.None)));
+        return new RecordingTaskBulkResult
+        {
+            Succeeded = updates.Count,
+            Failed = failed.Count,
+            SucceededIds = updates.Select(update => update.Task.Id).ToArray(),
+            FailedIds = failed.ToArray()
+        };
+    }
+
+    // 调用方持有 _taskTransitionLock。
+    private (RecordingTask? Task, RecordingSession? Session) ChangeTaskEndTime(
+        long id, Func<RecordingTask, DateTimeOffset> getEndTime, bool recordingOnly)
+    {
+        if (_activeSessions.TryGetValue(id, out var session) &&
+            (session.ScheduledStopRequested || session.ManualStopRequested))
+        {
+            throw new InvalidOperationException("任务正在停止，无法修改结束时间");
+        }
+
+        var updated = _taskStore.TryUpdate(id, current =>
+        {
+            if (!current.IsLive)
+            {
+                throw new InvalidOperationException("仅直播任务支持修改结束时间");
+            }
+
+            if (recordingOnly && (session is null || current.Status != RecordingStatus.Recording))
+            {
+                throw new InvalidOperationException("仅正在录制的直播任务支持批量延长");
+            }
+
+            if (current.Status is not (RecordingStatus.Pending or RecordingStatus.Recording))
+            {
+                throw new InvalidOperationException("仅等待中或录制中的任务可修改结束时间");
+            }
+
+            var endTime = getEndTime(current);
+            if (endTime <= current.StartTime)
+            {
+                throw new InvalidOperationException("结束时间必须大于开始时间");
+            }
+
+            if (endTime <= DateTimeOffset.UtcNow)
+            {
+                throw new InvalidOperationException("结束时间必须晚于当前时间");
+            }
+
+            return current with { EndTime = endTime };
+        });
+
+        if (updated is not null)
+        {
+            session?.UpdateEndTime(updated.EndTime);
+        }
+        return (updated, session);
+    }
+
+    private async Task<RecordingTask> PublishEndTimeAsync(RecordingTask updated, RecordingSession? session, CancellationToken cancellationToken)
+    {
+        var current = _taskStore.GetById(updated.Id) ?? updated;
+        var result = session is null || current.Status != RecordingStatus.Recording
+            ? current
+            : current with
             {
                 BytesWritten = session.BytesWritten,
                 PcrElapsedSeconds = session.GetPcrElapsedSeconds()
@@ -362,7 +451,7 @@ public sealed class RecordingManager
             CurrentBitrateKbps = session?.GetCurrentBitrateKbps()
         };
         await _notifier.NotifyTaskUpdateAsync(dto, cancellationToken);
-        _logger.LogInformation("录制任务结束时间已更新，任务ID: {TaskId}, 新结束时间: {EndTime}", id, endTime);
+        _logger.LogInformation("录制任务结束时间已更新，任务ID: {TaskId}, 新结束时间: {EndTime}", updated.Id, updated.EndTime);
         return result;
     }
 
@@ -859,7 +948,8 @@ public sealed class RecordingManager
             FinishedAt = task.FinishedAt,
             PcrElapsedSeconds = task.PcrElapsedSeconds,
             TsCheck = task.TsCheck,
-            TimerId = task.TimerId
+            TimerId = task.TimerId,
+            IsSkipped = task.IsSkipped
         };
     }
 

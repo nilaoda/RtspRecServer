@@ -4,7 +4,7 @@ import { Loader2, Plus, Info, Download, Trash2, StopCircle, Ban, RefreshCw, Cale
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
-import { getTaskLog, retryTask } from '../../services/api'
+import { extendLiveTasks, getTaskLog, retryTask } from '../../services/api'
 import type { RecordingTaskDto, RecordingTaskRuntimeSnapshot } from '../../types'
 import { formatBytes, formatDateTime } from '../shared/format'
 import { normalizeStatus, waitReasonLabel, type RecordingStatusKey } from '../shared/recording-task'
@@ -48,6 +48,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { DateTimePicker } from "@/components/ui/date-time-picker"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import {
   Tabs,
   TabsContent,
@@ -210,7 +211,7 @@ const getTaskDownloadUrl = (task: RecordingTaskDto) =>
 const getTaskPlayPath = (task: RecordingTaskDto) =>
   `/api/tasks/${task.id}/play/${encodeURIComponent(getTaskDownloadFileName(task))}`
 
-const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
+const TaskStatusBadge = ({ status, skipped }: { status: RecordingStatusKey; skipped?: boolean }) => (
   <Badge variant={statusVariant[status]} className={cn(
     "whitespace-nowrap",
     status === 'Completed' && "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800",
@@ -218,7 +219,7 @@ const TaskStatusBadge = ({ status }: { status: RecordingStatusKey }) => (
     status === 'Pending' && "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800",
     status === 'Recording' && "animate-pulse"
   )}>
-    {statusLabel[status]}
+    {skipped ? '已跳过' : statusLabel[status]}
   </Badge>
 )
 
@@ -293,6 +294,7 @@ const TasksPage = () => {
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set())
   const [bulkStopConfirmOpen, setBulkStopConfirmOpen] = useState(false)
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
+  const [extending, setExtending] = useState(false)
 
   const taskCounts = useMemo(() => {
     const counts: Record<TaskTab, number> = { active: 0, completed: 0 }
@@ -350,6 +352,10 @@ const TasksPage = () => {
   )
   const selectedRecordingIds = useMemo(
     () => selectedTasks.filter((task) => normalizeStatus(task.status) === 'Recording').map((task) => task.id),
+    [selectedTasks],
+  )
+  const selectedLiveRecordingIds = useMemo(
+    () => selectedTasks.filter((task) => task.isLive && normalizeStatus(task.status) === 'Recording').map((task) => task.id),
     [selectedTasks],
   )
   const selectedDeletableIds = useMemo(
@@ -541,6 +547,24 @@ const TasksPage = () => {
     })
   }
 
+  const onBulkExtend = async (minutes: number) => {
+    if (extending || selectedLiveRecordingIds.length === 0) return
+    setExtending(true)
+    try {
+      const result = await extendLiveTasks(selectedLiveRecordingIds, minutes)
+      if (result.failed > 0) {
+        toast.warning(`已延长 ${result.succeeded} 条任务，${result.failed} 条已无法延长`)
+      } else {
+        toast.success(`已将 ${result.succeeded} 条直播录制延长 ${minutes} 分钟`)
+      }
+      void reloadTasks()
+    } catch {
+      // 请求层统一显示错误。
+    } finally {
+      setExtending(false)
+    }
+  }
+
   const onBulkStop = async () => {
     const ids = [...selectedRecordingIds]
     setBulkStopConfirmOpen(false)
@@ -617,22 +641,26 @@ const TasksPage = () => {
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => onViewInfo(task.id, task.displayName || `Task ${task.id}`)}
-              aria-label="查看详情"
-              title="查看详情"
-            >
-              <Info className="h-4 w-4" />
-            </Button>
-            <PlayLinkMenu path={getTaskPlayPath(task)} name={getTaskDownloadFileName(task)} />
-            <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-              <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer" aria-label="下载文件" title="下载文件">
-                <Download className="h-4 w-4" />
-              </a>
-            </Button>
+            {!task.isSkipped && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => onViewInfo(task.id, task.displayName || `Task ${task.id}`)}
+                  aria-label="查看详情"
+                  title="查看详情"
+                >
+                  <Info className="h-4 w-4" />
+                </Button>
+                <PlayLinkMenu path={getTaskPlayPath(task)} name={getTaskDownloadFileName(task)} />
+                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                  <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer" aria-label="下载文件" title="下载文件">
+                    <Download className="h-4 w-4" />
+                  </a>
+                </Button>
+              </>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -729,6 +757,20 @@ const TasksPage = () => {
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" className="h-8" disabled={selectedLiveRecordingIds.length === 0 || extending}>
+                        <CalendarClock className="mr-1 h-3.5 w-3.5" />
+                        {extending ? '正在延长…' : '批量延长'}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>选中的 {selectedLiveRecordingIds.length} 条直播录制</DropdownMenuLabel>
+                      {[5, 15, 30].map((minutes) => (
+                        <DropdownMenuItem key={minutes} onSelect={() => void onBulkExtend(minutes)}>延长 {minutes} 分钟</DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Button
                     type="button"
                     variant="outline"
@@ -830,7 +872,7 @@ const TasksPage = () => {
                                     </TableCell>
                                     <TableCell className="font-mono text-xs">{task.id}</TableCell>
                                     <TableCell>
-                                        <TaskStatusBadge status={normalizedStatus} />
+                                        <TaskStatusBadge status={normalizedStatus} skipped={task.isSkipped} />
                                         <TaskStatusDetail task={task} status={normalizedStatus} runtime={runtime} onViewFailure={onViewFailure} />
                                     </TableCell>
                                     <TableCell>
@@ -1025,37 +1067,41 @@ const TasksPage = () => {
                                                             </Tooltip>
                                                         </TooltipProvider>
                                                     )}
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onViewInfo(task.id, task.displayName || `Task ${task.id}`)}>
-                                                                    <Info className="h-4 w-4" />
-                                                                    <span className="sr-only">Info</span>
-                                                                </Button>
-                                                            </TooltipTrigger>
-                                                            <TooltipContent>
-                                                                <p>查看详情</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
-                                                    
-                                                    <PlayLinkMenu path={getTaskPlayPath(task)} name={getTaskDownloadFileName(task)} />
+                                                    {!task.isSkipped && (
+                                                        <>
+                                                            <TooltipProvider>
+                                                                <Tooltip>
+                                                                    <TooltipTrigger asChild>
+                                                                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onViewInfo(task.id, task.displayName || `Task ${task.id}`)}>
+                                                                            <Info className="h-4 w-4" />
+                                                                            <span className="sr-only">Info</span>
+                                                                        </Button>
+                                                                    </TooltipTrigger>
+                                                                    <TooltipContent>
+                                                                        <p>查看详情</p>
+                                                                    </TooltipContent>
+                                                                </Tooltip>
+                                                            </TooltipProvider>
 
-                                                    <TooltipProvider>
-                                                        <Tooltip>
-                                                            <TooltipTrigger asChild>
-                                                                <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
-                                                                    <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer">
-                                                                        <Download className="h-4 w-4" />
-                                                                        <span className="sr-only">Download</span>
-                                                                    </a>
-                                                                </Button>
-                                                            </TooltipTrigger>
-                                                            <TooltipContent>
-                                                                <p>下载文件</p>
-                                                            </TooltipContent>
-                                                        </Tooltip>
-                                                    </TooltipProvider>
+                                                            <PlayLinkMenu path={getTaskPlayPath(task)} name={getTaskDownloadFileName(task)} />
+
+                                                            <TooltipProvider>
+                                                                <Tooltip>
+                                                                    <TooltipTrigger asChild>
+                                                                        <Button variant="ghost" size="icon" className="h-8 w-8" asChild>
+                                                                            <a href={getTaskDownloadUrl(task)} target="_blank" rel="noreferrer">
+                                                                                <Download className="h-4 w-4" />
+                                                                                <span className="sr-only">Download</span>
+                                                                            </a>
+                                                                        </Button>
+                                                                    </TooltipTrigger>
+                                                                    <TooltipContent>
+                                                                        <p>下载文件</p>
+                                                                    </TooltipContent>
+                                                                </Tooltip>
+                                                            </TooltipProvider>
+                                                        </>
+                                                    )}
 
                                                     <TooltipProvider>
                                                         <Tooltip>
@@ -1111,7 +1157,7 @@ const TasksPage = () => {
                           />
                           <div className="min-w-0 space-y-1.5">
                             <div className="flex min-w-0 items-center gap-2">
-                              <TaskStatusBadge status={normalizedStatus} />
+                              <TaskStatusBadge status={normalizedStatus} skipped={task.isSkipped} />
                               <span className="truncate font-medium" title={task.displayName || '--'}>
                                 {task.displayName || '--'}
                               </span>

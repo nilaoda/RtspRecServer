@@ -462,6 +462,19 @@ try
         }
     });
 
+    app.MapPost("/api/tasks/{id:long}/skip-once", async (RecordingManager manager, long id, CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var skipped = await manager.SkipTimerTaskAsync(id, cancellationToken);
+            return skipped is null ? Results.NotFound(ApiResponse.Create("任务不存在")) : Results.Ok(ToDto(skipped));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
+    });
+
     app.MapPost("/api/tasks/{id:long}/stop", async (RecordingManager manager, long id, CancellationToken cancellationToken) =>
     {
         var task = manager.GetTask(id);
@@ -480,6 +493,20 @@ try
     {
         var result = await manager.StopTasksAsync(request.TaskIds, cancellationToken);
         return Results.Ok(result);
+    });
+
+    app.MapPost("/api/tasks/bulk-extend", async (
+        RecordingManager manager, RecordingTaskBulkExtendRequest request, CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            var result = await manager.ExtendLiveTasksAsync(request.TaskIds ?? [], request.Minutes, cancellationToken);
+            return Results.Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(ApiResponse.Create(ex.Message));
+        }
     });
 
     app.MapPost("/api/tasks/bulk-delete", (
@@ -813,7 +840,8 @@ static RecordingTaskDto ToDto(RecordingTask task)
         IsLive = task.IsLive,
         PcrElapsedSeconds = task.PcrElapsedSeconds,
         TsCheck = task.TsCheck,
-        TimerId = task.TimerId
+        TimerId = task.TimerId,
+        IsSkipped = task.IsSkipped
     };
 }
 

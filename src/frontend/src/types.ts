@@ -65,6 +65,7 @@ export type RecordingTaskDto = {
   pcrElapsedSeconds?: number
   tsCheck?: TsCheckSummary
   timerId?: number
+  isSkipped?: boolean
 }
 
 export type TaskWaitReason = 'scheduled' | 'catchup' | 'sourceLimit' | 'writerLimit' | 'dispatch'
