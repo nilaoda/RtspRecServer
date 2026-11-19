@@ -68,7 +68,7 @@ export default function TaskFormDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   initialValues?: TaskFormInitialValues
-  entry?: 'retry'
+  entry?: 'channel' | 'retry'
 }) {
   const { channels, channelProfiles, createTask, now } = useAppContext()
   const channelGroups = useMemo(() => {
@@ -175,6 +175,12 @@ export default function TaskFormDialog({
     if (created || fromEpg) {
       onOpenChange(false)
     }
+  }
+
+  const recordNow = (minutes: number) => {
+    form.setValue('startTime', now, { shouldDirty: true })
+    form.setValue('endTime', new Date(now.getTime() + minutes * 60 * 1000), { shouldDirty: true })
+    void form.handleSubmit(onSubmit)()
   }
 
   return (
@@ -291,6 +297,12 @@ export default function TaskFormDialog({
                 )
               }}
             />
+            {entry === 'channel' && isLive && (
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" disabled={submitting} onClick={() => recordNow(30)}>现在录 30 分钟</Button>
+                <Button type="button" variant="outline" size="sm" disabled={submitting} onClick={() => recordNow(60)}>现在录 1 小时</Button>
+              </div>
+            )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <FormField
                 control={form.control}

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
-import { Activity, AlertCircle, CheckCircle2, FileUp, FlaskConical, Info, Loader2, Plus, Save, Settings2, Square, Tags, Trash2 } from 'lucide-react'
+import { Activity, AlertCircle, CheckCircle2, CircleDot, FileUp, FlaskConical, Info, Loader2, Plus, Save, Settings2, Square, Tags, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAppContext } from '../../app/context'
@@ -12,6 +12,8 @@ import type { ChannelBulkEditItem, ChannelConfig, ChannelProbeResult } from '../
 import { formatDateTime } from '../shared/format'
 import { formatProbeBitrate } from '../shared/channel-probe'
 import PlayLinkMenu from '../shared/play-link-menu'
+import { getRecordingSourceMode } from '../shared/recording-source'
+import TaskFormDialog from '../tasks/TaskFormDialog'
 import { ChannelProtocolBadge } from '@/components/channel-protocol-badge'
 import ChannelRecordingSimulationDialog from './ChannelRecordingSimulationDialog'
 import { useChannelDiagnostics } from './useChannelDiagnostics'
@@ -134,9 +136,11 @@ const ChannelsPage = () => {
   const [drafts, setDrafts] = useState<Record<number, ChannelDraft>>({})
   const [detailChannelId, setDetailChannelId] = useState<number | null>(null)
   const [simulationChannelId, setSimulationChannelId] = useState<number | null>(null)
+  const [recordingChannelId, setRecordingChannelId] = useState<number | null>(null)
   const simulationChannel = channels.find((channel) => channel.id === simulationChannelId)
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(() => new Set())
   const [groupFilter, setGroupFilter] = useState(ALL_GROUPS)
+  const [channelSearch, setChannelSearch] = useState('')
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [probeConcurrency, setProbeConcurrency] = useState(() => readProbeSetting(PROBE_CONCURRENCY_KEY, 3, 1, 10))
   const [probeRetries, setProbeRetries] = useState(() => readProbeSetting(PROBE_RETRIES_KEY, 0, 0, 5))
@@ -267,14 +271,13 @@ const ChannelsPage = () => {
   }, [groupManagerOpen, groupStats])
 
   const filteredChannels = useMemo(() => {
-    if (groupFilter === ALL_GROUPS) {
-      return channels
-    }
-    if (groupFilter === UNGROUPED) {
-      return channels.filter((channel) => !channel.group?.trim())
-    }
-    return channels.filter((channel) => (channel.group?.trim() || '') === groupFilter)
-  }, [channels, groupFilter])
+    const query = channelSearch.trim().toLowerCase()
+    return channels.filter((channel) => {
+      const group = channel.group?.trim() || UNGROUPED
+      return (groupFilter === ALL_GROUPS || groupFilter === group) &&
+        (!query || channel.name.toLowerCase().includes(query) || channel.url.toLowerCase().includes(query))
+    })
+  }, [channels, groupFilter, channelSearch])
 
   useEffect(() => {
     if (groupFilter === ALL_GROUPS || groupFilter === UNGROUPED) {
@@ -631,6 +634,17 @@ const ChannelsPage = () => {
                 </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+                <Input
+                    type="search"
+                    aria-label="搜索频道"
+                    placeholder="搜索频道名称或地址"
+                    className="h-8 w-full sm:w-44"
+                    value={channelSearch}
+                    onChange={(event) => {
+                        setChannelSearch(event.target.value)
+                        setSelectedChannelIds(new Set())
+                    }}
+                />
                 <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
                     <Plus className="mr-2 h-4 w-4" />
                     添加频道
@@ -653,7 +667,7 @@ const ChannelsPage = () => {
                         <SelectItem value={UNGROUPED}>未分组</SelectItem>
                     </SelectContent>
                 </Select>
-                {groupFilter !== ALL_GROUPS && (
+                {(groupFilter !== ALL_GROUPS || channelSearch.trim()) && (
                     <span className="text-xs text-muted-foreground">显示 {filteredChannels.length}</span>
                 )}
                 <Button size="sm" variant="outline" onClick={openGroupManager} disabled={scanning}>
@@ -807,14 +821,14 @@ const ChannelsPage = () => {
                             <TableHead className="w-[72px]">协议</TableHead>
                             <TableHead className="min-w-[260px]">地址</TableHead>
                             <TableHead className="min-w-[230px]">检测</TableHead>
-                            <TableHead className="w-[200px] text-right">操作</TableHead>
+                            <TableHead className="w-[230px] text-right">操作</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {filteredChannels.length === 0 ? (
                             <TableRow>
                                 <TableCell colSpan={8} className="h-24 text-center">
-                                    {channels.length === 0 ? '暂无频道' : '该分组暂无频道'}
+                                    {channels.length === 0 ? '暂无频道' : '没有符合条件的频道'}
                                 </TableCell>
                             </TableRow>
                         ) : (
@@ -1063,6 +1077,19 @@ const ChannelsPage = () => {
                                                         </TooltipContent>
                                                     </Tooltip>
                                                 </TooltipProvider>
+                                                {getRecordingSourceMode(channel.url) && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8"
+                                                        aria-label={`录制 ${channel.name}`}
+                                                        title={hasChanged ? '请先保存频道修改' : '新建录制任务'}
+                                                        disabled={hasChanged}
+                                                        onClick={() => setRecordingChannelId(channel.id)}
+                                                    >
+                                                        <CircleDot className="h-4 w-4" />
+                                                    </Button>
+                                                )}
                                                 {/^(rtsp|rtp|udp|https?):\/\//i.test(channel.url.trim()) && (
                                                     <PlayLinkMenu
                                                         path={`/api/channels/${channel.id}/play.ts`}
@@ -1335,6 +1362,15 @@ const ChannelsPage = () => {
           synced={synced}
           onRefresh={refresh}
           onClose={() => setSimulationChannelId(null)}
+        />
+      )}
+
+      {recordingChannelId !== null && (
+        <TaskFormDialog
+          open
+          onOpenChange={(open) => { if (!open) setRecordingChannelId(null) }}
+          entry="channel"
+          initialValues={{ channelId: recordingChannelId }}
         />
       )}
 
