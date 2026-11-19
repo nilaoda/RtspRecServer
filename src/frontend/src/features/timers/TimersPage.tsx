@@ -172,7 +172,7 @@ const TimersPage = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>删除定时规则</AlertDialogTitle>
             <AlertDialogDescription>
-              确定删除规则「{deleteTarget?.name}」？已生成的录制任务不会被删除。
+              确定删除规则「{deleteTarget?.name}」？该规则生成的待录任务会一并取消，录制中及历史任务会保留。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
