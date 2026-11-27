@@ -106,9 +106,6 @@ jobs:
           New-Item -ItemType Directory -Force src\backend\Server\wwwroot | Out-Null
           Copy-Item -Recurse $env:RUNNER_TEMP\web-dist\* src\backend\Server\wwwroot
 
-      - name: Install zip
-        run: choco install zip --no-progress --yes
-
       - name: Set up dotnet
         uses: actions/setup-dotnet@v4
         with:
@@ -117,12 +114,11 @@ jobs:
       - run: dotnet publish src/backend/Server/Server.csproj -r win-x64 -c Release -o artifact-x64 -p:SkipFrontendBuild=true
       - run: dotnet publish src/backend/Server/Server.csproj -r win-arm64 -c Release -o artifact-arm64 -p:SkipFrontendBuild=true
 
+      # Windows runner 没有内置 zip 命令，choco 安装依赖外部源（曾因 504 失败），改用 PowerShell 内置压缩
       - name: Package [win]
         run: |
-          cd artifact-x64
-          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip Server.exe
-          cd ../artifact-arm64
-          zip ../RtspRecServer_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip Server.exe
+          Compress-Archive -Path artifact-x64/Server.exe -DestinationPath RtspRecServer_${{ needs.set-date.outputs.tag }}_win-x64_${{ needs.set-date.outputs.date }}.zip -Force
+          Compress-Archive -Path artifact-arm64/Server.exe -DestinationPath RtspRecServer_${{ needs.set-date.outputs.tag }}_win-arm64_${{ needs.set-date.outputs.date }}.zip -Force
 
       - name: Upload Artifact [win-x64]
         uses: actions/upload-artifact@v4
