@@ -4,16 +4,23 @@ namespace RtspRecServer.Server.Recording.TsAnalysis;
 
 internal sealed class TsLiveAnalysisSession : IDisposable
 {
+    /// <summary>
+    /// 直播录制的启动预热时长：直连组播（rtp/udp）需要加入组播组，
+    /// udpxy 等代理地址需要代理先完成加组，启动阶段丢包都不代表录制内容质量。
+    /// </summary>
+    public const double StartupWarmupSeconds = 3.0;
+
     private readonly TsStreamAnalyzer _analyzer = new();
     private readonly TsProgressSink _progressSink = new();
     private long _appendedBytes;
     private bool _completed;
 
-    public TsLiveAnalysisSession(string displayName)
+    public TsLiveAnalysisSession(string displayName, double continuityWarmupSeconds = 0)
     {
         _analyzer.BeginSession(displayName, new TsStreamAnalyzeOptions
         {
             ProgressIntervalMilliseconds = 500,
+            ContinuityWarmupSeconds = continuityWarmupSeconds,
             Features = TsStreamAnalyzeFeatures.ContinuityValidation |
                        TsStreamAnalyzeFeatures.TimestampValidation |
                        TsStreamAnalyzeFeatures.AvSyncValidation |
@@ -164,6 +171,7 @@ internal static class TsCheckSummaryMapper
             ErrorCount = progress.ErrorCount,
             WarningCount = progress.WarningCount,
             ContinuityErrors = progress.ContinuityErrors,
+            StartupContinuityGaps = progress.StartupContinuityGaps,
             PacketCount = progress.PacketCount,
             BytesScanned = progress.BytesScanned,
             BitrateKbps = progress.BytesPerSecond * 8 / 1000,
@@ -212,6 +220,7 @@ internal static class TsCheckSummaryMapper
             ErrorCount = result.TotalErrorCount,
             WarningCount = result.TotalWarningCount,
             ContinuityErrors = result.Pids.Values.Sum(static pid => pid.ContinuityErrors),
+            StartupContinuityGaps = result.StartupContinuityGaps,
             PacketCount = result.PacketCount,
             BytesScanned = result.BytesScanned,
             BitrateKbps = result.Elapsed.TotalSeconds > 0

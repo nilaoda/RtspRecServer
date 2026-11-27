@@ -25,6 +25,8 @@ public sealed class TsStreamAnalyzer : IDisposable
     private const int AvSyncPersistSamples = 5;
     // 同一节目两次上报最短间隔 60 秒。
     private const long AvSyncReportCooldown90k = 5_400_000;
+    // 尚未收到 PCR 时用于判断启动预热的包数上限（约 3.8MB，10Mbps 下约 3 秒）。
+    private const long ContinuityWarmupPacketBudget = 20_000;
     private const int MaxTimelineBuckets = 4_096;
     private const double InitialTimelineBucketSeconds = 1;
     private const long MaximumBitratePcrInterval90k = 90_000;
@@ -56,6 +58,7 @@ public sealed class TsStreamAnalyzer : IDisposable
     private long _timelineOrigin90k = long.MinValue;
     private int _errorCount;
     private int _warningCount;
+    private long _startupContinuityGaps;
     private int _globalErrorCount;
     private int _globalWarningCount;
     private TsCheckEvent? _pendingProgressEvent;
@@ -521,16 +524,25 @@ public sealed class TsStreamAnalyzer : IDisposable
             }
             else if (counter != expected)
             {
-                state.Summary.ContinuityErrors++;
-                // payload 已不连续，丢弃跨包的 PSI/PES 半成品，避免错误拼接出伪 section 或时间戳。
+                // 无论是否计入统计，payload 已不连续，都要丢弃跨包的 PSI/PES 半成品，
+                // 避免错误拼接出伪 section 或时间戳。
                 state.PesHeaderLength = 0;
                 state.DiscardPes();
                 if (_psiAssemblers.TryGetValue(pid, out var assembler))
                     assembler.DiscardUntilPayloadStart();
-                var missingModulo = (counter - expected + 16) & 0x0F;
-                AddEvent(TsCheckSeverity.Error, TsCheckEventType.ContinuityGap, pid, _packetIndex, fileOffset,
-                    TsCheckMessageCode.ContinuityGap, [expected, counter, Math.Max(1, missingModulo)],
-                    GetPacketEventTime(state), true);
+
+                if (IsContinuityWarmup(state))
+                {
+                    _startupContinuityGaps++;
+                }
+                else
+                {
+                    state.Summary.ContinuityErrors++;
+                    var missingModulo = (counter - expected + 16) & 0x0F;
+                    AddEvent(TsCheckSeverity.Error, TsCheckEventType.ContinuityGap, pid, _packetIndex, fileOffset,
+                        TsCheckMessageCode.ContinuityGap, [expected, counter, Math.Max(1, missingModulo)],
+                        GetPacketEventTime(state), true);
+                }
             }
         }
 
@@ -538,6 +550,19 @@ public sealed class TsStreamAnalyzer : IDisposable
         state.LastContinuityCounter = counter;
         packetBody.CopyTo(state.LastPacketBody);
         return true;
+    }
+
+    private bool IsContinuityWarmup(PidState state)
+    {
+        var warmupSeconds = _options.ContinuityWarmupSeconds;
+        if (warmupSeconds <= 0)
+            return false;
+
+        // 优先用媒体时钟判定；还没有 PCR 时按包数兜底，避免无 PCR 的流被永远当作预热阶段。
+        if (GetPacketEventTime(state) is { } seconds)
+            return seconds < warmupSeconds;
+
+        return _packetIndex < ContinuityWarmupPacketBudget;
     }
 
     private static bool IsValidRepeatedTable(ReadOnlySpan<byte> packet)
@@ -1562,7 +1587,11 @@ public sealed class TsStreamAnalyzer : IDisposable
         _progress.Report(new TsCheckProgress(
             bytesScanned, _sessionTotalBytes, _packetIndex, _errorCount, _warningCount,
             bytesScanned / Math.Max(0.001, _stopwatch.Elapsed.TotalSeconds), _stopwatch.Elapsed,
-            pidSnapshot, progressEvent, _result.Timeline.ToArray()) { ContinuityErrors = continuityErrors });
+            pidSnapshot, progressEvent, _result.Timeline.ToArray())
+        {
+            ContinuityErrors = continuityErrors,
+            StartupContinuityGaps = _startupContinuityGaps
+        });
     }
 
     private void CompleteResult(long bytesScanned, bool cancelled)
@@ -1573,6 +1602,7 @@ public sealed class TsStreamAnalyzer : IDisposable
         _result.BytesScanned = Math.Min(_result.FileSize, bytesScanned);
         _result.Elapsed = _stopwatch.Elapsed;
         _result.WasCancelled = cancelled;
+        _result.StartupContinuityGaps = _startupContinuityGaps;
         _result.TotalErrorCount = _errorCount;
         _result.TotalWarningCount = _warningCount;
         _result.GlobalErrorCount = _globalErrorCount;

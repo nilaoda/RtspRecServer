@@ -28,7 +28,10 @@ public sealed class HttpLiveRecordingService : IRecordingService
         RecordingTask task, string outputPath, Action<RecordingProgress>? onProgress, CancellationToken cancellationToken, Stream? output)
     {
         var bytesWritten = 0L;
-        using var analysis = onProgress is null ? null : new TsLiveAnalysisSession(task.TaskName);
+        // udpxy 等代理地址需要代理先完成加组，启动阶段丢包不计入错误统计。
+        using var analysis = onProgress is null
+            ? null
+            : new TsLiveAnalysisSession(task.TaskName, TsLiveAnalysisSession.StartupWarmupSeconds);
 
         RecordingResult Finish(bool success, string? error, long bytes)
         {

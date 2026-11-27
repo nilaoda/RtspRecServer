@@ -12,6 +12,8 @@ public sealed record TsCheckSummary
     public int ErrorCount { get; init; }
     public int WarningCount { get; init; }
     public long? ContinuityErrors { get; init; }
+    /// <summary>启动预热阶段的连续计数缺口数（组播加入/接收预热），不计入错误统计。</summary>
+    public long StartupContinuityGaps { get; init; }
     public long PacketCount { get; init; }
     public long BytesScanned { get; init; }
     public double BitrateKbps { get; init; }

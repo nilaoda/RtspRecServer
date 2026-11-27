@@ -243,6 +243,49 @@ public class TsAnalysisTests
         Assert.Contains("+1500ms", driftLine);
     }
 
+    [Fact]
+    public void LiveSession_IgnoresContinuityGapsDuringStartupWarmup()
+    {
+        // 组播录制启动的前几秒（加入组播组、接收预热）会丢初始数据包，
+        // 这段缺口单独计数，不计入错误统计；预热之后的缺口照常上报。
+        const int videoPid = 0x0101;
+        var packets = new List<byte[]>
+        {
+            CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
+            CreatePsiPacket(0x0100, 0, BuildPmtSection(videoPid, (TsStreamTypes.H264, videoPid))),
+        };
+
+        var cc = 0;
+        for (var step = 0; step < 28; step++)
+        {
+            if (step == 4)
+            {
+                cc = (cc + 5) & 0x0F; // 约 1 秒处：预热阶段缺口
+            }
+            else if (step == 24)
+            {
+                cc = (cc + 7) & 0x0F; // 约 6 秒处：预热之后缺口
+            }
+
+            packets.Add(CreatePacket(videoPid, cc, pcrBase: step * 22_500));
+            cc = (cc + 1) & 0x0F;
+        }
+
+        using var session = new TsLiveAnalysisSession("test", TsLiveAnalysisSession.StartupWarmupSeconds);
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.StartupContinuityGaps);
+        Assert.Equal(1, summary.ContinuityErrors);
+        var gapLine = Assert.Single(summary.AnomalyEvents, line => line.Contains("连续计数缺口"));
+        Assert.Contains("00:00:06", gapLine);
+    }
+
     private static List<byte[]> BuildAvStream(
         int seconds,
         Func<int, long> videoJitter,

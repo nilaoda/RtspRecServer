@@ -23,7 +23,10 @@ internal sealed class SharedLiveRecordingService(
         Stream? output = null)
     {
         long bytesWritten = 0;
-        using var analysis = new TsLiveAnalysisSession(task.TaskName);
+        // 直播源（直连组播或 udpxy 代理）都需要先加组，启动阶段丢包不计入错误统计。
+        using var analysis = new TsLiveAnalysisSession(
+            task.TaskName,
+            TsLiveAnalysisSession.StartupWarmupSeconds);
 
         RecordingResult Finish(string? error) => new()
         {

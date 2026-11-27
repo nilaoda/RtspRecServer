@@ -58,6 +58,7 @@ export function TsCheckDetails({ tsCheck }: { tsCheck: TsCheckSummary }) {
         <span className="text-xs text-muted-foreground">
           错误 {tsCheck.errorCount} · 警告 {tsCheck.warningCount}
           {tsCheck.continuityErrors != null && <> · 连续计数缺口 {tsCheck.continuityErrors}</>}
+          {tsCheck.startupContinuityGaps ? <> · 启动丢包 {tsCheck.startupContinuityGaps}（已忽略）</> : null}
         </span>
       </div>
 

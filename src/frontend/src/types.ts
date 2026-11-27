@@ -34,6 +34,8 @@ export type TsCheckSummary = {
   errorCount: number
   warningCount: number
   continuityErrors?: number | null
+  // 启动预热阶段的连续计数缺口（组播加入/接收预热），不计入错误统计
+  startupContinuityGaps?: number
   packetCount: number
   bytesScanned: number
   bitrateKbps: number

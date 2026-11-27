@@ -194,6 +194,8 @@ public sealed class TsCheckResult
     public int TotalWarningCount { get; set; }
     public int GlobalErrorCount { get; set; }
     public int GlobalWarningCount { get; set; }
+    /// <summary>启动预热阶段（前若干秒）的连续计数缺口数，单独计数且不计入错误统计。</summary>
+    public long StartupContinuityGaps { get; set; }
     public List<TsCheckEvent> Events { get; } = [];
     public List<TsCheckTimelineBucket> Timeline { get; } = [];
     public Dictionary<int, TsCheckPidSummary> Pids { get; } = [];
@@ -271,6 +273,10 @@ public sealed class TsStreamAnalyzeOptions
     public long MaxBytes { get; init; } = long.MaxValue;
     public int StablePacketCount { get; init; } = 8_192;
     public int ProgressIntervalMilliseconds { get; init; } = 100;
+    // 直播录制启动的前几秒（加入组播组、udpxy 代理加组、接收线程预热）会丢失初始数据包，
+    // 这段丢包不代表录制内容质量，单独计数并从错误统计中排除。
+    // 默认关闭：只有明确知道存在接收预热的调用方（直播录制）才需要开启。
+    public double ContinuityWarmupSeconds { get; init; }
     public TsStreamAnalyzeFeatures Features { get; init; } = TsStreamAnalyzeFeatures.Default;
 }
 
@@ -317,6 +323,7 @@ public readonly record struct TsCheckProgress(
     TsCheckTimelineBucket[] Timeline)
 {
     public long ContinuityErrors { get; init; }
+    public long StartupContinuityGaps { get; init; }
     public double Percent => FileSize > 0 ? BytesScanned * 100.0 / FileSize : 0;
 }
 

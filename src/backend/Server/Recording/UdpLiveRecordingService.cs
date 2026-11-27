@@ -165,7 +165,9 @@ public sealed class UdpLiveRecordingService : IRecordingService
         RecordingTask task, string outputPath, Action<RecordingProgress>? onProgress, CancellationToken cancellationToken, Stream? output)
     {
         var bytesWritten = 0L;
-        using var analysis = onProgress is null ? null : new TsLiveAnalysisSession(task.TaskName);
+        using var analysis = onProgress is null
+            ? null
+            : new TsLiveAnalysisSession(task.TaskName, TsLiveAnalysisSession.StartupWarmupSeconds);
 
         RecordingResult Finish(bool success, string? error, long bytes)
         {
