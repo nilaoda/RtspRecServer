@@ -454,8 +454,8 @@ internal static class TsCheckSummaryMapper
         return item.Type switch
         {
             TsCheckEventType.AvSyncDrift
-                when item.MessageArguments.Length > 0 && item.MessageArguments[0] is double driftSeconds =>
-                $"{(driftSeconds >= 0 ? "+" : string.Empty)}{driftSeconds * 1000:F0}ms",
+                when item.MessageArguments is [_, _, double driftMs] =>
+                $"{(driftMs >= 0 ? "+" : string.Empty)}{driftMs:F0}ms",
             _ => null
         };
     }
