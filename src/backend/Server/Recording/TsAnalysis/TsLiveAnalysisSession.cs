@@ -7,7 +7,6 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     private readonly TsStreamAnalyzer _analyzer = new();
     private readonly TsProgressSink _progressSink = new();
     private long _appendedBytes;
-    private DateTimeOffset? _wallClockStart;
     private bool _completed;
 
     public TsLiveAnalysisSession(string displayName)
@@ -30,8 +29,6 @@ internal sealed class TsLiveAnalysisSession : IDisposable
             return;
         }
 
-        // 首个数据到达的墙钟时间，用于把 0-based 事件时间换算成本地时间
-        _wallClockStart ??= DateTimeOffset.Now;
         try
         {
             _analyzer.AppendOutput(data);
@@ -49,7 +46,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
         var progress = _progressSink.Latest;
         return progress is null
             ? null
-            : TsCheckSummaryMapper.FromProgress(progress.Value, _progressSink.AnomalyEvents, _wallClockStart);
+            : TsCheckSummaryMapper.FromProgress(progress.Value, _progressSink.AnomalyEvents);
     }
 
     public TsCheckSummary? Complete()
@@ -67,7 +64,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
 
         try
         {
-            return TsCheckSummaryMapper.FromResult(_analyzer.CompleteSession(), _wallClockStart);
+            return TsCheckSummaryMapper.FromResult(_analyzer.CompleteSession());
         }
         catch
         {
@@ -140,8 +137,7 @@ internal static class TsCheckSummaryMapper
 
     public static TsCheckSummary FromProgress(
         TsCheckProgress progress,
-        IReadOnlyList<TsCheckEvent>? anomalyEvents = null,
-        DateTimeOffset? wallClockStart = null)
+        IReadOnlyList<TsCheckEvent>? anomalyEvents = null)
     {
         var videoTracks = FindTracks(
             progress.Pids,
@@ -178,15 +174,15 @@ internal static class TsCheckSummaryMapper
             PidCount = progress.Pids.Count(static pid => pid.Pid >= 0),
             // 没有新事件的进度也会保留最近一条异常，避免“最近事件”在两帧之间消失
             LastEvent = progress.NewEvent is { } newEvent
-                ? FormatEvent(newEvent, wallClockStart, newEvent.Occurrences)
+                ? FormatEvent(newEvent, newEvent.Occurrences)
                 : anomalyEvents is { Count: > 0 } tracked
-                    ? FormatEvent(tracked[tracked.Count - 1], wallClockStart, tracked[tracked.Count - 1].Occurrences)
+                    ? FormatEvent(tracked[tracked.Count - 1], tracked[tracked.Count - 1].Occurrences)
                     : null,
-            AnomalyEvents = BuildAnomalyEvents(anomalyEvents ?? [], wallClockStart),
+            AnomalyEvents = BuildAnomalyEvents(anomalyEvents ?? []),
         };
     }
 
-    public static TsCheckSummary FromResult(TsCheckResult result, DateTimeOffset? wallClockStart = null)
+    public static TsCheckSummary FromResult(TsCheckResult result)
     {
         var videoTracks = FindTracks(
             result.Pids.Values,
@@ -226,12 +222,12 @@ internal static class TsCheckSummaryMapper
             VideoTracks = videoTracks,
             AudioTracks = audioTracks,
             PidCount = result.Pids.Count,
-            LastEvent = lastEvent is null ? null : FormatEvent(lastEvent, wallClockStart, lastEvent.Occurrences),
-            AnomalyEvents = BuildAnomalyEvents(result.Events, wallClockStart),
+            LastEvent = lastEvent is null ? null : FormatEvent(lastEvent, lastEvent.Occurrences),
+            AnomalyEvents = BuildAnomalyEvents(result.Events),
         };
     }
 
-    private static string[] BuildAnomalyEvents(IEnumerable<TsCheckEvent> events, DateTimeOffset? wallClockStart)
+    private static string[] BuildAnomalyEvents(IEnumerable<TsCheckEvent> events)
     {
         // 同级别、同类型且在短时间内的异常合并为一条（跨 PID 也合并），避免短时间大量异常刷屏
         var groups = new List<AnomalyGroup>(MaxAnomalyEvents);
@@ -279,7 +275,7 @@ internal static class TsCheckSummaryMapper
 
         return groups
             .Take(MaxAnomalyEvents)
-            .Select(group => FormatEvent(group.First, wallClockStart, group.Occurrences, group.Pids.Count))
+            .Select(group => FormatEvent(group.First, group.Occurrences, group.Pids.Count))
             .ToArray();
     }
 
@@ -392,7 +388,6 @@ internal static class TsCheckSummaryMapper
 
     public static string FormatEvent(
         TsCheckEvent item,
-        DateTimeOffset? wallClockStart = null,
         long occurrences = 1,
         int pidCount = 1)
     {
@@ -423,23 +418,36 @@ internal static class TsCheckSummaryMapper
             _ => item.Type.ToString(),
         };
 
+        var detail = FormatEventDetail(item);
+        var labelText = detail is null ? label : $"{label} {detail}";
         var pidText = pidCount > 1
             ? $"({pidCount} 个 PID)"
             : item.Pid >= 0
                 ? $"(PID 0x{item.Pid:X4})"
                 : string.Empty;
-        var text = pidText.Length > 0 ? $"{label} {pidText}" : label;
+        var text = pidText.Length > 0 ? $"{labelText} {pidText}" : labelText;
 
+        // 只输出相对录制开始的时刻：绝对时间由前端按浏览器时区渲染，
+        // 避免服务端时区（如 UTC）与用户本地时区不一致时显示错误时间。
         string? timeText = null;
         if (item.TimeSeconds is { } seconds)
         {
-            var relative = $"{TsCheckEvent.FormatTime(seconds)}{(item.IsEstimatedTime ? "*" : string.Empty)}";
-            timeText = wallClockStart is { } start
-                ? $"{start.ToLocalTime().AddSeconds(seconds):HH:mm:ss} / {relative}"
-                : relative;
+            timeText = $"{TsCheckEvent.FormatTime(seconds)}{(item.IsEstimatedTime ? "*" : string.Empty)}";
         }
 
         var countText = occurrences > 1 ? $"×{occurrences}" : null;
         return string.Join(' ', new[] { timeText, countText, text }.Where(part => !string.IsNullOrEmpty(part)));
+    }
+
+    /// <summary>按事件类型补充关键数值，便于判断严重程度。</summary>
+    private static string? FormatEventDetail(TsCheckEvent item)
+    {
+        return item.Type switch
+        {
+            TsCheckEventType.AvSyncDrift
+                when item.MessageArguments.Length > 0 && item.MessageArguments[0] is double driftSeconds =>
+                $"{(driftSeconds >= 0 ? "+" : string.Empty)}{driftSeconds * 1000:F0}ms",
+            _ => null
+        };
     }
 }

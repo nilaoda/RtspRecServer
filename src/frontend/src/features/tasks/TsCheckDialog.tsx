@@ -78,7 +78,7 @@ export function TsCheckDetails({ tsCheck }: { tsCheck: TsCheckSummary }) {
       <Separator />
 
       <div className="space-y-1.5">
-        <div className="text-xs text-muted-foreground">异常时刻（本地时间 / 相对开始，* 为估算时刻）</div>
+        <div className="text-xs text-muted-foreground">异常时刻（相对录制开始，* 为估算时刻）</div>
         {tsCheck.anomalyEvents && tsCheck.anomalyEvents.length > 0 ? (
           <div className="max-h-40 overflow-y-auto rounded-md border bg-muted/30 p-2">
             {tsCheck.anomalyEvents.map((event, index) => (

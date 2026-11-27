@@ -120,12 +120,14 @@ public class TsAnalysisTests
         Assert.NotNull(summary);
         Assert.True(summary!.ErrorCount > 0);
         Assert.Equal("error", summary.Verdict);
-        // 事件同时带本地时间和相对录制开始的 0-based 时刻（此处最后已知 PCR 为 1 秒）
+        // 事件只带相对录制开始的 0-based 时刻（此处最后已知 PCR 为 1 秒），
+        // 绝对时间由前端按浏览器时区渲染，避免服务端时区与用户不一致。
         var gapLine = Assert.Single(summary.AnomalyEvents, line => line.Contains("连续计数缺口"));
         Assert.Contains("00:00:01", gapLine);
-        Assert.Matches(@"^\d{2}:\d{2}:\d{2} / \d{2}:\d{2}:\d{2}\.\d{3}\*? ", gapLine);
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2}\.\d{3}\*? ", gapLine);
         Assert.NotNull(summary.LastEvent);
-        Assert.Matches(@"^\d{2}:\d{2}:\d{2} / \d{2}:\d{2}:\d{2}\.\d{3}\*? ", summary.LastEvent);
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2}\.\d{3}\*? ", summary.LastEvent);
+        Assert.DoesNotContain(" / ", gapLine);
     }
 
     [Fact]
@@ -190,7 +192,89 @@ public class TsAnalysisTests
         var gapLine = Assert.Single(summary!.AnomalyEvents, line => line.Contains("连续计数缺口"));
         Assert.Contains("×2", gapLine);
         Assert.Contains("2 个 PID", gapLine);
-        Assert.Matches(@"^\d{2}:\d{2}:\d{2} / \d{2}:\d{2}:\d{2}\.\d{3}\*? ", gapLine);
+        // 事件文本只带相对录制开始的时刻，绝对时间由前端按浏览器时区渲染
+        Assert.Matches(@"^\d{2}:\d{2}:\d{2}\.\d{3}\*? ", gapLine);
+        Assert.DoesNotContain(" / ", gapLine);
+    }
+
+    [Fact]
+    public void LiveSession_IgnoresAvSyncJitter()
+    {
+        // 音频按 PES 打包、视频有 B 帧重排，单次采样 PTS 差会成段抖动（一个 GOP 内连续几秒偏一侧）；
+        // 这类抖动不能被判成音画漂移。
+        var packets = BuildAvStream(
+            seconds: 40,
+            videoJitter: i => (i % 6) < 3 ? -90_000 : 90_000,
+            audioJitter: _ => 0);
+
+        using var session = new TsLiveAnalysisSession("test");
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        Assert.DoesNotContain(summary!.AnomalyEvents, line => line.Contains("音画漂移"));
+        Assert.DoesNotContain("音画漂移", summary.LastEvent ?? string.Empty);
+    }
+
+    [Fact]
+    public void LiveSession_ReportsSustainedAvSyncDriftOnce()
+    {
+        // 音频整体错位 1.5 秒并持续存在：应上报一次并附带漂移幅度
+        var packets = BuildAvStream(
+            seconds: 60,
+            videoJitter: _ => 0,
+            audioJitter: i => i >= 20 ? 135_000 : 0);
+
+        using var session = new TsLiveAnalysisSession("test");
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        var driftLines = summary!.AnomalyEvents.Where(line => line.Contains("音画漂移")).ToArray();
+        var driftLine = Assert.Single(driftLines);
+        Assert.Contains("+1500ms", driftLine);
+    }
+
+    private static List<byte[]> BuildAvStream(
+        int seconds,
+        Func<int, long> videoJitter,
+        Func<int, long> audioJitter)
+    {
+        const int videoPid = 0x0101;
+        const int audioPid = 0x0102;
+        var packets = new List<byte[]>
+        {
+            CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
+            CreatePsiPacket(0x0100, 0, BuildPmtSection(
+                videoPid,
+                (TsStreamTypes.H264, videoPid),
+                (TsStreamTypes.Aac, audioPid))),
+        };
+
+        var videoCc = 0;
+        var audioCc = 0;
+        for (var second = 0; second < seconds; second++)
+        {
+            var clock = second * 90_000L;
+            // 真实码流的 PCR 间隔约几十毫秒，这里每 0.25 秒一个，避免触发 PCR 间隔告警
+            for (var step = 0; step < 4; step++)
+            {
+                packets.Add(CreatePacket(videoPid, videoCc++ & 0x0F, pcrBase: clock + step * 22_500));
+            }
+
+            packets.Add(CreatePesPacket(videoPid, videoCc++ & 0x0F, clock + videoJitter(second)));
+            packets.Add(CreatePesPacket(audioPid, audioCc++ & 0x0F, clock + audioJitter(second), 0xC0));
+        }
+
+        return packets;
     }
 
     private static byte[] CreatePacket(

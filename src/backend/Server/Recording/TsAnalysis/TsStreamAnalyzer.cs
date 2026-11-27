@@ -18,7 +18,13 @@ public sealed class TsStreamAnalyzer : IDisposable
     private const double PcrGapThresholdSeconds = 0.5;
     private const double TimestampJumpThresholdSeconds = 10;
     private const double AvDriftThresholdSeconds = 0.5;
-    private const int AvSyncBaselineSampleCount = 5;
+    // 音视频 PTS 采样点天然不对齐（音频按 PES 打包、视频存在 B 帧重排），
+    // 单次采样可抖动 ±1 秒，用 9 秒窗口的中位数估计真实偏移。
+    private const int AvSyncWindowSize = 9;
+    // 中位数连续超阈值 5 次才上报，过滤短暂抖动。
+    private const int AvSyncPersistSamples = 5;
+    // 同一节目两次上报最短间隔 60 秒。
+    private const long AvSyncReportCooldown90k = 5_400_000;
     private const int MaxTimelineBuckets = 4_096;
     private const double InitialTimelineBucketSeconds = 1;
     private const long MaximumBitratePcrInterval90k = 90_000;
@@ -833,7 +839,13 @@ public sealed class TsStreamAnalyzer : IDisposable
             offset += 5 + infoLength;
         }
         if (catalogChanged)
+        {
             _lastCatalogChangePacket = _packetIndex;
+            // 节目表版本变化通常意味着音视频 PID 或编码参数切换，
+            // 旧的 PTS 差基线与已消失音轨的残留 PTS 都会制造假的持续漂移。
+            if (_programClocks.TryGetValue(programNumber, out var catalogClock))
+                catalogClock.ResetSync();
+        }
     }
 
     private void ParseSdt(ReadOnlySpan<byte> section)
@@ -1365,31 +1377,37 @@ public sealed class TsStreamAnalyzer : IDisposable
                 clock.AudioSyncStates[pair.Key] = syncState;
             }
 
-            var currentOffset90k = pair.Value - clock.VideoPts90k;
-            // 文件可能从半个 GOP 开始，首组 PTS 往往不是同一播放时刻；用少量样本中位数
-            // 建立固定偏移基线，可过滤启动离群值且只占每条音轨几十字节内存。
-            if (!syncState.TryGetBaseline(currentOffset90k, out var baselineOffset90k))
+            // 逐次采样先做中位数平滑，避免 PES 打包粒度与 B 帧重排带来的单点抖动误报。
+            if (!syncState.TryAddSample(pair.Value - clock.VideoPts90k, out var stableOffset90k))
                 continue;
 
-            var drift = (currentOffset90k - baselineOffset90k) / 90_000.0;
-            if (Math.Abs(drift) >= AvDriftThresholdSeconds)
+            if (!syncState.HasBaseline)
             {
-                var consecutiveCount = clock.SyncDriftCounts.GetValueOrDefault(pair.Key) + 1;
-                clock.SyncDriftCounts[pair.Key] = consecutiveCount;
-                if (consecutiveCount >= 3 &&
-                    (clock.LastDriftReport90k == long.MinValue || pcr - clock.LastDriftReport90k >= 450_000))
-                {
-                    AddEvent(TsCheckSeverity.Warning, TsCheckEventType.AvSyncDrift, pair.Key, _packetIndex, fileOffset,
-                        TsCheckMessageCode.AvSyncDrift,
-                        [baselineOffset90k / 90.0, currentOffset90k / 90.0, drift * 1000],
-                        ptsToSeconds(pcr), false);
-                    clock.LastDriftReport90k = pcr;
-                }
+                syncState.SetBaseline(stableOffset90k);
+                continue;
             }
-            else
+
+            var driftSeconds = (stableOffset90k - syncState.Baseline90k) / 90_000.0;
+            if (Math.Abs(driftSeconds) < AvDriftThresholdSeconds)
             {
-                clock.SyncDriftCounts[pair.Key] = 0;
+                syncState.PersistCount = 0;
+                continue;
             }
+
+            syncState.PersistCount++;
+            if (syncState.PersistCount < AvSyncPersistSamples)
+                continue;
+
+            if (clock.LastDriftReport90k != long.MinValue && pcr - clock.LastDriftReport90k < AvSyncReportCooldown90k)
+                continue;
+
+            AddEvent(TsCheckSeverity.Warning, TsCheckEventType.AvSyncDrift, pair.Key, _packetIndex, fileOffset,
+                TsCheckMessageCode.AvSyncDrift,
+                [driftSeconds, stableOffset90k / 90.0],
+                ptsToSeconds(pcr), false);
+            clock.LastDriftReport90k = pcr;
+            // 上报后以当前稳定偏移为新基线：一次性的音画错位只报一次，不会持续刷屏。
+            syncState.SetBaseline(stableOffset90k);
         }
     }
 
@@ -1986,7 +2004,6 @@ public sealed class TsStreamAnalyzer : IDisposable
         public long VideoPts90k = long.MinValue;
         public Dictionary<int, long> AudioPts90k { get; } = [];
         public Dictionary<int, AudioSyncState> AudioSyncStates { get; } = [];
-        public Dictionary<int, int> SyncDriftCounts { get; } = [];
         public long LastSyncSamplePcr90k = long.MinValue;
         public long LastDriftReport90k = long.MinValue;
         public long LastTransportDamagePacket = -1;
@@ -1996,7 +2013,6 @@ public sealed class TsStreamAnalyzer : IDisposable
             VideoPts90k = long.MinValue;
             AudioPts90k.Clear();
             AudioSyncStates.Clear();
-            SyncDriftCounts.Clear();
             LastSyncSamplePcr90k = long.MinValue;
             LastDriftReport90k = long.MinValue;
         }
@@ -2004,26 +2020,49 @@ public sealed class TsStreamAnalyzer : IDisposable
 
     private sealed class AudioSyncState
     {
-        private readonly long[] _baselineSamples = new long[AvSyncBaselineSampleCount];
-        private int _sampleCount;
+        private readonly long[] _window = new long[AvSyncWindowSize];
+        private int _windowCount;
+        private int _windowIndex;
         private long _baselineOffset90k;
+        private bool _hasBaseline;
 
-        public bool TryGetBaseline(long currentOffset90k, out long baselineOffset90k)
+        /// <summary>基线（稳定偏移的中位数），单位 90kHz。</summary>
+        public long Baseline90k => _baselineOffset90k;
+
+        public bool HasBaseline => _hasBaseline;
+
+        /// <summary>连续超阈值的采样次数。</summary>
+        public int PersistCount { get; set; }
+
+        /// <summary>
+        /// 记录一次采样；窗口填满后返回中位数偏移。
+        /// 中位数对偶发的单点抖动（PES 打包边界、B 帧重排）不敏感，
+        /// 能反映真实的持续偏移。
+        /// </summary>
+        public bool TryAddSample(long offset90k, out long stableOffset90k)
         {
-            if (_sampleCount < AvSyncBaselineSampleCount)
+            _window[_windowIndex] = offset90k;
+            _windowIndex = (_windowIndex + 1) % _window.Length;
+
+            if (_windowCount < _window.Length)
             {
-                _baselineSamples[_sampleCount++] = currentOffset90k;
-                if (_sampleCount == AvSyncBaselineSampleCount)
-                {
-                    Span<long> sorted = stackalloc long[AvSyncBaselineSampleCount];
-                    _baselineSamples.CopyTo(sorted);
-                    sorted.Sort();
-                    _baselineOffset90k = sorted[AvSyncBaselineSampleCount / 2];
-                }
+                _windowCount++;
+                stableOffset90k = 0;
+                return false;
             }
 
-            baselineOffset90k = _baselineOffset90k;
-            return _sampleCount >= AvSyncBaselineSampleCount;
+            Span<long> sorted = stackalloc long[_window.Length];
+            _window.CopyTo(sorted);
+            sorted.Sort();
+            stableOffset90k = sorted[sorted.Length / 2];
+            return true;
+        }
+
+        public void SetBaseline(long offset90k)
+        {
+            _baselineOffset90k = offset90k;
+            _hasBaseline = true;
+            PersistCount = 0;
         }
     }
 
