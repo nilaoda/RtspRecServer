@@ -209,14 +209,8 @@ public sealed class ConfigurationService
         return fields.ToArray();
     }
 
-    private static string[] NormalizeHosts(IEnumerable<string> hosts)
-    {
-        return hosts
-            .Select(host => host?.Trim() ?? string.Empty)
-            .Where(host => host.Length > 0)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
+    private static string[] NormalizeHosts(IEnumerable<string> hosts) =>
+        ListenAddressResolver.NormalizeHosts(hosts);
 
     private static string? NormalizeGroup(string? group)
     {

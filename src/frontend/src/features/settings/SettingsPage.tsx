@@ -196,9 +196,12 @@ const SettingsPage = () => {
                       <RestartBadge />
                     </FormLabel>
                     <FormControl>
-                      <Input placeholder="0.0.0.0" {...field} />
+                      <Input placeholder="0.0.0.0, ::" {...field} />
                     </FormControl>
-                    <FormDescription>多个地址用逗号分隔，0.0.0.0 表示监听所有网卡。</FormDescription>
+                    <FormDescription>
+                      多个地址用逗号分隔。0.0.0.0 监听所有 IPv4 网卡；:: 监听所有 IPv6 并同时覆盖 IPv4
+                      （双栈）；::1 仅本机 IPv6 回环。
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

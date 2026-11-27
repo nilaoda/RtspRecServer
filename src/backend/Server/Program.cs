@@ -1007,7 +1007,12 @@ static string[] ApplyServerUrls(WebApplicationBuilder builder, AppConfig config)
 {
     var port = config.Port <= 0 ? 8080 : config.Port;
     var hosts = config.Host is { Length: > 0 } ? config.Host : ["0.0.0.0"];
-    var urls = hosts.Select(host => $"http://{host}:{port}").ToArray();
-    builder.WebHost.UseUrls(urls);
-    return urls;
+    var plan = ListenAddressResolver.Resolve(port, hosts);
+    foreach (var hint in plan.Hints)
+    {
+        Log.Information("监听地址: {Hint}", hint);
+    }
+
+    builder.WebHost.UseUrls(plan.Urls);
+    return plan.Urls;
 }
