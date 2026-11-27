@@ -25,8 +25,6 @@ public sealed class TsStreamAnalyzer : IDisposable
     private const int AvSyncPersistSamples = 5;
     // 同一节目两次上报最短间隔 60 秒。
     private const long AvSyncReportCooldown90k = 5_400_000;
-    // 尚未收到 PCR 时用于判断启动预热的包数上限（约 3.8MB，10Mbps 下约 3 秒）。
-    private const long ContinuityWarmupPacketBudget = 20_000;
     private const int MaxTimelineBuckets = 4_096;
     private const double InitialTimelineBucketSeconds = 1;
     private const long MaximumBitratePcrInterval90k = 90_000;
@@ -558,11 +556,12 @@ public sealed class TsStreamAnalyzer : IDisposable
         if (warmupSeconds <= 0)
             return false;
 
-        // 优先用媒体时钟判定；还没有 PCR 时按包数兜底，避免无 PCR 的流被永远当作预热阶段。
+        // 优先用媒体时钟（PCR 相对首包 PCR 的秒数）判定，与码率无关；
+        // 还没有 PCR 时退回分析耗时（直播会话数据按实时到达，耗时即真实经过时间）。
         if (GetPacketEventTime(state) is { } seconds)
             return seconds < warmupSeconds;
 
-        return _packetIndex < ContinuityWarmupPacketBudget;
+        return _stopwatch.Elapsed.TotalSeconds < warmupSeconds;
     }
 
     private static bool IsValidRepeatedTable(ReadOnlySpan<byte> packet)

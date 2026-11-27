@@ -8,7 +8,7 @@ internal sealed class TsLiveAnalysisSession : IDisposable
     /// 直播录制的启动预热时长：直连组播（rtp/udp）需要加入组播组，
     /// udpxy 等代理地址需要代理先完成加组，启动阶段丢包都不代表录制内容质量。
     /// </summary>
-    public const double StartupWarmupSeconds = 3.0;
+    public const double StartupWarmupSeconds = 5.0;
 
     private readonly TsStreamAnalyzer _analyzer = new();
     private readonly TsProgressSink _progressSink = new();

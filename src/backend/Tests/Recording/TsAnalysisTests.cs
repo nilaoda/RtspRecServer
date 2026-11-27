@@ -286,6 +286,63 @@ public class TsAnalysisTests
         Assert.Contains("00:00:06", gapLine);
     }
 
+    [Fact]
+    public void LiveSession_HighBitrateStream_WarmupBoundaryWorks()
+    {
+        // ~40Mbps：PCR 每 40ms 一个，每个间隔填充约 1062 个空包。
+        // 验证预热判定与包密度（码率）无关，且 5 秒边界两侧行为正确。
+        const int videoPid = 0x0101;
+        const int audioPid = 0x0102;
+        const int nullPid = 0x1FFF;
+        var packets = new List<byte[]>
+        {
+            CreatePsiPacket(0x0000, 0, BuildPatSection(0x0100)),
+            CreatePsiPacket(0x0100, 0, BuildPmtSection(
+                videoPid, (TsStreamTypes.H264, videoPid), (TsStreamTypes.Aac, audioPid))),
+        };
+
+        var videoCc = 0;
+        var audioCc = 0;
+        const int pcrIntervals = 150; // 150 × 40ms = 6 秒
+        const int fillerPerInterval = 1062; // ≈ 40 Mbps
+        for (var i = 0; i < pcrIntervals; i++)
+        {
+            var pcr = i * 3600L;
+            packets.Add(CreatePacket(videoPid, videoCc++ & 0x0F, pcrBase: pcr));
+            for (var n = 0; n < fillerPerInterval; n++)
+            {
+                packets.Add(CreatePacket(nullPid, 0));
+            }
+
+            // 0.48s（i=12）：预热内缺口；5.48s（i=137）：预热后缺口
+            if (i == 12)
+            {
+                videoCc = (videoCc + 5) & 0x0F;
+            }
+            else if (i == 137)
+            {
+                videoCc = (videoCc + 7) & 0x0F;
+            }
+
+            packets.Add(CreatePesPacket(videoPid, videoCc++ & 0x0F, pcr));
+            packets.Add(CreatePesPacket(audioPid, audioCc++ & 0x0F, pcr, 0xC0));
+        }
+
+        using var session = new TsLiveAnalysisSession("test", TsLiveAnalysisSession.StartupWarmupSeconds);
+        foreach (var packet in packets)
+        {
+            session.Append(packet);
+        }
+
+        var summary = session.Complete();
+
+        Assert.NotNull(summary);
+        Assert.True(summary!.PacketCount > 150_000, $"PacketCount={summary.PacketCount}");
+        Assert.Equal(1, summary.StartupContinuityGaps);
+        Assert.Equal(1, summary.ContinuityErrors);
+        Assert.DoesNotContain(summary.AnomalyEvents, line => line.Contains("音画漂移"));
+    }
+
     private static List<byte[]> BuildAvStream(
         int seconds,
         Func<int, long> videoJitter,
